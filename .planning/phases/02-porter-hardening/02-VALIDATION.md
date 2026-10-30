@@ -40,23 +40,37 @@ created: "2026-10-30"
 
 Filled in by the planner per task. Requirement → test map from RESEARCH.md:
 
+Task IDs are `<plan>-<task>`. Every test file marked "created by the task" is written by that task itself (tdd="true"), so no task waits on a separate Wave 0 scaffold.
+
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| TBD | TBD | TBD | HARD-01 | zip-slip | Crafted zip/tar (`..`, absolute, backslash, drive, escaping link, link-through-link, hardlink outside) refused, nothing written outside, partial unpack removed | unit | `.venv/bin/python -m unittest tests.test_fetch.Unpack -v` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | HARD-01 | tar filter bypass | Python below 3.11.13 / 3.12.11 / 3.13.4 without the `ALLOW_MISSING` marker is refused | unit + subprocess | `.venv/bin/python -m unittest tests.test_toolchain.PythonFloor -v` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | HARD-02 | key disclosure / key loss | New key 0600 and written whole; unreadable key stops porter, file untouched | subprocess | `.venv/bin/python -m unittest tests.test_signing -v` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | HARD-03 | moving-branch config | FPSLocker config pinned to a commit; sha256 in log and `fpslock.tsv` | unit | `.venv/bin/python -m unittest tests.test_porter.FpsLocker -v` | ✅ extend | ⬜ pending |
-| TBD | TBD | TBD | HARD-04 | concurrent writers | Second port/install of the same folder raises "already running" | integration | `.venv/bin/python -m unittest tests.test_lock -v` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | HARD-05 | — | Stage cut off mid-write is redone next run | integration | `.venv/bin/python -m unittest tests.test_stages -v` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | HARD-06 | — | `os.environ` unchanged; `game.load` by path; overrides asserted at import | unit | `.venv/bin/python -m unittest tests.test_porter.Env -v` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | HARD-07 | — | Crash during data-pack swap leaves a working pack | unit | `.venv/bin/python -m unittest tests.test_stages.DataPack tests.test_adb -v` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | HARD-08 | markup injection | Game names and network strings escaped in rich text; system fixed font | GUI offscreen | `QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest tests.test_bridge.Escaping -v` | ✅ extend | ⬜ pending |
-| TBD | TBD | TBD | HARD-09 | — | Disk space counts base+updates+DLC, re-checked after extraction | unit | `.venv/bin/python -m unittest tests.test_porter.Misc.test_disk_space -v` | ✅ extend | ⬜ pending |
-| TBD | TBD | TBD | HARD-10 | — | Repo housekeeping items closed | unit/static | `.venv/bin/python -m unittest tests.test_porter.Housekeeping -v` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | PKG-07 | supply chain | Pinned URL + hash used; mismatch names both hashes and deletes the file; NuGet contentHash checked before build | unit | `.venv/bin/python -m unittest tests.test_fetch.Pins tests.test_fetch.NuGet -v` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | TEST-01 | — | adb push/resume, stale cleanup, replace-signer | unit | `.venv/bin/python -m unittest tests.test_adb -v` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | TEST-01 | — | Per-OS toolchain detection order | unit | `.venv/bin/python -m unittest tests.test_toolchain -v` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | TEST-01 | — | CLI error paths return named errors, not tracebacks | subprocess | `.venv/bin/python -m unittest tests.test_cli -v` | ❌ W0 | ⬜ pending |
+| 02-01-01 | 02-01 | 1 | HARD-04 | T-02-01 | Second port/install of the same build folder raises "already running" naming the holder; a dead holder frees the lock | integration | `.venv/bin/python -m unittest tests.test_lock -v` | created by the task | ⬜ pending |
+| 02-01-02 | 02-01 | 1 | HARD-07 | T-02-02, T-02-03 | Crash mid data-pack swap leaves a working pack, recovered by the next build or install; MD5 in pieces | unit + subprocess | `.venv/bin/python -m unittest tests.test_datapack -v` | created by the task | ⬜ pending |
+| 02-02-01 | 02-02 | 1 | HARD-02 | T-02-05, T-02-06, T-02-07 | New key 0600 and written whole; unreadable key refused, file untouched; two first ports one signer; APK via .partial | subprocess | `.venv/bin/python -m unittest tests.test_signing.Key -v` | created by the task | ⬜ pending |
+| 02-02-02 | 02-02 | 1 | HARD-02 | T-02-06 | Broken key is a red required doctor row; port stops in require() | unit | `.venv/bin/python -m unittest tests.test_signing.Preflight -v` | extends 02-02-01's file | ⬜ pending |
+| 02-02-03 | 02-02 | 1 | HARD-10 | — | One signer: the probe copy is gone, probeapp.c calls the committed mkapk.py | static | `.venv/bin/python -m unittest tests.test_signing.Probe -v` | extends 02-02-01's file | ⬜ pending |
+| 02-03-01 | 02-03 | 1 | HARD-10 | T-02-08 | Hook bootstrap script (idempotent), README step, `*.code-workspace` ignored | unit | `.venv/bin/python -m unittest tests.test_housekeeping.Hooks -v` | created by the task | ⬜ pending |
+| 02-03-02 | 02-03 | 1 | HARD-10 | T-02-10 | FLIP version recorded; arch_rules joins split literals; upstream output parsers pinned | unit/static | `.venv/bin/python -m unittest tests.test_housekeeping -v && .venv/bin/python tests/arch_rules.py` | extends 02-03-01's file | ⬜ pending |
+| 02-03-03 | 02-03 | 1 | HARD-10 | T-02-09 | Ryujinx patch against Canary-1.3.351 reproduces the vendored tree | unit/static | `.venv/bin/python -m unittest tests.test_housekeeping.Records -v` | extends 02-03-01's file | ⬜ pending |
+| 02-04-01 | 02-04 | 2 | PKG-07, HARD-08 | T-02-13, T-02-14, T-02-15 | Pinned URL + hash used; mismatch names both hashes and deletes the file; 404 → untested fallback (NDK stops); dialog shows (untested), escaped | unit + GUI offscreen | `.venv/bin/python -m unittest tests.test_fetch.Pins -v && QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest tests.test_bridge.Downloads -v` | created by the task | ⬜ pending |
+| 02-04-02 | 02-04 | 2 | HARD-01 | T-02-11, T-02-12 | Crafted zip/tar (`..`, absolute, backslash, drive, escaping link, link-through-link, hardlink outside) refused, nothing written outside, partial unpack removed | unit | `.venv/bin/python -m unittest tests.test_fetch.Unpack -v` | extends 02-04-01's file | ⬜ pending |
+| 02-04-03 | 02-04 | 2 | HARD-01 | T-02-12 | Python below 3.11.13 / 3.12.11 / 3.13.4 without the `ALLOW_MISSING` marker is refused by every command but doctor | unit | `.venv/bin/python -m unittest tests.test_toolchain.PythonFloor -v` | created by the task | ⬜ pending |
+| 02-05-01 | 02-05 | 2 | HARD-06 | T-02-16 | `os.environ` unchanged; absolute dotnet; env reaches nx_extract; `game.load` by path | unit | `.venv/bin/python -m unittest tests.test_porter.Env tests.test_porter.Experimental -v` | ✅ extend | ⬜ pending |
+| 02-05-02 | 02-05 | 2 | HARD-06 | T-02-17 | Overrides named; a missing upstream attribute raises AssertionError naming it | unit | `.venv/bin/python -m unittest tests.test_porter.Overrides -v` | ✅ extend | ⬜ pending |
+| 02-05-03 | 02-05 | 2 | HARD-09 | T-02-18 | Disk space counts base+updates+DLC, re-checked after extraction (other-volume output too) | unit | `.venv/bin/python -m unittest tests.test_porter.Misc -v` | ✅ extend | ⬜ pending |
+| 02-06-01 | 02-06 | 3 | HARD-05 | T-02-19 | A stage killed mid-run (os._exit) is redone next run; keys written whole | integration | `.venv/bin/python -m unittest tests.test_stages -v` | created by the task | ⬜ pending |
+| 02-06-02 | 02-06 | 3 | HARD-05 | T-02-19 | Every key via write_whole; cut-off profile copy recopied | integration | `.venv/bin/python -m unittest tests.test_stages tests.test_porter -v` | extends 02-06-01's file | ⬜ pending |
+| 02-06-03 | 02-06 | 3 | HARD-05 | — | Marker names the stage and keeps the keys (D-09) | unit | `.venv/bin/python -m unittest tests.test_runlog -v` | ✅ extend | ⬜ pending |
+| 02-07-01 | 02-07 | 3 | TEST-01 | T-02-22 | CLI error paths return named errors, not tracebacks (incl. tools --only bogus); devtools device precedence | subprocess | `.venv/bin/python -m unittest tests.test_cli -v` | created by the task | ⬜ pending |
+| 02-07-02 | 02-07 | 3 | TEST-01 | T-02-21 | adb sizes, push resume, stale cleanup in batches of 64 inside the pack's folders, replace-signer | unit | `.venv/bin/python -m unittest tests.test_adb -v` | created by the task | ⬜ pending |
+| 02-07-03 | 02-07 | 3 | TEST-01 | — | Per-OS toolchain detection order, SDK roots, user_dir | unit | `.venv/bin/python -m unittest tests.test_toolchain -v` | extends 02-04-03's file | ⬜ pending |
+| 02-08-01 | 02-08 | 4 | HARD-03, PKG-07 | T-02-23, T-02-24 | FPSLocker config at the pinned commit, head fallback flagged; commit + sha256 in log and `fpslock.tsv`; cache written whole | unit | `.venv/bin/python -m unittest tests.test_porter.FpsLocker tests.test_tls -v` | ✅ extend | ⬜ pending |
+| 02-08-02 | 02-08 | 4 | HARD-03 | — | ARCHITECTURE.md documents the pin | static | `grep -c "FPSLOCKER" docs/ARCHITECTURE.md` | n/a | ⬜ pending |
+| 02-09-01 | 02-09 | 4 | HARD-10 | — | One language list: inspect `languages` from nacp; GUI box filled from it | unit + GUI offscreen | `.venv/bin/python -m unittest tests.test_cli.Languages -v && QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest tests.test_bridge.Escaping -v` | ✅ extend | ⬜ pending |
+| 02-09-02 | 02-09 | 4 | HARD-08 | T-02-26 | Game card strings escaped in rich text; system fixed font | GUI offscreen | `QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest tests.test_bridge -v` | ✅ extend | ⬜ pending |
+| 02-10-01 | 02-10 | 5 | PKG-07 | T-02-28, T-02-SC | NuGet `.nupkg.sha512` of every restored package checked against pins before the build; bad package removed | unit | `.venv/bin/python -m unittest tests.test_nuget -v` | created by the task | ⬜ pending |
+| 02-10-02 | 02-10 | 5 | PKG-07, HARD-04 | T-02-29 | Shared tool builds wait on one lock; translator and survey builds checked | integration | `.venv/bin/python -m unittest tests.test_lock tests.test_nuget -v` | ✅ extend | ⬜ pending |
+| 02-10-03 | 02-10 | 5 | (SC 5) | — | CONCERNS.md closure table, one row per concern | static | `grep -c "## Closure (Phase 2)" .planning/codebase/CONCERNS.md` | n/a | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -64,14 +78,18 @@ Filled in by the planner per task. Requirement → test map from RESEARCH.md:
 
 ## Wave 0 Requirements
 
-- [ ] `tests/test_fetch.py` — Unpack, Pins, NuGet (+ fixture `tests/fixtures/nuget/project.assets.json`)
-- [ ] `tests/test_lock.py`
-- [ ] `tests/test_stages.py` — cut-off, DataPack
-- [ ] `tests/test_signing.py` — tiny `.so` fixture; one key generated in `setUpClass`
-- [ ] `tests/test_adb.py`
-- [ ] `tests/test_toolchain.py`
-- [ ] `tests/test_cli.py`
-- [ ] Every new module sets `NX2A_HOME` to a temp dir at import and follows `tests/test_porter.py`'s lz4/CI skip guard
+Each new test file is created by the first task that needs it (no separate scaffold wave):
+
+- [ ] `tests/test_fetch.py` — Pins, Unpack (02-04-01, 02-04-02); NuGet moved to `tests/test_nuget.py` (02-10-01, temp project.assets.json built in the test, no fixture file)
+- [ ] `tests/test_lock.py` (02-01-01; wait mode 02-10-02)
+- [ ] `tests/test_datapack.py` — Swap, chunked MD5 (02-01-02)
+- [ ] `tests/test_stages.py` — CutOff (02-06-01)
+- [ ] `tests/test_signing.py` — tiny `.so` fixture; one key generated in `setUpClass` (02-02-01)
+- [ ] `tests/test_housekeeping.py` (02-03-01)
+- [ ] `tests/test_adb.py` (02-07-02)
+- [ ] `tests/test_toolchain.py` — PythonFloor (02-04-03), Detection (02-07-03)
+- [ ] `tests/test_cli.py` (02-07-01; Languages 02-09-01)
+- [ ] Every new module sets `NX2A_HOME` to a temp dir at import and follows `tests/test_porter.py`'s lz4/CI skip guard (stdlib-only modules: test_toolchain, test_housekeeping, test_signing need no guard)
 
 ---
 

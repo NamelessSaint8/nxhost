@@ -69,7 +69,28 @@ Plans:
   3. Each downloaded toolchain, NuGet package and FPSLocker config is checked against the exact version and hash recorded in one manifest, the FPSLocker hash appears in the port log, and a mismatch stops with a clear message.
   4. The signing key is created atomically with mode 0600, and when the key file exists but can't be read, porter stops with an error instead of making a new key.
   5. Every item in `.planning/codebase/CONCERNS.md` is closed (escaped game names, system monospace font, recursive disk-space check with a re-check after extraction, env dicts with absolute tool paths, named and asserted upstream overrides, repo housekeeping), and the suite covers downloads and unpacking, adb and install, per-OS toolchain detection and CLI error paths.
-**Plans**: TBD
+**Plans**: 10 plans
+
+Plans:
+**Wave 1**
+- [ ] 02-01-PLAN.md — Build-folder lock shared by port and install, data pack swapped aside with recovery, chunked install MD5 (HARD-04, HARD-07)
+- [ ] 02-02-PLAN.md — Signing key written whole and 0600, unreadable key refused (mkapk + doctor row), probe app on the committed signer (HARD-02, HARD-10)
+- [ ] 02-03-PLAN.md — Hook bootstrap script, *.code-workspace ignored, FLIP version, Ryujinx patch against Canary-1.3.351, arch_rules and upstream-output checks (HARD-10)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 02-04-PLAN.md — One pin manifest for toolchain downloads with untested fallback, safe zip/tar unpacking, Python floor refusal (HARD-01, PKG-07)
+- [ ] 02-05-PLAN.md — Env dicts with absolute dotnet instead of os.environ writes, named and asserted upstream overrides, disk-space check with re-check (HARD-06, HARD-09)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 02-06-PLAN.md — Stage stamps written last and whole (write_whole), profile copy swapped in, cut-off marker names the stage (HARD-05)
+- [ ] 02-07-PLAN.md — Tests for CLI error paths, adb and install, per-OS toolchain detection; tools --only named error (TEST-01)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 02-08-PLAN.md — FPSLocker configs at a pinned commit with head fallback, commit and SHA-256 in the log and build folder (HARD-03, PKG-07)
+- [ ] 02-09-PLAN.md — One language list through porter inspect, escaped game card, system fixed font (HARD-08, HARD-10)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+- [ ] 02-10-PLAN.md — NuGet pins generated and checked before every build, shared tools lock, CONCERNS.md closure table (PKG-07, HARD-04)
 
 ### Phase 3: Host Toolchains and Guided First Run
 **Goal**: A tester on any of the four hosts goes from a fresh download to a ready setup (keys, toolchains, a connected device) by following the GUI
@@ -128,7 +149,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Bridge, Bundles and CI | 10/10 | Complete    | 2026-10-30 |
-| 2. Porter Hardening | 0/TBD | Not started | - |
+| 2. Porter Hardening | 0/10 | Planned | - |
 | 3. Host Toolchains and Guided First Run | 0/TBD | Not started | - |
 | 4. Game Library and Per-Game Settings | 0/TBD | Not started | - |
 | 5. Device Manager and Diagnostics | 0/TBD | Not started | - |
