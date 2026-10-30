@@ -371,6 +371,15 @@ def swap_in(tmp, dst):   # swap the new output in as a whole (the old one is unt
     tmp.rename(dst)
 
 
+def write_whole(p, text):   # a stage's reuse key is written last and whole, after its outputs are swapped in: a stage cut off at any point leaves no key
+    # or the old one, never half of one, and runs again (D-08)
+    tmp = p.with_name(p.name + '.tmp'); tmp.write_text(text, encoding='utf-8')
+    for i in range(30 if os.name == 'nt' else 0):   # a virus scanner holding the fresh file, as in swap_in
+        try: os.replace(tmp, p); return
+        except PermissionError: time.sleep(0.5)
+    os.replace(tmp, p)
+
+
 def free_gb(p):
     while not p.exists(): p = p.parent
     return shutil.disk_usage(p).free / 2**30
@@ -771,7 +780,7 @@ def extract_aoc(nx, keys, repo, work, app, fam, logs, env=None):
         say(f'DLC index {idx}: {p.name}')
         run([nx, keys, '--aoc', p, tmp / str(idx)], logs / f'aoc_{idx}.log', env=env)
     swap_in(tmp, dst)
-    kf.write_text(f'{key}\n{len(best)} DLC\n')
+    write_whole(kf, f'{key}\n{len(best)} DLC\n')
     PROG.end(f'{len(best)} DLC')
     return dst
 
