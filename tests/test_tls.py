@@ -33,6 +33,12 @@ class Context(unittest.TestCase):
         with mock.patch.object(tls.ssl, 'create_default_context', working), mock.patch.object(tls.os.path, 'isfile', isfile): c = tls.context(ca_files=(CA,))
         isfile.assert_not_called(); self.assertEqual(cas(c), 1)
 
+    def test_windows_reads_no_host_file(self):
+        isfile = mock.Mock(return_value=True)
+        with mock.patch.object(tls.ssl, 'create_default_context', empty), mock.patch.object(tls.os, 'name', 'nt'), \
+             mock.patch.object(tls.os.path, 'isfile', isfile): c = tls.context(ca_files=(CA,))
+        isfile.assert_not_called(); self.assertEqual(cas(c), 0)
+
     def test_environment_untouched(self):
         before = dict(os.environ)
         with mock.patch.object(tls.ssl, 'create_default_context', empty): tls.context(ca_files=(MISSING, CA))

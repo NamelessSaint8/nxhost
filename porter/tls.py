@@ -20,6 +20,7 @@ def context(ca_files=CA_FILES):
     """The default context, with the first host CA file loaded when the default store holds no CA; it always verifies"""
     c = ssl.create_default_context()
     if c.cert_store_stats()['x509_ca']: return c   # Windows' system stores, Debian's /usr/lib/ssl, a dev Python, the player's SSL_CERT_FILE
+    if os.name == 'nt': return c   # on Windows /etc/ssl/... resolves against the current drive, where any user can plant a CA
     p = next((p for p in ca_files if os.path.isfile(p)), None)
     if p: c.load_verify_locations(cafile=p)
     return c   # no host file: still CERT_REQUIRED, so the download fails with its own message rather than going unverified
