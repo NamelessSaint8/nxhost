@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # mkapk.py: build and sign a code-less NativeActivity APK with the Python standard library only (no JDK, no Android SDK).
 #   binary AndroidManifest.xml (AXML) -> stored ZIP with the .so page-aligned -> APK Signature Scheme v2 (RSA-2048, SHA-256) with a self-signed cert.
-# Usage: mkapk.py <lib.so> <out.apk> [key.json] [--package P] [--label L] [--lib NAME] [--landscape] [--icon icon.png] [--release] [--version-code N] [--version-name V]   (the key is created on first use and reused, so reinstalls keep the same signer)
-import hashlib, json, os, secrets, struct, sys, time, zlib
+# Usage: mkapk.py <lib.so> <out.apk> [key.json] [--package P] [--label L] [--lib NAME] [--landscape] [--icon icon.png] [--release] [--version-code N] [--version-name V]   (the key is created on first use, whole and readable only by its owner, and reused, so reinstalls keep the same signer;
+#   a key that exists but cannot be read stops the build instead of being replaced)
+import hashlib, json, os, secrets, struct, sys, tempfile, time, zlib
 
 import argparse as _ap
 _p = _ap.ArgumentParser(); _p.add_argument('so'); _p.add_argument('out'); _p.add_argument('key', nargs='?'); _p.add_argument('--package', default='org.nx2a.probe')
@@ -188,20 +189,48 @@ def sign_v2(zip_entries, cd, eocd, k, crt):
     new_eocd = eocd[:16] + struct.pack('<I', len(zip_entries) + len(block)) + eocd[20:]
     return zip_entries + block + cd + new_eocd
 
+def save_key(keyf, text):   # whole and 0600 (mkstemp's mode), or not at all; mode bits mean nothing on Windows, where %APPDATA%'s ACL protects the key
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(keyf)), prefix='.signing-key-')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            f.write(text); f.flush()
+            if sys.platform == 'darwin': import fcntl; fcntl.fcntl(f.fileno(), fcntl.F_FULLFSYNC)   # macOS fsync does not reach the disk
+            else: os.fsync(f.fileno())
+        try: os.link(tmp, keyf)   # never over a key another first port published a moment ago: two keys would fork the signer
+        except FileExistsError: return False
+        return True
+    finally:
+        if os.path.exists(tmp): os.unlink(tmp)
+
+
+def load_key(keyf):   # (k, crt); an unreadable key stops the build: a new one would change the signer and no update of any port would install
+    if os.name != 'nt':
+        try:
+            if os.stat(keyf).st_mode & 0o077: os.chmod(keyf, 0o600)   # an older key made readable by others: tighten it
+        except OSError: pass   # only the tightening is skipped; the read below reports the problem
+    try:
+        with open(keyf, encoding='utf-8') as f: d = json.load(f)
+        return {a: int(v) for a, v in d.items() if a != 'cert'}, bytes.fromhex(d['cert'])
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+        sys.exit(f'[RED] {keyf}: the signing key cannot be read ({e}). Restore it from a backup; or remove it on purpose and reinstall every port with '
+                 f'--replace-signer (their saves on the device go with them)')
+
+
 def main():
     so, out = ARGS.so, ARGS.out
     keyf = ARGS.key if ARGS.key else os.path.join(os.path.dirname(os.path.abspath(out)), 'probe-signing-key.json')
-    if os.path.exists(keyf): k = {a: int(v) for a, v in json.load(open(keyf)).items() if a != 'cert'}; crt = bytes.fromhex(json.load(open(keyf))['cert'])
+    if os.path.exists(keyf): k, crt = load_key(keyf)
     else:
         t = time.time(); k = gen_key(); crt = cert(k)
-        json.dump({**{a: str(v) for a, v in k.items()}, 'cert': crt.hex()}, open(keyf, 'w'))
-        print(f'new signing key {keyf} ({time.time() - t:.1f} s)')
+        if save_key(keyf, json.dumps({**{a: str(v) for a, v in k.items()}, 'cert': crt.hex()})): print(f'new signing key {keyf} ({time.time() - t:.1f} s)')
+        else: k, crt = load_key(keyf)   # another first port won the race: sign with its key
     entries = [('AndroidManifest.xml', axml(MANIFEST), 4), (f'lib/arm64-v8a/lib{LIB}.so', open(so, 'rb').read(), 16384)]
     entries += [(f'lib/arm64-v8a/{os.path.basename(x)}', open(x, 'rb').read(), 16384) for x in ARGS.extra_so]
     if ARGS.icon: entries += [('resources.arsc', res_table('res/drawable-nodpi-v4/icon.png'), 4), ('res/drawable-nodpi-v4/icon.png', open(ARGS.icon, 'rb').read(), 4)]
     z, cd, eocd = build_zip(entries)
     apk = sign_v2(z, cd, eocd, k, crt)
-    open(out, 'wb').write(apk)
+    with open(out + '.partial', 'wb') as f: f.write(apk)
+    os.replace(out + '.partial', out)   # an install never pushes a half-written APK
     print(f'{out}: {len(apk)} bytes, signer SHA-256 {hashlib.sha256(crt).hexdigest()[:16]}...')
 
 if __name__ == '__main__': main()
