@@ -97,7 +97,7 @@ Requirements for the cross-platform GUI milestone. Each maps to a roadmap phase.
 
 ### Tests
 
-- [ ] **TEST-01**: Tests cover downloads and unpacking (crafted zip/tar), adb and install (resume, size parsing, stale-file removal, replace-signer), toolchain detection per OS, and CLI error paths
+- [x] **TEST-01**: Tests cover downloads and unpacking (crafted zip/tar), adb and install (resume, size parsing, stale-file removal, replace-signer), toolchain detection per OS, and CLI error paths
 - [x] **TEST-02**: The suite reports a clear skip instead of failing at import when optional engine modules (e.g. `lz4`) are missing
 - [x] **TEST-03**: GUI bridge tests replay golden JSON-lines fixtures and run headless (Qt offscreen)
 
@@ -222,7 +222,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HARD-08 | Phase 2 | Pending |
 | HARD-09 | Phase 2 | Complete |
 | HARD-10 | Phase 2 | Pending |
-| TEST-01 | Phase 2 | Pending |
+| TEST-01 | Phase 2 | Complete |
 | TEST-02 | Phase 1 | Complete |
 | TEST-03 | Phase 1 | Complete |
 | VER-01 | Phase 6 | Pending |

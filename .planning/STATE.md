@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 02
 current_phase_name: Porter Hardening
 status: executing
-stopped_at: Completed 02-06-PLAN.md
-last_updated: "2026-10-30T18:17:17.481Z"
+stopped_at: Completed 02-07-PLAN.md
+last_updated: "2026-10-30T18:24:17.553Z"
 last_activity: 2026-10-30
 last_activity_desc: Phase 02 execution started
-state_head: 828a6a3f90590681f3ec72f4d98ee3ec3e90203c
+state_head: 29207ab17c66193e1f6f6d3bfb6046d019d458cd
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 20
-  completed_plans: 16
+  completed_plans: 17
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-10-30)
 ## Current Position
 
 Phase: 02 (Porter Hardening) — EXECUTING
-Plan: 7 of 10
+Plan: 8 of 10
 Status: Ready to execute
 Last activity: 2026-10-30 — Phase 02 execution started
 
@@ -72,6 +72,7 @@ Progress: [██░░░░░░░░] 17%
 | Phase 02 P04 | 8 min | 3 tasks | 12 files |
 | Phase 02 P05 | 4 min | 3 tasks | 4 files |
 | Phase 02 P06 | 5 min | 3 tasks | 6 files |
+| Phase 02 P07 | 5 min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -121,6 +122,8 @@ Recent decisions affecting current work:
 - [Phase 02]: Upstream overrides live in porter/upstream.py _overrides and raise AssertionError naming the attribute at import
 - [Phase 02]: HARD-05/D-08: every reuse key is written last and whole through write_whole (temp file + os.replace) after its outputs are swapped in; the experimental profile copy goes through <id>.partial + swap_in
 - [Phase 02]: D-09: the .port-running marker names the stage (rewritten at each stage start) and keeps every reuse key; the Phase 1 key sweep and its extract/ exemption are gone
+- [Phase 02]: 02-07: an unknown porter tools --only name is a usage error: named message, exit 2
+- [Phase 02]: 02-07: per-OS detection tests swap the module's os/sys for stand-ins instead of patching os.name (pathlib would build WindowsPath on POSIX)
 
 ### Pending Todos
 
@@ -145,6 +148,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-30T18:17:07.926Z
-Stopped at: Completed 02-06-PLAN.md
+Last session: 2026-10-30T18:24:17.467Z
+Stopped at: Completed 02-07-PLAN.md
 Resume file: None
