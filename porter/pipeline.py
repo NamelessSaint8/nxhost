@@ -99,6 +99,7 @@ class Port:
         self.inputs()
         PROG.plan(1 + len(self.versions) + bool(self.fam['dlc']) + bool(o.fps60) + 6 + bool(o.install))   # nx_extract, the versions, the DLC, 60 fps, rewrite / split / Vulkan shaders / host / APK / data, install
         self.extract()
+        self.check_space(extracted=True)   # the real sizes: a drive too small stops the port here, not mid data pack
         self.check_graphics()
         self.fps_unlock()
         self.rewrite()
@@ -154,13 +155,22 @@ class Port:
         # DM_GAME picks the profile for every tool; WORK keeps their temporary folders inside the build folder (the shader translator writes thousands of files)
         self.env.update(DM_GAME=g.id, DM_ROOT=str(self.work), WORK=str(self.work / 'tmp'))
 
-    def check_space(self):
-        """Stop before extracting when the game folder's drive cannot hold the port: a build folder takes about 1 to 2 times the game files (NEO 7.0 GB of 6.8,
-        Viractal 2.7 of 1.4), less what an earlier port left there, plus a margin"""
-        game = sum(f.stat().st_size for f in self.o.folder.iterdir() if f.is_file() and f.suffix.lower() in ('.nsp', '.xci'))
-        built = sum(f.stat().st_size for f in self.work.rglob('*') if f.is_file()) if self.work.is_dir() else 0
+    def check_space(self, extracted=False):
+        """Stop when the game folder's drive cannot hold the port: a build folder takes about 1 to 2 times the game files (NEO 7.0 GB of 6.8, Viractal 2.7 of 1.4), less what
+        an earlier port left there, plus a margin. Runs before extracting and again after (extracted), with the build folder's real size then"""
+        fam = self.fam; size = lambda d: sum(f.stat().st_size for f in d.rglob('*') if f.is_file()) if d and d.is_dir() else 0
+        # exactly what the port reads, wherever the scan found it (D-15, HARD-09)
+        game = sum(f.stat().st_size for f in {fam['base'], *(u for _, u in fam['updates']), *(f for _, _, f in fam['dlc'])} if f)
+        built = size(self.work)
         need, free = max(0, 2 * game - built) + 2**30, shutil.disk_usage(self.o.folder).free
-        if free < need: raise BuildError(f'not enough disk space on {self.o.folder.anchor}: the port needs about {need / 2**30:.1f} GB more, {free / 2**30:.1f} GB is free')
+        if free < need: raise BuildError(f'not enough disk space on {self.o.folder.anchor}: the port needs about {need / 2**30:.1f} GB more ({game / 2**30:.1f} GB of game files), '
+                                         f'{free / 2**30:.1f} GB is free')
+        if not extracted: return
+        out = next(d for d in (self.o.out, *self.o.out.parents) if d.exists())
+        if os.stat(out).st_dev == os.stat(self.work).st_dev: return
+        # another volume: the data pack's hard links become copies there (datapack.link_or_copy)
+        need, free = size(self.game / 'RomFS') + size(self.aoc) + 2**30, shutil.disk_usage(out).free
+        if free < need: raise BuildError(f'not enough disk space for the output folder {self.o.out}: the data pack needs about {need / 2**30:.1f} GB there, {free / 2**30:.1f} GB is free')
 
     def use_profile_dir(self, pdir, first):   # every tool finds the game's profile in pdir (game.py DM_GAMES_DIR; first: before dm/games)
         dirs = [str(pdir)] + [d for d in self.env.get('DM_GAMES_DIR', '').split(os.pathsep) if d and d != str(pdir)]
