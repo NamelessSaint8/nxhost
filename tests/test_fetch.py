@@ -1,6 +1,6 @@
 # porter/fetch.py and porter/pins.py: the toolchain downloads are the pinned files or a visibly untested fallback, a wrong hash stops naming both hashes,
 # and hostile zip and tar archives are refused whole and leave nothing behind. urlopen and the vendor indexes are faked: no network, no real toolchain.
-import hashlib, io, json, os, sys, tempfile, unittest, urllib.error
+import hashlib, io, json, os, shutil, stat, sys, tarfile, tempfile, unittest, urllib.error, zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -115,6 +115,74 @@ class Pins(unittest.TestCase):
         msg = str(cm.exception)
         for s in ('tool.zip', '0' * 40, hashlib.sha1(b'hello').hexdigest()): self.assertIn(s, msg)
         self.assertEqual(list(d.iterdir()), [])
+
+
+def evil_zip(path, members):   # (name, link target or None, mode): a link is a member with S_IFLNK and its target as data
+    with zipfile.ZipFile(path, 'w') as z:
+        for name, target, mode in members:
+            i = zipfile.ZipInfo(name)
+            if target is not None: i.external_attr = (stat.S_IFLNK | 0o777) << 16; z.writestr(i, target)
+            else: i.external_attr = (stat.S_IFREG | mode) << 16; z.writestr(i, 'x')
+    return path
+
+
+def evil_tar(path, members):   # (name, TarInfo type, linkname)
+    with tarfile.open(path, 'w:gz') as t:
+        for name, kind, link in members:
+            ti = tarfile.TarInfo(name); ti.type = kind; ti.linkname = link
+            t.addfile(ti, io.BytesIO(b'') if kind == tarfile.REGTYPE else None)
+    return path
+
+
+def tree(d): return sorted(str(p) for p in d.rglob('*'))
+
+
+class Unpack(unittest.TestCase):   # fetch._install on crafted archives: refused whole, nothing under NX2A_HOME but what was there, no .unpack left
+    def setUp(self):
+        from porter import fetch, paths
+        from porter.upstream import BuildError
+        self.fetch, self.BuildError, self.root = fetch, BuildError, paths.player_tools(); self.root.mkdir(parents=True, exist_ok=True)
+        (HOME / 'sentinel').mkdir(exist_ok=True)   # beside player_tools(): anything written outside the unpack folder shows in tree(HOME)
+        self.arcs = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, self.arcs, True)
+        self.addCleanup(shutil.rmtree, self.root / 'x', True)
+        self.item = fetch.Item(name='x', version='1', url='u', size=0, hash='', algo='sha1', folder='x', license='')
+
+    def refused(self, arc, member=None):
+        before = tree(HOME)
+        with self.assertRaises(self.BuildError) as cm: self.fetch._install(self.item, arc)
+        self.assertIn(arc.name, str(cm.exception))
+        if member: self.assertIn(member, str(cm.exception))
+        self.assertFalse((self.root / '.x.unpack').exists()); self.assertEqual(tree(HOME), before)
+        self.assertFalse(os.path.lexists(Path('/') / 'abs'))
+
+    def test_bad_names_refused(self):
+        for name in ('../x', '/abs', 'a\\..\\b', 'C:x'):
+            with self.subTest(name=name):
+                arc = evil_zip(self.arcs / 'bad.zip', [('ok', None, 0o644), (name, None, 0o644)])
+                with zipfile.ZipFile(arc) as z: stored = z.namelist()[1]   # Windows' ZipInfo turns a backslash into a slash
+                self.refused(arc, stored)
+
+    @unittest.skipIf(os.name == 'nt', 'links are unpacked on POSIX only')
+    def test_escaping_links_refused(self):
+        for members in ([('l', '/etc', 0)], [('esc', '../outside', 0)], [('d', '.', 0), ('d/x', '../y', 0)]):
+            with self.subTest(members=members): self.refused(evil_zip(self.arcs / 'link.zip', [('ok', None, 0o644), *members]), members[-1][0])
+
+    def test_valid_zip_kept(self):
+        arc = evil_zip(self.arcs / 'ok.zip', [('top/bin/tool', None, 0o755), ('top/lib/libc++.so', None, 0o644), ('top/lib/libc++.so.1', 'libc++.so', 0),
+                                             ('top/shader/x/libc++.so', '../../lib/libc++.so', 0)])   # the NDK's shader-tools link shape
+        dest = self.fetch._install(self.item, arc)
+        self.assertEqual(dest, self.root / 'x'); self.assertTrue((dest / 'bin' / 'tool').is_file()); self.assertFalse((self.root / '.x.unpack').exists())
+        if os.name != 'nt':
+            self.assertEqual((dest / 'bin' / 'tool').stat().st_mode & 0o777, 0o755)
+            self.assertEqual(os.readlink(dest / 'lib' / 'libc++.so.1'), 'libc++.so'); self.assertTrue((dest / 'shader' / 'x' / 'libc++.so').resolve().is_file())
+
+    def test_tar_refused(self):
+        for members in ([('../x', tarfile.REGTYPE, '')], [('/abs', tarfile.REGTYPE, '')], [('l', tarfile.SYMTYPE, '/etc')], [('h', tarfile.LNKTYPE, '../outside')]):
+            with self.subTest(members=members): self.refused(evil_tar(self.arcs / 'bad.tar.gz', [('ok', tarfile.REGTYPE, ''), *members]))
+
+    def test_valid_tar_kept(self):
+        dest = self.fetch._install(self.item, evil_tar(self.arcs / 'ok.tar.gz', [('dotnet', tarfile.REGTYPE, ''), ('sdk/x', tarfile.REGTYPE, '')]))
+        self.assertTrue((dest / 'dotnet').is_file()); self.assertTrue((dest / 'sdk' / 'x').is_file()); self.assertFalse((self.root / '.x.unpack').exists())
 
 
 if __name__ == '__main__': unittest.main()
