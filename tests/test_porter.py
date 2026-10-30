@@ -9,7 +9,7 @@ os.environ['NX2A_HOME'] = tempfile.mkdtemp(prefix='nx2a_test_home_')
 MISSING = None
 try:
     from porter import config, datapack, pipeline, profiles   # noqa: E402
-    from porter.upstream import android_profile, game          # noqa: E402
+    from porter.upstream import android_profile, game, nsp     # noqa: E402
 except ModuleNotFoundError as e:   # CI installs the lock, so there a missing engine module fails; locally it is a named skip
     if (MISSING := (e.name or '').split('.')[0]) not in ('lz4', 'capstone', 'PIL', 'yaml', 'backports') or os.environ.get('CI'): raise
 
@@ -104,9 +104,41 @@ class Experimental(unittest.TestCase):
             self.assertEqual((ap.status, ap.package), ('experimental', f'org.nx2a.t{odyssey}'))
             self.assertFalse((REPO / f'nxnative/dm/games/{odyssey}/android.tsv').exists())
             self.assertFalse((g.dir / 'patches.py').exists())   # patch_nso.py finds the per-build cuts in dm/games
-            self.assertEqual(os.environ.get('DM_GAMES_FIRST'), '1')
+            self.assertEqual(port.env.get('DM_GAMES_FIRST'), '1')
+            self.assertEqual(dict(os.environ), environ)   # HARD-06: the profile reaches the tools through port.env only
         finally:
             os.environ.clear(); os.environ.update(environ); shutil.rmtree(t, ignore_errors=True)
+
+
+class Env(unittest.TestCase):   # HARD-06: a port never writes os.environ; every child gets port.env, dotnet by absolute path
+    def setUp(self): self.t = Path(tempfile.mkdtemp(prefix='nx2a_test_env_')); self.run = nsp.run
+    def tearDown(self): nsp.run = self.run; shutil.rmtree(self.t, ignore_errors=True)
+
+    def test_use_profile_dir_leaves_environ(self):
+        from types import SimpleNamespace as NS
+        before, p = dict(os.environ), NS(env={'DM_GAMES_DIR': 'x'})
+        pipeline.Port.use_profile_dir(p, self.t, first=True)
+        self.assertEqual(p.env['DM_GAMES_DIR'], os.pathsep.join([str(self.t), 'x'])); self.assertEqual(p.env['DM_GAMES_FIRST'], '1')
+        self.assertEqual(dict(os.environ), before)
+
+    def test_nx_extract_gets_env(self):   # nx_extract's apphost finds .NET 10 through DOTNET_ROOT in the env it is given
+        envs, E = [], {'DOTNET_ROOT': 'x'}
+        def run(cmd, log, env=None, **k): envs.append(env); Path(cmd[-1] if cmd[2] == '--aoc' else cmd[4]).mkdir(parents=True)
+        nsp.run = run
+        base = self.t / 'base.nsp'; base.write_bytes(b'\0'); (self.t / 'logs').mkdir()
+        nsp.extract('nx', 'keys', self.t / 'ex', 'v0', base, None, None, self.t / 'logs', {'romfs_marker': 'm'}, env=E)
+        nsp.extract_aoc('nx', 'keys', pipeline.NXNATIVE, self.t, 0x0100000000AAA000, {'dlc': [(0x0100000000AAB001, 0, base)]}, self.t / 'logs', env=E)
+        self.assertEqual(envs, [E, E])
+
+    def test_dotnet_absolute(self):   # Windows finds a bare program name through the parent's PATH, not the child's
+        exe = self.t / ('dotnet.exe' if os.name == 'nt' else 'dotnet'); exe.write_bytes(b''); exe.chmod(0o755)
+        argv = []; nsp.run = lambda cmd, log, env=None, **k: argv.extend(cmd)
+        with self.assertRaises(pipeline.BuildError): nsp.build_nx_extract(pipeline.NXNATIVE, self.t / 'work', self.t / 'logs', {'PATH': str(self.t)})   # no executable built
+        self.assertEqual(Path(argv[0]).resolve(), exe.resolve())
+
+    def test_no_environ_writes(self):
+        code = '\n'.join(ln for ln in (REPO / 'porter/pipeline.py').read_text(encoding='utf-8').splitlines() if not ln.lstrip().startswith('#'))
+        self.assertIsNone(re.search(r"os\.environ\[[^]]*\]\s*=(?!=)|os\.environ\.(update|setdefault|pop)\(", code))
 
 
 class Misc(unittest.TestCase):
