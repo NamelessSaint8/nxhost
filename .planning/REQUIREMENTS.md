@@ -90,7 +90,7 @@ Requirements for the cross-platform GUI milestone. Each maps to a roadmap phase.
 - [ ] **HARD-04**: User starting a second port of the same game folder gets a clear "already running" message (build-folder lock)
 - [ ] **HARD-05**: A stage cut off mid-run is redone on the next run (stage stamps written last and atomically)
 - [ ] **HARD-06**: The pipeline passes env dicts with absolute tool paths to subprocesses instead of mutating `os.environ`, and the upstream overrides are named and asserted at import
-- [ ] **HARD-07**: A crash during the data-pack swap never leaves the game without a pack, and install hashes files in chunks
+- [x] **HARD-07**: A crash during the data-pack swap never leaves the game without a pack, and install hashes files in chunks
 - [ ] **HARD-08**: Game names and other control-data strings render escaped in the GUI
 - [ ] **HARD-09**: The disk-space check counts files recursively, including DLC folders, and re-checks after extraction
 - [ ] **HARD-10**: Repository housekeeping is done: `probes/app/mkapk.py` uses the committed signer, the FLIP version is recorded, Ryujinx local changes are kept as a patch file, the commit hook is bootstrapped, `*.code-workspace` is ignored, and the language list has one source
@@ -218,7 +218,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HARD-04 | Phase 2 | Pending |
 | HARD-05 | Phase 2 | Pending |
 | HARD-06 | Phase 2 | Pending |
-| HARD-07 | Phase 2 | Pending |
+| HARD-07 | Phase 2 | Complete |
 | HARD-08 | Phase 2 | Pending |
 | HARD-09 | Phase 2 | Pending |
 | HARD-10 | Phase 2 | Pending |

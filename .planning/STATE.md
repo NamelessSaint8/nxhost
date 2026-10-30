@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 02
 current_phase_name: Porter Hardening
 status: executing
-stopped_at: Phase 2 context gathered
-last_updated: "2026-10-30T17:22:19.995Z"
+stopped_at: Completed 02-01-PLAN.md
+last_updated: "2026-10-30T17:34:31.620Z"
 last_activity: 2026-10-30
-last_activity_desc: Phase 01 complete, transitioned to Phase 2
-state_head: c009aef4f6e6adb8c5d62fd0fb7566f06ddf667d
+last_activity_desc: Phase 02 execution started
+state_head: d09dae6673e9abf3dbac8b9be20c50ca136c653e
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 20
-  completed_plans: 10
+  completed_plans: 11
   percent: 17
 ---
 
@@ -23,14 +23,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-30)
 
 **Core value:** A tester on any supported host (Windows x64, macOS Apple Silicon, Linux x64, Linux arm64) can take their own Switch dump and get a working port onto their Android device through the GUI, without help.
-**Current focus:** Phase 2 — Porter Hardening
+**Current focus:** Phase 02 — Porter Hardening
 
 ## Current Position
 
-Phase: 02 (Porter Hardening) — READY TO EXECUTE
-Plan: Not started
+Phase: 02 (Porter Hardening) — EXECUTING
+Plan: 2 of 10
 Status: Ready to execute
-Last activity: 2026-10-30 — Phase 01 complete, transitioned to Phase 2
+Last activity: 2026-10-30 — Phase 02 execution started
 
 Progress: [██░░░░░░░░] 17%
 
@@ -66,6 +66,7 @@ Progress: [██░░░░░░░░] 17%
 | Phase 01 P08 | 3 sessions | 3 tasks | 7 files |
 | Phase 01 P09 | 2min | 2 tasks | 5 files |
 | Phase 01 P10 | 77min | 3 tasks | 4 files |
+| Phase 02 P01 | 10 min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -100,6 +101,8 @@ Recent decisions affecting current work:
 - [Phase 01]: fork-release retries stapler staple up to 4 times; notarization itself is not retried
 - [Phase 01]: TLS trust: porter/tls.py context() loads the first host CA file only when the default store holds no CA; no truststore, no process-wide SSL_CERT_FILE
 - [Phase 01]: G-01-7 fixed by what ships: packaging/hooks overrides drop PySide6's gtk3 theme and glib network plugin, the spec refuses libgio-2.0/libgtk-3; no GIO or Qt theme env var
+- [Phase 02]: Build-folder lock: porter/lock.py OS lock on <tid>_build/.porter.lock; install finds the folder via the host-only sidecar <App>-data.build (D-14)
+- [Phase 02]: Data pack swapped aside via <App>-data.old; datapack.recover runs first in build and porter install (HARD-07)
 
 ### Pending Todos
 
@@ -125,6 +128,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-30T15:52:43.235Z
-Stopped at: Phase 2 context gathered
-Resume file: .planning/phases/02-porter-hardening/02-CONTEXT.md
+Last session: 2026-10-30T17:34:31.558Z
+Stopped at: Completed 02-01-PLAN.md
+Resume file: None
