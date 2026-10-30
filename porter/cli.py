@@ -103,10 +103,11 @@ def cmd_port(a):
 
 
 def cmd_install(a):
-    from porter import config, datapack, install, toolchain
+    from porter import config, datapack, install, lock, toolchain
     from porter.upstream import BuildError, PROG
     def go():
         data = Path(a.data).resolve()
+        b = datapack.build_dir(data); held = lock.take(b, 'install') if b and b.is_dir() else None   # D-07: the port's lock, on the folder the pack's sidecar names (D-14)
         apk = Path(a.apk) if a.apk else data.with_name(data.name.removesuffix('-data') + '.apk')
         PROG.plan(1)
         cfg = config.load()

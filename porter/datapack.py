@@ -6,6 +6,7 @@
 #   env.txt        host switches: the game language, the DLC folder, the profile's env rows
 #   settings.txt   the pause menu's first-launch defaults (the profile's setting rows); the installer never replaces the player's own
 #   nx2a-data.json what the pack is: the game, the package, the version, the device features the profile requires (android.tsv requires), which the installer checks
+# Beside the pack on the host only, never pushed: <name>-data.build, the build folder it was made from, whose lock `porter install` takes (D-07, D-14).
 # Big trees are hard links into the extraction when the volume allows, so the pack takes no extra space; the pack is rebuilt whole when anything in it changes.
 import json, os, shutil, time
 from pathlib import Path
@@ -13,6 +14,7 @@ from pathlib import Path
 MANIFEST = 'nx2a-data.json'
 KEEP_ON_DEVICE = ('settings.txt',)          # the player's choices win over the pack's defaults
 OWNED = ('mods', 'RomFS', 'aoc')            # folders the pack owns on the device: files there that the pack lacks are stale (an older version's) and removed
+SIDECAR = '.build'                          # <pack>.build beside the pack: the build folder's absolute path (D-14)
 
 
 def link_or_copy(src, dst):
@@ -33,9 +35,9 @@ def link_tree(src, dst):   # (files, bytes)
 def files_folder(package): return f'/sdcard/Android/data/{package}/files'
 
 
-def build(dst, *, profile, version, display, patched, romfs, shaders, aoc=None, language='en-US', package=None, env=(), files=None, progress=None):
-    """Write the pack to dst (replacing it). profile: the AndroidProfile; package: the app's, when not the profile's; env: more env.txt rows, after the profile's;
-    files: {name in the pack: source} (the 60 fps memory writes, fpslock.tsv). Returns the manifest"""
+def build(dst, *, profile, version, display, patched, romfs, shaders, aoc=None, language='en-US', package=None, build=None, env=(), files=None, progress=None):
+    """Write the pack to dst (replacing it). profile: the AndroidProfile; package: the app's, when not the profile's; build: the build folder, named in the sidecar;
+    env: more env.txt rows, after the profile's; files: {name in the pack: source} (the 60 fps memory writes, fpslock.tsv). Returns the manifest"""
     package = package or profile.package
     tmp = dst.with_name(dst.name + '.partial')
     if tmp.exists(): shutil.rmtree(tmp)
@@ -58,7 +60,14 @@ def build(dst, *, profile, version, display, patched, romfs, shaders, aoc=None, 
     (tmp / MANIFEST).write_text(json.dumps(man, indent=2), encoding='utf-8')
     if dst.exists(): shutil.rmtree(dst)
     tmp.rename(dst)
+    if build:   # the build folder whose lock `porter install` takes (D-07): beside the pack, never in it, because the pack is pushed and no host path may reach the device (D-14)
+        s = dst.with_name(dst.name + SIDECAR + '.tmp'); s.write_text(str(Path(build).resolve()), encoding='utf-8'); os.replace(s, dst.with_name(dst.name + SIDECAR))
     return man
+
+
+def build_dir(dst):   # the build folder the pack's sidecar names, or None (a pack made before the sidecar, or copied without it)
+    try: return Path(Path(dst).with_name(Path(dst).name + SIDECAR).read_text(encoding='utf-8').strip())
+    except OSError: return None
 
 
 def read_manifest(d):

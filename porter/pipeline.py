@@ -120,6 +120,7 @@ class Port:
         self.app, self.fam = nsp.scan_nsps(o.folder)
         tid = f'{self.app:016X}'
         self.work = o.folder / f'{tid}_build'
+        from porter import lock; self.lock = lock.take(self.work, 'port')   # D-06/D-07: one port or install of this game folder at a time, held until porter ends
         g, ap = profiles.by_title(self.app)
         self.provisional = False
         if not (g and ap):
@@ -360,7 +361,7 @@ class Port:
         PROG.stage('data pack', step='linking')
         dst = self.o.out / f'{app_stem(self.g, self.app_name)}-data'
         man = datapack.build(dst, profile=self.ap, version=self.pkg_ver, display=self.display, patched=self.patched, romfs=self.game / 'RomFS', shaders=self.dmsv,
-                             aoc=self.aoc, language=self.lang, package=self.package, env=self.fps_env, files=self.fps_files, progress=lambda what: PROG.set(step=f'linking {what}'))
+                             aoc=self.aoc, language=self.lang, package=self.package, build=self.work, env=self.fps_env, files=self.fps_files, progress=lambda what: PROG.set(step=f'linking {what}'))
         self.data_path = dst; self.result['data'] = str(dst)
         PROG.end(f'{man["files"]:,} files, {man["bytes"] / 2**30:.1f} GB')
 
