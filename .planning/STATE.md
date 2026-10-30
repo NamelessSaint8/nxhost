@@ -1,43 +1,43 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 01
-current_phase_name: Bridge, Bundles and CI
-status: verifying
-stopped_at: Completed 01-10-PLAN.md
-last_updated: "2026-10-30T07:42:13.870Z"
+current_phase: 2
+current_phase_name: Porter Hardening
+status: planning
+stopped_at: Phase 01 complete, ready to plan Phase 2
+last_updated: "2026-10-30T08:28:21.739Z"
 last_activity: 2026-10-30
-last_activity_desc: Phase 01 execution started
-state_head: 1ce9643c60f1fbf0e15815e75e2cd4db8e5baf49
+last_activity_desc: Phase 01 complete, transitioned to Phase 2
+state_head: 7e3d330696a57b208f43c49c8fc0e79bf26b9d2c
 progress:
   total_phases: 6
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 10
   completed_plans: 10
-  percent: 0
+  percent: 17
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-10-29)
+See: .planning/PROJECT.md (updated 2026-10-30)
 
 **Core value:** A tester on any supported host (Windows x64, macOS Apple Silicon, Linux x64, Linux arm64) can take their own Switch dump and get a working port onto their Android device through the GUI, without help.
-**Current focus:** Phase 01 — Bridge, Bundles and CI
+**Current focus:** Phase 2 — Porter Hardening
 
 ## Current Position
 
-Phase: 01 (Bridge, Bundles and CI) — EXECUTING
-Plan: 10 of 10
-Status: Phase complete — ready for verification
-Last activity: 2026-10-30 — Phase 01 execution started
+Phase: 2 — Porter Hardening
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-10-30 — Phase 01 complete, transitioned to Phase 2
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [██░░░░░░░░] 17%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 0
+- Total plans completed: 10
 - Average duration: -
 - Total execution time: 0.0 hours
 
@@ -45,7 +45,7 @@ Progress: [░░░░░░░░░░] 0%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 01 | 10 | - | - |
 
 **Recent Trend:**
 - Last 5 plans: -
@@ -107,8 +107,8 @@ None yet.
 
 ### Blockers/Concerns
 
-- [Phase 1]: Apple Developer ID certificate is ready; secrets get added to the protected release environment when the release job needs them
-- [Phase 1]: Research before planning: hardened-runtime entitlements for frozen Python + ctypes (capstone), `sys.executable`/`REPO` inside `.app`, PySide6 `setUnixProcessParameters` vs porter-side `setsid`, `wayland-*` plugin collection, .NET 10 MSBuild server env-var names
+- [Phase 1]: Code review of the gap plans left WR-01..03 open (01-REVIEW-DISPOSITION.md): the CA-file fallback in porter/tls.py also runs on Windows, where `/etc/ssl/...` resolves against the current drive; the urlopen scan test accepts any `context=`; the hook overrides do not fail when PyInstaller moves past 6.22.3. Fix before the first tag (`/gsd-code-review 01 --fix`)
+- [Phase 1]: A root CA that exists only in the macOS keychain (TLS-inspecting proxy) is not trusted; the player can set SSL_CERT_FILE. Read the keychain (truststore) when a tester needs it
 - [Phase 1→2]: Once cancel kills the whole tree (Phase 1), a cancelled run can leave a stage output the cache trusts until atomic stamps land (HARD-05, Phase 2). Clear the build folder after a cancel while testing in between
 - [Phase 2]: Research: whether older platform-tools URLs stay downloadable after pinning
 - [Phase 3]: Research: HomuHomu833 arm64 NDK (asset re-uploaded in place, so the pinned hash can drift; clang build parity with r27c; its glibc), minimum distro adb and when `push -Z` arrived (Debian 12 ships 29.0.6)
@@ -125,6 +125,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-30T07:42:13.738Z
-Stopped at: Completed 01-10-PLAN.md
+Last session: 2026-10-30T08:29:44Z
+Stopped at: Phase 01 complete, ready to plan Phase 2
 Resume file: None

@@ -9,7 +9,7 @@ Requirements for the cross-platform GUI milestone. Each maps to a roadmap phase.
 
 ### Bridge (GUI ↔ porter)
 
-- [ ] **BRDG-01**: User can cancel a running port and every child process (dotnet, MSBuild nodes, clang, shader tools) stops on Windows, macOS and Linux, while the adb server keeps running
+- [x] **BRDG-01**: User can cancel a running port and every child process (dotnet, MSBuild nodes, clang, shader tools) stops on Windows, macOS and Linux, while the adb server keeps running
 - [x] **BRDG-02**: User closing the window during a port is asked to confirm; confirming stops the run the same way Cancel does
 - [x] **BRDG-03**: User sees the real cause when a porter command fails (structured `error` event or JSON error), never a swallowed stderr or "no game found" for a crash
 - [x] **BRDG-04**: User sees a timeout message with a retry when a one-shot porter call hangs, instead of a stuck view
@@ -167,7 +167,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BRDG-01 | Phase 1 | Pending |
+| BRDG-01 | Phase 1 | Complete |
 | BRDG-02 | Phase 1 | Complete |
 | BRDG-03 | Phase 1 | Complete |
 | BRDG-04 | Phase 1 | Complete |

@@ -25,6 +25,15 @@ A tester on any supported host (Windows x64, macOS Apple Silicon, Linux x64, Lin
 - ✓ Windows x64 PyInstaller bundle that needs no Python install — existing
 - ✓ Architecture rules enforced by tests: no game-specific code in `nxnative/dm/android/`, profiles are data only — existing
 - ✓ Conventional Commits hook in `.githooks/` (opt-in via `core.hooksPath`) — existing
+- ✓ GUI stays on PySide6 (Qt Widgets), keeping the GUI ↔ porter process boundary: the frozen bundles build, sign and run on all four hosts — Phase 1
+- ✓ Windows x64 bundle that runs without a Python install — Phase 1
+- ✓ macOS Apple Silicon `.app`, Developer ID-signed, notarized and stapled; opens from Finder and ports from a read-only location with the signature intact — Phase 1
+- ✓ Linux x64 and arm64 `tar.gz` bundles run under X11 and Wayland, without the build runner's GTK3/GIO stack — Phase 1
+- ✓ GitHub Actions builds every bundle, signs and notarizes the macOS one, smoke-tests each, and runs the test suite on each OS — Phase 1
+- ✓ HTTPS downloads verify from the frozen bundles on every host (porter's own CA context, no process-wide `SSL_CERT_FILE`) — Phase 1
+- ✓ Cancel stops the whole process tree on every OS; closing the window during a port asks first and stops the run — Phase 1
+- ✓ Errors from the CLI reach the GUI with their real cause; a hung one-shot call times out with Retry; the run log opens from the GUI — Phase 1
+- ✓ Python dependencies are pinned in hashed universal locks; build and dev (devtools) requirements are declared separately — Phase 1
 
 ### Active
 
@@ -35,25 +44,17 @@ A tester on any supported host (Windows x64, macOS Apple Silicon, Linux x64, Lin
 - [ ] Device manager: pick from connected devices, show GPU compatibility (BC textures, Vulkan 1.3), and install, update or remove per device
 - [ ] Per-game settings in the UI (60 fps, language, controller/touch overlay layout, env switches) instead of CLI flags
 - [ ] Guided first run: prod.keys, toolchain downloads and the first device, in place of the Setup checklist
-- [ ] GUI stays on PySide6 (Qt Widgets) per research, keeping the GUI ↔ porter process boundary
 
 **Cross-platform bundles**
-- [ ] Windows x64 bundle
-- [ ] macOS Apple Silicon `.app`, signed with a Developer ID and notarized
-- [ ] Linux x64 bundle
-- [ ] Linux arm64 bundle, using distro adb and a community arm64 NDK build that Setup detects or fetches
-- [ ] GitHub Actions builds every bundle, signs and notarizes the macOS one, and runs the test suite on each OS
+- [ ] Linux arm64 toolchains: distro adb and a community arm64 NDK build that Setup detects or fetches (the arm64 bundle itself shipped in Phase 1)
 
 **Hardening (all of `.planning/codebase/CONCERNS.md`)**
-- [ ] Cancel stops the whole process tree on every OS; closing the window during a port asks first and stops the run
-- [ ] Errors from the CLI reach the GUI with their real cause (no swallowed stderr, no "no game found" for a crash)
 - [ ] Zip and tar extraction cannot write outside the unpack folder (symlinks, `..`, absolute paths; tar uses `filter='data'` and refuses Pythons without the CVE-2025-4517 fix: 3.11.13 / 3.12.11 / 3.13.4+)
 - [ ] The signing key is written atomically with mode 0600, and the tool refuses to silently regenerate it
 - [ ] Downloads and FPSLocker configs are checked against pinned or recorded hashes
 - [ ] A lock per build folder prevents two ports of the same game running at once
 - [ ] The pipeline passes env dicts to subprocesses instead of mutating `os.environ`; upstream monkey-patches are named and asserted
-- [ ] Python dependencies are pinned; devtools dependencies are declared
-- [ ] Tests cover the GUI event bridge, downloads/unpacking, adb/install, toolchain detection and CLI error paths
+- [ ] Tests cover downloads/unpacking, adb/install, toolchain detection and CLI error paths (the GUI event bridge is covered since Phase 1)
 - [ ] Data pack swap is atomic; install hashes files in chunks
 - [ ] Remaining smaller items in CONCERNS.md (rich-text escaping, font choice, call timeouts, duplicate `probes/app/mkapk.py`, FLIP version record, Ryujinx patch file, hooks bootstrap)
 
@@ -102,11 +103,13 @@ A tester on any supported host (Windows x64, macOS Apple Silicon, Linux x64, Lin
 |----------|-----------|---------|
 | Split by priority: v1 = cross-platform GUI rework + hardening + bundles; games, devices, cheats and Wii/Wii U next | The developer ranked the cross-platform GUI first; keeps the first milestone shippable | — Pending |
 | Rework the GUI (library, device manager, per-game settings, guided first run) rather than only packaging it | Testers need more than today's three tabs | — Pending |
-| GUI toolkit: keep PySide6 (Qt Widgets) | Research: the frozen executable is also porter's and the engine scripts' Python, so any other toolkit ships two runtimes and two signing paths | — Pending (gated on the Phase 1 packaging spike) |
+| GUI toolkit: keep PySide6 (Qt Widgets) | Research: the frozen executable is also porter's and the engine scripts' Python, so any other toolkit ships two runtimes and two signing paths | ✓ Good — Phase 1 bundles built, signed and passed UAT on all four hosts |
 | Hosts: Windows x64, macOS Apple Silicon, Linux x64, Linux arm64; macOS Intel dropped | Matches the test hardware the developer has | — Pending |
 | Linux arm64 uses distro adb and a community arm64 NDK | Google publishes no linux-arm64 host builds | — Pending |
-| macOS bundle signed and notarized with a Developer ID | Testers open it without Gatekeeper warnings | — Pending |
-| GitHub Actions builds, signs and tests all bundles | Four hosts are too many to build and check by hand | — Pending |
+| macOS bundle signed and notarized with a Developer ID | Testers open it without Gatekeeper warnings | ✓ Good — the DMG opens from Finder after a browser download (Phase 1 UAT) |
+| GitHub Actions builds, signs and tests all bundles | Four hosts are too many to build and check by hand | ✓ Good — fork-ci and fork-release green for every bundle (Phase 1) |
+| HTTPS trust: one porter SSL context that adds the host's CA file only when the bundled OpenSSL loads none; no `SSL_CERT_FILE`, no truststore | A process-wide variable reaches dotnet's NuGet restore and every child; truststore adds a dependency never run in the hardened-runtime app | ✓ Good — downloads work from the DMG and on Fedora 44 (Phase 1). Limit: a root only in the macOS keychain is not trusted |
+| Linux bundles leave PySide6's gtk3 theme and glib network plugin out (PyInstaller hook overrides), and the build refuses libgio/libgtk | The bundled older GIO loaded the host's newer gvfs modules on GNOME; no environment variable reaches children | ✓ Good — clean start and working folder picker on Debian GNOME (Phase 1 UAT) |
 | Hardening covers all of CONCERNS.md | The developer chose a solid base before adding features | — Pending |
 | Keep syncing upstream shirai91/nx2android | Upstream fixes keep flowing into the fork | — Pending |
 | Next-milestone titles must reach `playable`, not just boot | Same bar as today's 11 playable titles | — Pending |
@@ -131,4 +134,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-10-29 after initialization*
+*Last updated: 2026-10-30 after Phase 1*

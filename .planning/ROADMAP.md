@@ -12,7 +12,7 @@ This milestone takes the Windows-only PySide6 GUI to four hosts and reworks it f
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Bridge, Bundles and CI** - Today's GUI stops runs cleanly, reports real errors, and ships as a CI-built bundle on all four hosts
+- [x] **Phase 1: Bridge, Bundles and CI** - Today's GUI stops runs cleanly, reports real errors, and ships as a CI-built bundle on all four hosts (completed 2026-10-30)
 - [ ] **Phase 2: Porter Hardening** - Ports survive kills, hostile archives and tampered downloads without losing builds or the signing key
 - [ ] **Phase 3: Host Toolchains and Guided First Run** - A fresh tester on any host reaches a ready setup by following the GUI
 - [ ] **Phase 4: Game Library and Per-Game Settings** - Users port games and manage them in one library, with settings porter keeps per game
@@ -31,7 +31,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. When a porter command fails, crashes or hangs, the GUI shows the real cause, or a timeout message with Retry, never a swallowed stderr or "no game found". The full saved log of any run opens from the GUI.
   4. Every push runs the test suite on all four OSes, installed from the hashed lockfile, including headless GUI bridge tests that replay golden JSON-lines fixtures. A missing optional engine module (e.g. `lz4`) shows up as a clear skip, not an import failure.
   5. The release workflow builds all four bundles, signs and notarizes the macOS one, smoke-tests each frozen bundle, and reports the Linux glibc symbol floor and the `nxnative/` diff against upstream. Its signing secrets sit in a protected environment that pull-request workflows cannot reach, and every action is pinned by SHA.
-**Plans**: 10/10 plans executed
+**Plans**: 10/10 plans complete
 
 Plans:
 **Wave 1**
@@ -127,7 +127,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Bridge, Bundles and CI | 10/10 | In Progress | - |
+| 1. Bridge, Bundles and CI | 10/10 | Complete    | 2026-10-30 |
 | 2. Porter Hardening | 0/TBD | Not started | - |
 | 3. Host Toolchains and Guided First Run | 0/TBD | Not started | - |
 | 4. Game Library and Per-Game Settings | 0/TBD | Not started | - |
