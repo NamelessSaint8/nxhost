@@ -5,6 +5,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+os.environ['NX2A_HOME'] = tempfile.mkdtemp()   # this process too, though porter runs only in the subprocesses, each with its own
 
 MISSING = None
 for _m in ('lz4.block', 'capstone'):   # port and install import porter.upstream
