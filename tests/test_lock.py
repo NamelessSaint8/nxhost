@@ -1,5 +1,5 @@
 # The build-folder lock (porter/lock.py, D-06, D-07, D-14): a second port or install of a held <tid>_build/ stops at once naming the holder, and a dead
-# holder never blocks the next one. Holders are child processes; each test has its own NX2A_HOME; no game files, toolchains or device.
+# holder never blocks the next one. Also the shared tools lock and the translator's reuse under it (CR-03). Holders are child processes; each test has its own NX2A_HOME; no game files, toolchains or device.
 import json, os, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest import mock
@@ -55,6 +55,26 @@ class Lock(unittest.TestCase):
         self.addCleanup(lambda: (p.kill(), p.wait(), p.stdout.close(), p.stderr.close()))
         self.assertEqual(p.stdout.readline().strip(), 'held', p.stderr.read() if p.poll() is not None else '')
         return p
+
+    def translator_port(self):   # a Port with only what translator() reads
+        from porter import pipeline
+        port = pipeline.Port(pipeline.Options(folder=self.work.parent))
+        port.tools = {'dotnet': Path('dotnet')}; port.env = {}; port.logs = Path(tempfile.mkdtemp(prefix='nx2a_test_logs_'))
+        return port
+
+    def test_new_translator_key_keeps_old(self):   # CR-03: a rebuild for another key (an engine or .NET update) never removes the dll another port's shader_vk.py uses
+        from porter import nuget, pipeline
+        keys = ['1' * 64, '2' * 64]; cur = []; ran = []
+        def fp(*a, **kw): cur[:] = [keys.pop(0)]; return cur[0]
+        def run(cmd, log, env=None, **kw):
+            ran.append(cmd[1])
+            if cmd[1] == 'build': o = Path(cmd[cmd.index('-o') + 1]); o.mkdir(parents=True, exist_ok=True); (o / 'dmsh_xlate.dll').write_text(cur[0])
+        with mock.patch.dict(os.environ, {'NX2A_HOME': tempfile.mkdtemp(prefix='nx2a_test_home_')}), mock.patch.object(pipeline.nsp, 'fingerprint', fp), \
+             mock.patch.object(pipeline.nsp, 'run', run), mock.patch.object(nuget, 'check', lambda project: None):
+            port = self.translator_port()
+            d1, k1 = port.translator(); d2, k2 = port.translator()
+            self.assertEqual((k1, k2), ('1' * 64, '2' * 64)); self.assertNotEqual(d1, d2)
+            self.assertEqual(d1.read_text(), '1' * 64); self.assertEqual(d2.read_text(), '2' * 64)
 
     def test_second_take_names_holder(self):
         from porter import lock
