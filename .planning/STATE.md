@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 02
 current_phase_name: Porter Hardening
 status: executing
-stopped_at: Completed 02-01-PLAN.md
-last_updated: "2026-10-30T17:34:31.620Z"
+stopped_at: Completed 02-02-PLAN.md
+last_updated: "2026-10-30T17:40:58.672Z"
 last_activity: 2026-10-30
 last_activity_desc: Phase 02 execution started
-state_head: d09dae6673e9abf3dbac8b9be20c50ca136c653e
+state_head: 777c42a8977adb7997219ead0d9355ed85a51940
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 20
-  completed_plans: 11
+  completed_plans: 12
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-10-30)
 ## Current Position
 
 Phase: 02 (Porter Hardening) — EXECUTING
-Plan: 2 of 10
+Plan: 3 of 10
 Status: Ready to execute
 Last activity: 2026-10-30 — Phase 02 execution started
 
@@ -67,6 +67,7 @@ Progress: [██░░░░░░░░] 17%
 | Phase 01 P09 | 2min | 2 tasks | 5 files |
 | Phase 01 P10 | 77min | 3 tasks | 4 files |
 | Phase 02 P01 | 10 min | 2 tasks | 8 files |
+| Phase 02 P02 | 4 min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -103,6 +104,9 @@ Recent decisions affecting current work:
 - [Phase 01]: G-01-7 fixed by what ships: packaging/hooks overrides drop PySide6's gtk3 theme and glib network plugin, the spec refuses libgio-2.0/libgtk-3; no GIO or Qt theme env var
 - [Phase 02]: Build-folder lock: porter/lock.py OS lock on <tid>_build/.porter.lock; install finds the folder via the host-only sidecar <App>-data.build (D-14)
 - [Phase 02]: Data pack swapped aside via <App>-data.old; datapack.recover runs first in build and porter install (HARD-07)
+- [Phase 02]: Signing key published with os.link (no-clobber), not os.replace: two simultaneous first ports end with one signer
+- [Phase 02]: An unreadable signing key is a required red doctor row, so porter port stops before any stage; mkapk.py never replaces it
+- [Phase 02]: Existing group/other-readable signing key tightened to 0600 on POSIX on next use
 
 ### Pending Todos
 
@@ -128,6 +132,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-30T17:34:31.558Z
-Stopped at: Completed 02-01-PLAN.md
+Last session: 2026-10-30T17:40:58.601Z
+Stopped at: Completed 02-02-PLAN.md
 Resume file: None

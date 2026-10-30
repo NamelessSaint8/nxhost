@@ -69,12 +69,12 @@ Plans:
   3. Each downloaded toolchain, NuGet package and FPSLocker config is checked against the exact version and hash recorded in one manifest, the FPSLocker hash appears in the port log, and a mismatch stops with a clear message.
   4. The signing key is created atomically with mode 0600, and when the key file exists but can't be read, porter stops with an error instead of making a new key.
   5. Every item in `.planning/codebase/CONCERNS.md` is closed (escaped game names, system monospace font, recursive disk-space check with a re-check after extraction, env dicts with absolute tool paths, named and asserted upstream overrides, repo housekeeping), and the suite covers downloads and unpacking, adb and install, per-OS toolchain detection and CLI error paths.
-**Plans**: 1/10 plans executed
+**Plans**: 2/10 plans executed
 
 Plans:
 **Wave 1**
 - [x] 02-01-PLAN.md — Build-folder lock shared by port and install (found through a host-only sidecar), data pack swapped aside with recovery, chunked install MD5 (HARD-04, HARD-07)
-- [ ] 02-02-PLAN.md — Signing key written whole and 0600, unreadable key refused (mkapk + doctor row), probe app on the committed signer (HARD-02, HARD-10)
+- [x] 02-02-PLAN.md — Signing key written whole and 0600, unreadable key refused (mkapk + doctor row), probe app on the committed signer (HARD-02, HARD-10)
 - [ ] 02-03-PLAN.md — Hook bootstrap script, *.code-workspace ignored, FLIP version, Ryujinx patch against Canary-1.3.351, arch_rules and upstream-output checks (HARD-10)
 
 **Wave 2** *(blocked on Wave 1 completion)*
@@ -149,7 +149,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Bridge, Bundles and CI | 10/10 | Complete    | 2026-10-30 |
-| 2. Porter Hardening | 1/10 | In Progress | - |
+| 2. Porter Hardening | 2/10 | In Progress | - |
 | 3. Host Toolchains and Guided First Run | 0/TBD | Not started | - |
 | 4. Game Library and Per-Game Settings | 0/TBD | Not started | - |
 | 5. Device Manager and Diagnostics | 0/TBD | Not started | - |

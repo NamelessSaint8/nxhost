@@ -85,7 +85,7 @@ Requirements for the cross-platform GUI milestone. Each maps to a roadmap phase.
 ### Hardening
 
 - [ ] **HARD-01**: Zip and tar extraction cannot write outside the unpack folder (symlinks, `..`, absolute paths); tar uses `filter='data'` and porter refuses Pythons without the CVE-2025-4517 fix (3.11.13 / 3.12.11 / 3.13.4+)
-- [ ] **HARD-02**: The signing key is created with mode 0600 and written atomically, and porter refuses to regenerate it when it exists but cannot be read
+- [x] **HARD-02**: The signing key is created with mode 0600 and written atomically, and porter refuses to regenerate it when it exists but cannot be read
 - [ ] **HARD-03**: FPSLocker configs come from a pinned commit or their hash is recorded and shown in the port log
 - [ ] **HARD-04**: User starting a second port of the same game folder gets a clear "already running" message (build-folder lock)
 - [ ] **HARD-05**: A stage cut off mid-run is redone on the next run (stage stamps written last and atomically)
@@ -213,7 +213,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TOOL-03 | Phase 3 | Pending |
 | TOOL-04 | Phase 3 | Pending |
 | HARD-01 | Phase 2 | Pending |
-| HARD-02 | Phase 2 | Pending |
+| HARD-02 | Phase 2 | Complete |
 | HARD-03 | Phase 2 | Pending |
 | HARD-04 | Phase 2 | Pending |
 | HARD-05 | Phase 2 | Pending |
