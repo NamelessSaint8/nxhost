@@ -131,7 +131,11 @@ def cmd_devices(a):
 def cmd_tools(a):
     from porter import fetch
     from porter.upstream import BuildError
-    names = [{'ndk': 'Android NDK', 'dotnet': '.NET SDK', 'adb': 'adb'}[n.strip()] for n in a.only.split(',') if n.strip()] or None
+    known = {'ndk': 'Android NDK', 'dotnet': '.NET SDK', 'adb': 'adb'}; given = [n.strip() for n in a.only.split(',') if n.strip()]
+    if bad := [n for n in given if n not in known]:
+        msg = f'unknown tool {", ".join(bad)}: --only takes ndk, dotnet, adb'
+        _print_json({'error': msg}) if a.json else print(msg, file=sys.stderr); return 2
+    names = [known[n] for n in given] or None
     if a.download:
         def go():
             items = fetch.plan(names)
