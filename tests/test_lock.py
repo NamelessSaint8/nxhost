@@ -1,6 +1,6 @@
 # The build-folder lock (porter/lock.py, D-06, D-07, D-14): a second port or install of a held <tid>_build/ stops at once naming the holder, and a dead
 # holder never blocks the next one. Also the shared tools lock and the translator's reuse under it (CR-03). Holders are child processes; each test has its own NX2A_HOME; no game files, toolchains or device.
-import json, os, subprocess, sys, tempfile, time, unittest
+import errno, io, json, os, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -36,6 +36,18 @@ if os.name == 'nt':
 else:
     import fcntl; fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
 print('held', flush=True); time.sleep(60)'''
+
+
+class Spy(io.FileIO):   # CR-02: Windows refuses a read that overlaps another process's locked range; this makes POSIX refuse it too, so the bound is pinned off Windows
+    def __init__(self, *a, **kw): super().__init__(*a, **kw); self.reads = []
+
+    def _check(self, size):
+        from porter import lock
+        at = self.tell(); self.reads.append((at, size))
+        if size < 0 or at + size > lock.AT: raise PermissionError(errno.EACCES, f'read of {size} bytes at {at} crosses the byte locked at {lock.AT}')
+
+    def read(self, size=-1): self._check(size); return super().read(size)
+    def readinto(self, b): self._check(len(b)); return super().readinto(b)
 
 
 def porter(*args, home, env=None, **kw):
@@ -83,6 +95,17 @@ class Lock(unittest.TestCase):
         with self.assertRaises(BuildError) as c: lock.take(self.work, 'install')
         self.assertTrue(str(c.exception).startswith(f'already running: porter port, PID {p.pid}, started '), str(c.exception))
         self.assertIn(str(self.work), str(c.exception))
+
+    def test_holder_read_stays_below_lock(self):   # CR-02: the holder lookup never asks the OS for the byte the holder locked at AT
+        from porter import lock
+        from porter.upstream import BuildError
+        p = self.hold(self.work); made = []
+        def opener(path, mode, buffering=-1):   # the same layering open() builds
+            raw = Spy(path, mode); made.append(raw); return raw if buffering == 0 else io.BufferedRandom(raw)
+        with mock.patch.object(lock, 'open', opener, create=True), self.assertRaises(BuildError) as c: lock.take(self.work, 'install')
+        self.assertTrue(str(c.exception).startswith(f'already running: porter port, PID {p.pid}'), str(c.exception))
+        reads = [r for raw in made for r in raw.reads]
+        self.assertTrue(reads); self.assertTrue(all(at + n <= lock.AT for at, n in reads), reads)
 
     def test_wait_for_holder(self):   # the shared tools lock: a second port waits for the first instead of stopping
         from porter import lock
