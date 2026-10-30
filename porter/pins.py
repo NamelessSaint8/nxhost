@@ -23,3 +23,7 @@ DOTNET = {'version': '10.0.403', 'files': {
     'linux-x64': ('https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.403/dotnet-sdk-10.0.403-linux-x64.tar.gz', 0, 'sha512', 'b7b3d8461cf98b07d2552ce9199702fa3ad010ac2671a5f8cd5136f7534e50f6855ba7bbb02b11494563f1d04156276a31cda1103b900e5eecd0d9473dc7b9c5'),
     'linux-arm64': ('https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.403/dotnet-sdk-10.0.403-linux-arm64.tar.gz', 0, 'sha512', '0966aa2b70f4677b8319be9df447a78a0dcd6164836425b55a68fd714f4023feb87b4cac21b9a996b79472ad54487cd0adcd2a9dfd570e2b2a1d26423a2baa9b'),
 }}
+
+# masagrator/FPSLocker-Warehouse: the v4 head on 2026-10-29. --fps60 fetches each build's config at this commit (D-03); a build the commit has no config for
+# falls back to v4's head, flagged untested in the port log. Bump: set the new SHA after a port with --fps60 works on it (one line).
+FPSLOCKER = '575eef0824e3519e6567c3fdb27707136448923a'

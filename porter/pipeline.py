@@ -7,7 +7,7 @@ import os, re, shutil, sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from porter import config, datapack, fpslocker, install, paths, profiles, toolchain
+from porter import config, datapack, fpslocker, install, paths, pins, profiles, toolchain
 from porter.adb import Adb, AdbError
 from porter.paths import DM, NXNATIVE
 from porter.upstream import BuildError, PROG, android_profile, game, nacp, nsp, profile_guess, say
@@ -257,13 +257,17 @@ class Port:
         img, bid = fpslocker.nso_image(self.game / 'ExeFS/main')
         src = fpslocker.url(self.g.id, bid); d = self.aw / 'fpslock'; d.mkdir(exist_ok=True); cache = d / f'{bid[:16].upper()}.yaml'
         PROG.set(step='fetching the FPSLocker-Warehouse config')
-        try: text = fpslocker.fetch(self.g.id, bid)
+        try: got = fpslocker.fetch(self.g.id, bid)
         except OSError as e:
             if not cache.is_file(): say(f'[RED] 60 fps: {src} could not be fetched ({e}): the game keeps its own frame rate'); PROG.end('not fetched: the game keeps its own frame rate'); return
-            text = cache.read_text(encoding='utf-8'); say(f'[RED] 60 fps: {src} could not be fetched ({e}): using the copy fetched before')
-        if text is None:
+            raw = cache.read_text(encoding='utf-8'); m = re.match(r'# FPSLocker-Warehouse commit (\S+)\n', raw)   # a cache from before the pin has no commit line
+            got = (raw[m.end():], m[1]) if m else (raw, 'unknown'); say(f'[RED] 60 fps: {src} could not be fetched ({e}): using the copy fetched before')
+        if got is None:
             nsp.rmtree(cache); say(f'60 fps: FPSLocker-Warehouse has no config for main build {bid[:16].upper()}: the game keeps its own frame rate'); PROG.end('no config for this build'); return
-        cache.write_text(text, encoding='utf-8')
+        import hashlib
+        text, commit = got; nsp.write_whole(cache, f'# FPSLocker-Warehouse commit {commit}\n{text}')   # whole: an offline port never converts half a config
+        u = fpslocker.url(self.g.id, bid, commit if commit != 'unknown' else 'v4'); src = f'{u} (commit {commit[:12]}, sha256 {hashlib.sha256(text.encode()).hexdigest()})'
+        if commit != pins.FPSLOCKER: say(f'[RED] 60 fps: {u} is not the pinned commit\'s config (a newer build than porter/pins.py\'s FPSLocker-Warehouse commit): untested')
         try: tsv, cuts = fpslocker.convert(text, img, bid, src)
         except fpslocker.Refused as e: say(f'[RED] 60 fps: {src} cannot be applied ({e}): the game keeps its own frame rate'); PROG.end('config not applicable: the game keeps its own frame rate'); return
         (d / 'fpslock.tsv').write_text(tsv, encoding='utf-8', newline='\n')

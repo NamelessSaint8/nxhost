@@ -6,13 +6,15 @@
 #   block timing: dropped (it switches off FPSLocker's own frame delay, which the host does not have)
 # A config that uses anything else (asm_a64, DECLARATIONS, VARIABLE / HEAP / ALIAS addresses, refresh_rate) is refused whole: its entries work together, and half of them
 # can leave the game worse off than at 30 fps. Of the 1,462 configs on 2026-10-28, 1,160 convert.
+# Configs come from one warehouse commit pinned in porter/pins.py (FPSLOCKER); a build newer than it falls back to v4's head, which the port log marks untested.
 # The warehouse has no license: its configs are fetched for the player's own build at port time and never kept in the repository.
 import ast, math, re, struct, urllib.error, urllib.request
 from pathlib import Path
 
-from porter import tls
+from porter import pins, tls
 
-RAW = 'https://raw.githubusercontent.com/masagrator/FPSLocker-Warehouse/v4/SaltySD/plugins/FPSLocker/patches/{tid}/{bid}.yaml'
+RAW = 'https://raw.githubusercontent.com/masagrator/FPSLocker-Warehouse/{ref}/SaltySD/plugins/FPSLocker/patches/{tid}/{bid}.yaml'
+HEAD_API = 'https://api.github.com/repos/masagrator/FPSLocker-Warehouse/commits/v4'
 TARGETS = (30, 60)
 REFRESH = 60   # the display rate FPS_LOCK_TARGET compares with (the host presents at 60 Hz)
 TYPES = {'int8': 'b', 'int16': 'h', 'int32': 'i', 'int64': 'q', 'uint8': 'B', 'uint16': 'H', 'uint32': 'I', 'uint64': 'Q', 'float': 'f', 'double': 'd'}
@@ -22,16 +24,35 @@ OPS = ('<', '<=', '>', '>=', '==', '!=')
 class Refused(Exception): pass
 
 
-def url(title_id, build_id): return RAW.format(tid=title_id.upper(), bid=build_id[:16].upper())
+def url(title_id, build_id, ref=None): return RAW.format(ref=ref or pins.FPSLOCKER, tid=title_id.upper(), bid=build_id[:16].upper())
 
 
-def fetch(title_id, build_id, timeout=30):
-    """The config of this build as text, None when the warehouse has none (HTTP 404). Other errors (no network) raise OSError"""
-    try:
-        with urllib.request.urlopen(urllib.request.Request(url(title_id, build_id), headers={'User-Agent': 'nx2android'}), timeout=timeout, context=tls.context()) as r: return r.read().decode('utf-8-sig')
+def _get(u, timeout, **headers):
+    with urllib.request.urlopen(urllib.request.Request(u, headers={'User-Agent': 'nx2android', **headers}), timeout=timeout, context=tls.context()) as r: return r.read().decode('utf-8-sig')
+
+
+def head(timeout=30):
+    """v4's head commit from the GitHub API. Anything but 40 hex digits (a rate-limit page) raises OSError, as no network does"""
+    sha = _get(HEAD_API, timeout, Accept='application/vnd.github.sha').strip()
+    if not re.fullmatch(r'[0-9a-f]{40}', sha): raise OSError(f'{HEAD_API} answered {sha[:80]!r}, not a commit')
+    return sha
+
+
+def _at(title_id, build_id, ref, timeout):
+    try: return _get(url(title_id, build_id, ref), timeout)
     except urllib.error.HTTPError as e:
         if e.code == 404: return None
         raise
+
+
+def fetch(title_id, build_id, timeout=30):
+    """(config text, commit) of this build: at the pinned commit, else at v4's head; None when neither has one (HTTP 404). Other errors (no network) raise OSError"""
+    text = _at(title_id, build_id, pins.FPSLOCKER, timeout)
+    if text is not None: return text, pins.FPSLOCKER
+    h = head(timeout)
+    if h == pins.FPSLOCKER: return None
+    text = _at(title_id, build_id, h, timeout)
+    return None if text is None else (text, h)
 
 
 def nso_image(path):

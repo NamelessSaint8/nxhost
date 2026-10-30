@@ -296,6 +296,33 @@ class FpsLocker(unittest.TestCase):   # porter/fpslocker.py: FPSLocker-Warehouse
         tsv, _ = fpslocker.convert(self.UNITY, b'', self.BID, src)
         self.assertIn(src, tsv.splitlines()[0]); self.assertIn(src, fpslocker.patches_py(self.BID, [], src).splitlines()[0])
 
+    def fps_unlock(self, aw, got):   # pipeline.Port.fps_unlock with main's image and the fetch faked; returns the say lines
+        import hashlib
+        from types import SimpleNamespace
+        from unittest import mock
+        port = pipeline.Port.__new__(pipeline.Port); said = []
+        port.env, port.o, port.aw, port.game, port.package = {}, SimpleNamespace(fps60=True), aw, aw, 'com.example.game'
+        port.g = SimpleNamespace(id=self.TID, get=lambda k, d=None: d)
+        fetch = mock.Mock(side_effect=got) if isinstance(got, Exception) else mock.Mock(return_value=got)
+        with mock.patch.object(pipeline.fpslocker, 'nso_image', return_value=(b'', self.BID)), mock.patch.object(pipeline.fpslocker, 'fetch', fetch), \
+             mock.patch.object(pipeline, 'PROG'), mock.patch.object(pipeline, 'say', said.append): port.fps_unlock()
+        self.assertIn(f'sha256 {hashlib.sha256(self.UNITY.encode()).hexdigest()}', (aw / 'fpslock' / 'fpslock.tsv').read_text().splitlines()[0])
+        return said
+
+    def test_fps_unlock_records_commit(self):   # the cache keeps the commit; offline it is read back; a cache from before the pin reads as commit unknown
+        from porter import pins
+        with tempfile.TemporaryDirectory() as t:
+            aw = Path(t); cache = aw / 'fpslock' / f'{self.BID[:16].upper()}.yaml'
+            said = self.fps_unlock(aw, (self.UNITY, pins.FPSLOCKER))
+            self.assertEqual(cache.read_text(), f'# FPSLocker-Warehouse commit {pins.FPSLOCKER}\n{self.UNITY}')
+            self.assertIn(f'commit {pins.FPSLOCKER[:12]}', said[-1]); self.assertFalse([l for l in said if 'untested' in l])
+            said = self.fps_unlock(aw, OSError('offline'))
+            self.assertIn(f'commit {pins.FPSLOCKER[:12]}', said[-1]); self.assertIn('copy fetched before', said[0])
+            cache.write_text(self.UNITY); said = self.fps_unlock(aw, OSError('offline'))
+            self.assertIn('commit unknown', said[-1]); self.assertTrue([l for l in said if l.startswith('[RED]') and 'untested' in l])
+            said = self.fps_unlock(aw, (self.UNITY, self.HEAD))
+            self.assertTrue([l for l in said if l.startswith('[RED]') and 'untested' in l and f'/{self.HEAD}/' in l])
+
 
 if __name__ == '__main__':
     unittest.main()
