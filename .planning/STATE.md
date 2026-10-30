@@ -107,7 +107,7 @@ None yet.
 
 ### Blockers/Concerns
 
-- [Phase 1]: Code review of the gap plans left WR-01..03 open (01-REVIEW-DISPOSITION.md): the CA-file fallback in porter/tls.py also runs on Windows, where `/etc/ssl/...` resolves against the current drive; the urlopen scan test accepts any `context=`; the hook overrides do not fail when PyInstaller moves past 6.22.3. Fix before the first tag (`/gsd-code-review 01 --fix`)
+- [Phase 1]: packaging/nx2android.spec refuses any PyInstaller but 6.22.3 (WR-03 fix): after recompiling requirements-build.txt to a newer 6.22.x, copy the stock QtGui/QtNetwork hooks into packaging/hooks/ again, keep the filter lines, then bump the version in the spec
 - [Phase 1]: A root CA that exists only in the macOS keychain (TLS-inspecting proxy) is not trusted; the player can set SSL_CERT_FILE. Read the keychain (truststore) when a tester needs it
 - [Phase 1→2]: Once cancel kills the whole tree (Phase 1), a cancelled run can leave a stage output the cache trusts until atomic stamps land (HARD-05, Phase 2). Clear the build folder after a cancel while testing in between
 - [Phase 2]: Research: whether older platform-tools URLs stay downloadable after pinning
