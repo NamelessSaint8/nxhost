@@ -182,19 +182,22 @@ class Port:
         none (scripts/build_ipa_from_nsp.py survey / write_profile, dm/games/profile_guess.py), or a copy of its iOS profile; plus an android.tsv with status experimental.
         A game brought up this way gets its profile into dm/games by hand (docs/ARCHITECTURE.md "Adding a game")"""
         pdir = self.work / 'profile'; d = pdir / tid
+        # built in <id>.partial and swapped in whole: a cut-off copy with game.tsv already written used to be reused with tables missing (RESEARCH Pitfall 5)
+        tmp = d.with_name(d.name + '.partial')
         if g is None:
             if (d / 'game.tsv').is_file(): say(f'no game profile for {tid}: reusing the provisional profile from the last run ({d}; delete it to survey again)')
             else:
                 facts = nsp.survey(self.o.folder, self.app, self.fam, self.o.keys, NXNATIVE, PY, self.env)
                 facts['survey'] = f'<NSP folder>/{tid}_survey/survey.md'
-                nsp.write_profile(d, self.app, facts)
+                nsp.rmtree(tmp); nsp.write_profile(tmp, self.app, facts); nsp.swap_in(tmp, d)
             self.provisional = True
             say('[RED] provisional game profile: values guessed from the survey, the game may not start')
         elif not (d / 'game.tsv').is_file() or (g.dir / 'game.tsv').stat().st_mtime > (d / 'game.tsv').stat().st_mtime:   # the iOS profile as it is now
-            nsp.rmtree(d); shutil.copytree(g.dir, d, ignore=shutil.ignore_patterns('patches.py', '__pycache__'))   # patches.py stays in dm/games, where patch_nso.py finds it
+            nsp.rmtree(tmp); shutil.copytree(g.dir, tmp, ignore=shutil.ignore_patterns('patches.py', '__pycache__'))   # patches.py stays in dm/games, where patch_nso.py finds it
+            nsp.swap_in(tmp, d)
         if not (d / 'android.tsv').is_file():
-            (d / 'android.tsv').write_text(f'# Written by porter for an experimental port: the game has not been brought up on Android\nstatus\texperimental\n'
-                                          f'package\torg.nx2a.t{tid.lower()}\norientation\tlandscape\n', encoding='utf-8')
+            nsp.write_whole(d / 'android.tsv', f'# Written by porter for an experimental port: the game has not been brought up on Android\nstatus\texperimental\n'
+                                              f'package\torg.nx2a.t{tid.lower()}\norientation\tlandscape\n')
         self.use_profile_dir(pdir, first=True)
         g = game.load(str(d))
         return g, android_profile.AndroidProfile(g)
@@ -305,7 +308,7 @@ class Port:
         m = re.search(r'^(\d+) of (\d+) shaders', (self.logs / 'android_shaders.log').read_text(errors='replace'), re.M)
         if not m or m.group(1) == '0': raise BuildError(f'no shader translated (see {self.logs / "android_shaders.log"})')
         note = f'{int(m.group(1)):,} of {int(m.group(2)):,} shaders, {tmp.stat().st_size / 2**20:,.0f} MB'
-        nsp.swap_in(tmp, self.dmsv); kf.write_text(f'{key}\n{note}\n')
+        nsp.swap_in(tmp, self.dmsv); nsp.write_whole(kf, f'{key}\n{note}\n')
         PROG.end(note)
         for d in (self.work / 'tmp').glob('shvk_*'): nsp.rmtree(d)   # the translator's work folders
 
@@ -333,7 +336,7 @@ class Port:
         tmp = out.with_name('dmsh_xlate.partial'); nsp.rmtree(tmp); nsp.rmtree(kf)
         nsp.run([self.tools['dotnet'], 'build', src, '-c', 'Release', '-o', tmp, '-nologo', '-v', 'quiet', '-nodeReuse:false'], self.logs / 'android_translator_build.log', env=self.env)
         if not (tmp / 'dmsh_xlate.dll').is_file(): raise BuildError(f'the translator built without dmsh_xlate.dll (see {self.logs / "android_translator_build.log"})')
-        nsp.swap_in(tmp, out); kf.write_text(f'{key}\n')
+        nsp.swap_in(tmp, out); nsp.write_whole(kf, f'{key}\n')
         return dll, key
 
     # ---- host: the Android host built for this profile with the player's NDK ----

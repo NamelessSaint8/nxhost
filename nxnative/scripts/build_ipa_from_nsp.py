@@ -812,7 +812,7 @@ def collect_nros(py, repo, romfs, dst, env, logs):
         tmp = dst.with_name(dst.name + '.partial'); rmtree(tmp)
         PROG.set(step=f'finding the NROs {len(nrrs)} NRR files register')
         run([py, repo / 'dm/tools/nro_collect.py', romfs, tmp], logs / 'nro_collect.log', env=env)
-        rmtree(kf); swap_in(tmp, dst); kf.write_text(f'{key}\n')
+        rmtree(kf); swap_in(tmp, dst); write_whole(kf, f'{key}\n')
     # rows named 'refused' are online SDKs the host never loads (Epic Online Services): listed for the host's log, not rewritten
     return {l.split('\t')[0]: dst / (l.split('\t')[0] + '.nro') for l in (dst / 'nro.tsv').read_text().splitlines() if l and not l.startswith('#') and not l.startswith('refused\t')}
 
@@ -856,7 +856,7 @@ def rewrite(py, repo, exe_dir, out, env, logs, g):
         for p in procs.values():
             if p.poll() is None: p.terminate(); p.wait()
         for f in logf.values(): f.close()
-    rmtree(kf); swap_in(tmp, out); kf.write_text(f'{key}\n')
+    rmtree(kf); swap_in(tmp, out); write_whole(kf, f'{key}\n')
     PROG.end(', '.join(mods) + (f' and {len(nros)} NROs' if nros else ''))
 
 
@@ -905,7 +905,7 @@ def build_mac_host(repo, out, env, logs, g):
     if out.is_file() and reused(kf, key) is not None: return out
     rmtree(kf); out.parent.mkdir(parents=True, exist_ok=True)
     run(cmd, logs / 'mac_host_build.log', env=env, cwd=host)
-    kf.write_text(f'{key}\n')
+    write_whole(kf, f'{key}\n')
     return out
 
 
@@ -1236,7 +1236,7 @@ def split_shaders(py, repo, roms, mains, pkg, env, logs, g, provisional=False, o
         if diff: raise BuildError(f'the split shader tables differ from game profile {g.id}\'s: {", ".join(diff)} (game files not the versions the profile registers?)')
     rmtree(kf); swap_in(tmp / 'pkg', pkg); rmtree(tmp)
     note = f'{int(m.group(1)):,} shaders' if m else ''
-    if key: kf.write_text(f'{key}\n{note}\n')
+    if key: write_whole(kf, f'{key}\n{note}\n')
     PROG.end(note)
     return key and package_key(pkg)
 
@@ -1334,7 +1334,7 @@ def build_shaders(py, repo, sh, xlate, env, logs, g, pkg_key=None, mac=False):
         PROG.end(f'{ok:,} of {total:,} shaders ready' + (f' ({int(c.group(1)):,} from the cache)' if c else '') + failed)
     else: PROG.end()
     if key:
-        for k in (kmac,) if mac else (kf, kmac): k.write_text(f'{key}\n{note}\n')
+        for k in (kmac,) if mac else (kf, kmac): write_whole(k, f'{key}\n{note}\n')
     return out
 
 
@@ -1356,7 +1356,7 @@ def layer_shaders(py, repo, api, name, roots, sh, key, logs, env, mac):
     m = re.search(r'macosx: (\d+)' if mac else r'iphoneos: (\d+)', log.read_text(errors='replace'))
     note = f'{int(m.group(1)):,} shaders for the Mac' + ('' if mac else ' and iOS') if m else ''
     if key:
-        for k in (kmac,) if mac else (kf, kmac): k.write_text(f'{key}\n{note}\n')
+        for k in (kmac,) if mac else (kf, kmac): write_whole(k, f'{key}\n{note}\n')
     PROG.end(note)
     return out
 
@@ -1453,7 +1453,7 @@ def mac_run(py, repo, work, game, patched, msl, aoc, gfx, lang, env, logs, g, en
     if not (ttf.is_file() and reused(kf, key) is not None):
         rmtree(kf); font.mkdir(parents=True, exist_ok=True)
         run([py, repo / 'dm/tools/make_ext_font.py', ttf], logs / 'make_ext_font.log', env=env)
-        kf.write_text(f'{key}\n')
+        write_whole(kf, f'{key}\n')
     rd = work / 'run'
     for d in ('save', 'temp'): (rd / d).mkdir(parents=True, exist_ok=True)
     renv = {'DM_ROOT': work, 'DM_ROMFS': game / 'RomFS', 'DM_SAVE': rd / 'save', 'DM_TEMP': rd / 'temp', 'DM_MSL_DIR': msl, 'DM_FONT_DIR': font}
