@@ -74,5 +74,28 @@ class CutOff(unittest.TestCase):
         with mock.patch.object(nsp.os, 'replace', side_effect=OSError('cut off')), self.assertRaises(OSError): nsp.write_whole(p, 'new\n')
         self.assertEqual(p.read_text(encoding='utf-8'), 'abc\n2 DLC\n')
 
+    def test_cut_off_profile_copy_recopied(self):   # RESEARCH Pitfall 5: a copy cut off after game.tsv used to be reused with its tables missing
+        import shutil
+        from porter import pipeline
+        from porter.upstream import game
+        odyssey = '0100000000010000'; src = game.load(odyssey).dir
+        port = pipeline.Port(pipeline.Options(folder=self.t, experimental=True)); port.env = {}; port.work = self.work; port.o.keys = None
+        d = self.work / 'profile' / odyssey
+        def cut(s, dst, **kw):   # the copy dies once game.tsv is in
+            Path(dst).mkdir(parents=True); shutil.copy2(Path(s) / 'game.tsv', Path(dst) / 'game.tsv'); raise KeyboardInterrupt
+        with mock.patch.object(pipeline.shutil, 'copytree', cut), self.assertRaises(KeyboardInterrupt): port.experimental_profile(game.load(odyssey), odyssey)
+        self.assertFalse(d.exists(), sorted(p.name for p in d.iterdir()) if d.is_dir() else '')
+        port.experimental_profile(game.load(odyssey), odyssey)
+        files = lambda r: sorted(str(p.relative_to(r)) for p in r.rglob('*') if p.is_file() and '__pycache__' not in p.parts)
+        self.assertEqual(files(d), sorted([f for f in files(src) if f != 'patches.py'] + ['android.tsv']))
+
+    def test_all_key_writes_whole(self):   # every reuse key, upstream's and porter's, goes through write_whole
+        code = lambda p: '\n'.join(ln for ln in (REPO / p).read_text(encoding='utf-8').splitlines() if not ln.lstrip().startswith('#'))
+        script, pipe = code('nxnative/scripts/build_ipa_from_nsp.py'), code('porter/pipeline.py')
+        import re
+        self.assertEqual(re.findall(r'.*\b(?:kf|k)\.write_text.*', script) + re.findall(r'.*\b(?:kf|k)\.write_text.*', pipe), [])
+        self.assertGreaterEqual(script.count('write_whole(') - 1, 8)   # less its def
+        self.assertGreaterEqual(pipe.count('nsp.write_whole('), 2)
+
 
 if __name__ == '__main__': unittest.main()
