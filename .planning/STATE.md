@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 02
 current_phase_name: Porter Hardening
 status: executing
-stopped_at: Completed 02-08-PLAN.md
-last_updated: "2026-10-30T18:29:25.985Z"
+stopped_at: Completed 02-09-PLAN.md
+last_updated: "2026-10-30T18:34:53.131Z"
 last_activity: 2026-10-30
 last_activity_desc: Phase 02 execution started
-state_head: 4928b5d287ef94c42128393964bd01736cbbe2ff
+state_head: 2b54ea406ad8a62504860262ce8f6262d5cf4cc3
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 20
-  completed_plans: 18
+  completed_plans: 19
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-10-30)
 ## Current Position
 
 Phase: 02 (Porter Hardening) — EXECUTING
-Plan: 9 of 10
+Plan: 10 of 10
 Status: Ready to execute
 Last activity: 2026-10-30 — Phase 02 execution started
 
@@ -74,6 +74,7 @@ Progress: [██░░░░░░░░] 17%
 | Phase 02 P06 | 5 min | 3 tasks | 6 files |
 | Phase 02 P07 | 5 min | 3 tasks | 4 files |
 | Phase 02 P08 | 3 min | 2 tasks | 5 files |
+| Phase 02 P09 | 4 min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -127,6 +128,8 @@ Recent decisions affecting current work:
 - [Phase 02]: 02-07: per-OS detection tests swap the module's os/sys for stand-ins instead of patching os.name (pathlib would build WindowsPath on POSIX)
 - [Phase 02]: HARD-03/D-03: FPSLocker configs come from pins.FPSLOCKER; a 404 there falls back to v4 head, logged [RED] untested
 - [Phase 02]: A pre-pin FPSLocker cache is used offline as commit unknown and flagged untested
+- [Phase 02]: inspect reads language flags only from an extraction a port made (packed version first); none gives all 16 nacp.LANGUAGES
+- [Phase 02]: GUI language box: 'English (default)' plus porter inspect's languages; the chosen code survives a re-inspect
 
 ### Pending Todos
 
@@ -151,6 +154,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-30T18:29:25.890Z
-Stopped at: Completed 02-08-PLAN.md
+Last session: 2026-10-30T18:34:53.046Z
+Stopped at: Completed 02-09-PLAN.md
 Resume file: None
