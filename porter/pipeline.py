@@ -88,11 +88,13 @@ class Port:
         try: self.tools = toolchain.require(self.cfg, str(o.keys), adb=o.install)
         except toolchain.ToolError as e: raise BuildError(str(e)) from e
         o.out = Path(o.out or self.cfg.get('out') or o.folder).expanduser().resolve()
-        # the chosen dotnet first on PATH, in this process too: Windows finds a program by the parent's PATH, not the one passed to the child (upstream runs `dotnet` by name)
-        os.environ['PATH'] = os.pathsep.join([str(self.tools['dotnet'].parent), os.environ.get('PATH', '')])
-        os.environ['DOTNET_ROOT'] = str(self.tools['dotnet'].parent)   # where nx_extract.exe's apphost looks for the runtime (else the system's, which may lack .NET 10)
+        # every child gets this env and the process environment is never written (HARD-06). Windows resolves a bare program name through the parent's PATH, not the child's,
+        # so dotnet always runs by absolute path: porter's own calls use self.tools['dotnet'], upstream's build_nx_extract looks it up in this env's PATH.
+        # DOTNET_ROOT: where nx_extract's apphost looks for the runtime (else the system's, which may lack .NET 10).
         # PYTHONUTF8: the engine's tools write their tables with open() and no encoding, which is the ANSI code page on Windows (shader_split.py's "→" failed)
-        self.env = dict(os.environ, J=str(o.jobs), PYTHONIOENCODING='utf-8', PYTHONUTF8='1', DOTNET_CLI_TELEMETRY_OPTOUT='1')
+        dn = str(self.tools['dotnet'].parent)
+        self.env = dict(os.environ, PATH=os.pathsep.join([dn, os.environ.get('PATH', '')]), DOTNET_ROOT=dn,
+                        J=str(o.jobs), PYTHONIOENCODING='utf-8', PYTHONUTF8='1', DOTNET_CLI_TELEMETRY_OPTOUT='1')
 
         self.inputs()
         PROG.plan(1 + len(self.versions) + bool(self.fam['dlc']) + bool(o.fps60) + 6 + bool(o.install))   # nx_extract, the versions, the DLC, 60 fps, rewrite / split / Vulkan shaders / host / APK / data, install
@@ -161,9 +163,9 @@ class Port:
         if free < need: raise BuildError(f'not enough disk space on {self.o.folder.anchor}: the port needs about {need / 2**30:.1f} GB more, {free / 2**30:.1f} GB is free')
 
     def use_profile_dir(self, pdir, first):   # every tool finds the game's profile in pdir (game.py DM_GAMES_DIR; first: before dm/games)
-        dirs = [str(pdir)] + [d for d in os.environ.get('DM_GAMES_DIR', '').split(os.pathsep) if d and d != str(pdir)]
-        self.env['DM_GAMES_DIR'] = os.environ['DM_GAMES_DIR'] = os.pathsep.join(dirs)
-        if first: self.env['DM_GAMES_FIRST'] = os.environ['DM_GAMES_FIRST'] = '1'
+        dirs = [str(pdir)] + [d for d in self.env.get('DM_GAMES_DIR', '').split(os.pathsep) if d and d != str(pdir)]
+        self.env['DM_GAMES_DIR'] = os.pathsep.join(dirs)   # self.env only: in-process lookups load the profile by its folder
+        if first: self.env['DM_GAMES_FIRST'] = '1'
 
     def experimental_profile(self, g, tid):
         """A profile for a game not ported to Android, in <build folder>/profile/<id>/ (outside the repository): upstream's survey and provisional profile when the game has
@@ -184,7 +186,7 @@ class Port:
             (d / 'android.tsv').write_text(f'# Written by porter for an experimental port: the game has not been brought up on Android\nstatus\texperimental\n'
                                           f'package\torg.nx2a.t{tid.lower()}\norientation\tlandscape\n', encoding='utf-8')
         self.use_profile_dir(pdir, first=True)
-        g = game.load(tid)
+        g = game.load(str(d))
         return g, android_profile.AndroidProfile(g)
 
     # ---- extract: nx_extract, each version the shaders come from, the DLC ----
@@ -197,7 +199,7 @@ class Port:
         PROG.stage('build nx_extract')
         nx = nsp.build_nx_extract(NXNATIVE, self.work, self.logs, self.env)
         PROG.end()
-        self.dirs = {ver: nsp.extract(nx, o.keys, ex, ver, *picks[ver], None, self.logs, g) for ver in self.versions}
+        self.dirs = {ver: nsp.extract(nx, o.keys, ex, ver, *picks[ver], None, self.logs, g, env=self.env) for ver in self.versions}
         bad = [] if self.derived else [f'{v}: {x}' for v in self.versions for x in nsp.build_mismatch(self.dirs[v], v, g)]
         if bad and self.provisional: raise BuildError(f'not the builds the provisional profile registers: {"; ".join(bad)}')
         if bad:
@@ -209,9 +211,9 @@ class Port:
             pdir = self.work / 'profile-derived'   # not profile/: an experimental port's copy there is the profile it derives from
             disp = nsp.derive_profile(g, pdir / g.id, self.pkg_ver, self.game, g.words('modules'))
             self.use_profile_dir(pdir, first=True)
-            self.g = game.load(g.id); self.ap = android_profile.AndroidProfile(self.g)
+            self.g = game.load(str(pdir / g.id)); self.ap = android_profile.AndroidProfile(self.g)
             say(f'derived game profile for {self.pkg_ver} ({disp}): {self.g.dir}')
-        self.aoc = nsp.extract_aoc(nx, o.keys, NXNATIVE, self.work, self.app, self.fam, self.logs)
+        self.aoc = nsp.extract_aoc(nx, o.keys, NXNATIVE, self.work, self.app, self.fam, self.logs, env=self.env)
         self.base = next((self.dirs[v] for v in self.versions if picks[v][1] is None), self.dirs[self.versions[0]])
         self.app_name = o.app_name or nacp.name(self.base / 'control.nacp') or self.g.get('name', self.g.id)
         self.display = nacp.version(self.game / 'control.nacp') or nacp.version(self.base / 'control.nacp') or '1.0'

@@ -354,7 +354,8 @@ def build_nx_extract(repo, work, logs, env):
     exe = 'nx_extract.exe' if os.name == 'nt' else 'nx_extract'   # Windows (the Android port builds on a PC) gets an .exe apphost
     nx = work / 'tools/nx_extract' / exe
     with tempfile.TemporaryDirectory(prefix='nx_extract_') as t:
-        run(['dotnet', 'build', repo / 'dm/tools/nx_extract', '-c', 'Release', '-o', t, '-v', 'quiet', '-nologo'], logs / 'nx_extract_build.log', env=env)
+        dotnet = shutil.which('dotnet', path=(env or os.environ).get('PATH')) or 'dotnet'   # Windows finds a bare name by the parent's PATH, not env's (as main() does)
+        run([dotnet, 'build', repo / 'dm/tools/nx_extract', '-c', 'Release', '-o', t, '-v', 'quiet', '-nologo'], logs / 'nx_extract_build.log', env=env)
         if not (Path(t) / exe).exists(): raise BuildError(f'nx_extract built without an executable (see {logs / "nx_extract_build.log"})')
         rmtree(nx.parent); shutil.copytree(t, nx.parent)
     return nx
@@ -472,7 +473,7 @@ def survey(nsp_dir, app, fam, keys, repo, py, env):
         except OSError: return None
     PROG.stage('survey: RomFS manifest', poll=listed)
     say(f'extracting the code modules and a RomFS manifest (no game files written) → {ex}')
-    run([nx, keys, fam['base'], upd or '-', tmp, '--manifest'] + (['--allow-damaged'] if ALLOW_DAMAGED else []), logs / 'extract.log')
+    run([nx, keys, fam['base'], upd or '-', tmp, '--manifest'] + (['--allow-damaged'] if ALLOW_DAMAGED else []), logs / 'extract.log', env=env)
     swap_in(tmp, ex)
     PROG.stage('survey: code modules', step='reading')
     xlog = (logs / 'extract.log').read_text(errors='replace')
@@ -730,7 +731,7 @@ def extracted(log):   # (files, bytes) from the summary lines nx_extract wrote t
     return (sum(int(n) for n, _ in rows), int(sum(float(mb) for _, mb in rows) * 2**20)) if rows else None
 
 
-def extract(nx, keys, ex, name, base, upd, cmp_dir, logs, g):   # the build IDs are checked by the caller (build_mismatch)
+def extract(nx, keys, ex, name, base, upd, cmp_dir, logs, g, env=None):   # the build IDs are checked by the caller (build_mismatch)
     dst, marker, log = ex / name, g.get('romfs_marker'), logs / f'extract_{name}.log'
     if (dst / 'ExeFS' / 'main').exists() and (dst / 'RomFS' / marker).exists():
         PROG.stage(f'extract {name}')
@@ -742,14 +743,14 @@ def extract(nx, keys, ex, name, base, upd, cmp_dir, logs, g):   # the build IDs 
     def poll():
         n, b = tree_size(tmp); return {'done': b, 'note': f'{n:,} files'}
     PROG.stage(f'extract {name}', poll=poll, unit='B', total=last[1] if last else base.stat().st_size + (upd.stat().st_size if upd else 0), est=not last)
-    run([nx, keys, base, upd or '-', tmp] + ([cmp_dir] if cmp_dir else []) + (['--allow-damaged'] if ALLOW_DAMAGED else []), log)
+    run([nx, keys, base, upd or '-', tmp] + ([cmp_dir] if cmp_dir else []) + (['--allow-damaged'] if ALLOW_DAMAGED else []), log, env=env)
     swap_in(tmp, dst)
     n, b = extracted(log) or (0, 0)
     PROG.end(f'{n:,} files, {amount(b, "B")}')
     return dst
 
 
-def extract_aoc(nx, keys, repo, work, app, fam, logs):
+def extract_aoc(nx, keys, repo, work, app, fam, logs, env=None):
     """DLC NSPs in the folder → <id>_build/aoc/<index>/ (the RomFS of each one's data NCA; index = title ID − base − 0x1000). The host reports these indices as owned and mounts them (DM_AOC_DIR).
     Returns None without DLC. Reused when the DLC NSPs (names, sizes and times) and nx_extract's sources are as at the last extraction (Monster Hunter Rise: 250 DLC, 30 s)"""
     if not fam['dlc']: return None
@@ -768,7 +769,7 @@ def extract_aoc(nx, keys, repo, work, app, fam, logs):
         idx = tid - app - 0x1000
         PROG.set(step='extracting', done=i, total=len(best), unit='DLC')
         say(f'DLC index {idx}: {p.name}')
-        run([nx, keys, '--aoc', p, tmp / str(idx)], logs / f'aoc_{idx}.log')
+        run([nx, keys, '--aoc', p, tmp / str(idx)], logs / f'aoc_{idx}.log', env=env)
     swap_in(tmp, dst)
     kf.write_text(f'{key}\n{len(best)} DLC\n')
     PROG.end(f'{len(best)} DLC')
