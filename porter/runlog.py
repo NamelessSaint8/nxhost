@@ -1,8 +1,8 @@
 # The run's own log (D-01, D-02): porter, not the GUI, writes each long command (port, install, tools --download) to <user dir>/logs/<time>-<command>.log,
 # as readable text: the lines the GUI's log pane shows (stage start and end with times, say lines, [RED] errors) and the traceback of a crash.
 # The protocol gets {"ev":"log","path"} first, {"ev":"error","msg","type","log"} when the run fails and "log" on the result event (docs/ARCHITECTURE.md).
-# A one-shot --json command that crashes answers {"error": "<Type>: <message>"} on stdout instead of a bare traceback. D-08: a port's build folder holds
-# a marker while it runs, so the next port of a game that was cut off (a stop, a crash of the machine, a SIGKILL) redoes every cached stage.
+# A one-shot --json command that crashes answers {"error": "<Type>: <message>"} on stdout instead of a bare traceback. A port's build folder holds a marker
+# while it runs that names the stage it is in, so the next port of a game that was cut off says where; the reuse keys, written last and whole, decide what runs again (D-09).
 # Every command but doctor refuses a Python without the CVE-2025-4517 tarfile fix (toolchain.python_ok, D-13), with one message in the CLI, the JSON and the log.
 import json, os, platform, re, sys, threading, time, traceback
 
@@ -41,20 +41,23 @@ def cut_off():   # a stop: the stage the run was in, then the log is closed (pro
 
 
 def build_folder(work, logs):
-    """The port's build folder is known (pipeline.inputs): name it and its per-tool logs in the run log, and mark the run (D-08).
-    A marker already there is a port that never ended: every stage reuse key goes, except under extract/, whose RomFS can hold the game's own *.key
-    files (an extraction is swapped in whole, so it is never half done)"""
+    """The port's build folder is known (pipeline.inputs): name it and its per-tool logs in the run log, and mark the run.
+    A marker already there is a port that never ended: say the stage it was in. Its keys stay: a stage removes its key first and writes it last and whole,
+    after its outputs are swapped in, so only the stages it had not finished run again (D-09)"""
     S.update(work=work, tools=logs)
     _w(f'title ID {work.name.removesuffix("_build")}, build folder {work}')
     m = work / MARKER
     if m.exists():
         from porter.upstream import say
-        say('[RED] the last port of this game was cut off: every stage runs again')
-        for root, dirs, files in os.walk(work):
-            if root == str(work) and 'extract' in dirs: dirs.remove('extract')
-            for n in files:
-                if n.endswith('.key'): os.unlink(os.path.join(root, n))
-    m.write_text(f'{os.getpid()} {time.strftime("%Y-%m-%d %H:%M:%S")}\n', encoding='utf-8')
+        try: stage = m.read_text(encoding='utf-8', errors='replace').partition('\t')[2].strip()   # Phase 1 markers have no stage
+        except OSError: stage = ''
+        rest = ': the stages it had not finished run again'
+        say(f'[RED] the last port of this game was cut off in {stage}{rest}' if stage else f'[RED] the last port of this game was cut off{rest}')
+    _mark('')
+
+
+def _mark(stage):   # <pid> <time>, a tab, the stage the run is in; written in place (a torn one reads as an unknown stage)
+    (S['work'] / MARKER).write_text(f'{os.getpid()} {time.strftime("%Y-%m-%d %H:%M:%S")}\t{stage}\n', encoding='utf-8')
 
 
 def _unmark():   # a run that ended, well or with a reported error; a stop keeps the marker
@@ -94,6 +97,9 @@ def _wrap(prog, nsp):
     def stage(name, poll=None, step='', **kw):
         orig['stage'](name, poll, step, **kw)
         S['stage'] = name; _w(f'[{nsp.clock()}] [{prog.k}/{prog.n}] {name}' + (f' · {step}' if step else ''))
+        if S['work']:
+            try: _mark(name)
+            except OSError as e: _w(f'[RED] cannot write {S["work"] / MARKER}: {e}')
 
     def end(summary='', ok=True):
         with prog.lock:
