@@ -16,6 +16,10 @@ datas, binaries = [], []
 for pkg in ('capstone', 'lz4', 'PIL', 'yaml') + (('backports.zstd',) if sys.version_info < (3, 14) else ()):
     d, b, h = collect_all(pkg); datas += d; binaries += b; hidden += h
 
+import PyInstaller   # packaging/hooks/ replace the stock QtGui and QtNetwork hooks whole, so a newer PyInstaller's hook changes would be lost silently
+if PyInstaller.__version__ != '6.22.3': sys.exit(f'[RED] packaging/hooks/ copy PyInstaller 6.22.3 hooks, this is {PyInstaller.__version__}: '
+                                                 'copy its stock hook-PySide6.QtGui.py and hook-PySide6.QtNetwork.py again, keep the filter lines, then bump this')
+
 a = Analysis([str(ROOT / 'packaging/nx2android.py')], pathex=[str(ROOT)], binaries=binaries, datas=datas, hiddenimports=hidden,
              excludes=sorted(NOT_STDLIB - {'test'}), hookspath=[str(ROOT / 'packaging/hooks')], noarchive=False)
 # A bundled GIO loads the host's GIO modules, built for a newer GLib, and they fail to bind (UAT G-01-7): refuse the stack whatever plugin brings it back
