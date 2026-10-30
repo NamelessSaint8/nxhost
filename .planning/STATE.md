@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 02
 current_phase_name: Porter Hardening
 status: executing
-stopped_at: Completed 02-03-PLAN.md
-last_updated: "2026-10-30T17:50:03.119Z"
+stopped_at: Completed 02-04-PLAN.md
+last_updated: "2026-10-30T18:01:52.105Z"
 last_activity: 2026-10-30
 last_activity_desc: Phase 02 execution started
-state_head: 9264b9111ea37fe36d79193ae7838ea9d6d2ea7a
+state_head: 2016dd2bbd3d9260e3260fb5e211ce495707b4ac
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 20
-  completed_plans: 13
+  completed_plans: 14
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-10-30)
 ## Current Position
 
 Phase: 02 (Porter Hardening) — EXECUTING
-Plan: 4 of 10
+Plan: 5 of 10
 Status: Ready to execute
 Last activity: 2026-10-30 — Phase 02 execution started
 
@@ -69,6 +69,7 @@ Progress: [██░░░░░░░░] 17%
 | Phase 02 P01 | 10 min | 2 tasks | 8 files |
 | Phase 02 P02 | 4 min | 3 tasks | 8 files |
 | Phase 02 P03 | 7 min | 3 tasks | 8 files |
+| Phase 02 P04 | 8 min | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -110,6 +111,9 @@ Recent decisions affecting current work:
 - [Phase 02]: Existing group/other-readable signing key tightened to 0600 on POSIX on next use
 - [Phase 02]: arch_rules join_literals joins a literal and the run after it, pairing left to right as rule 1 blanking does
 - [Phase 02]: Ryujinx base is Ryubing Canary-1.3.351 (475615f) plus nxnative-local.patch (paths relative to ryujinx/, apply with --directory); the unmarked hunks are the fixed-input geometry path
+- [Phase 02]: Toolchain downloads pinned in porter/pins.py (NDK r27c, platform-tools 37.0.1, .NET SDK 10.0.403); vendor-newest fallback only on 404/410, marked untested; NDK never falls back
+- [Phase 02]: Archive member-name check applies to tar too (filter='data' alone strips a leading / and extracts)
+- [Phase 02]: runlog.run refuses every command but doctor on a Python without the CVE-2025-4517 fix (floors or os.path.ALLOW_MISSING), error type PythonError
 
 ### Pending Todos
 
@@ -135,6 +139,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-30T17:50:03.045Z
-Stopped at: Completed 02-03-PLAN.md
+Last session: 2026-10-30T18:01:52.025Z
+Stopped at: Completed 02-04-PLAN.md
 Resume file: None
