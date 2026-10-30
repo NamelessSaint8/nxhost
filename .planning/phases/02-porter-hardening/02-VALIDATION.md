@@ -71,6 +71,11 @@ Task IDs are `<plan>-<task>`. Every test file marked "created by the task" is wr
 | 02-10-01 | 02-10 | 5 | PKG-07 | T-02-28, T-02-SC | NuGet content hash (`obj/project.assets.json` `sha512`, D-05 as amended) of every restored package checked against pins before the build; a re-signed package still passes; bad package removed | unit | `.venv/bin/python -m unittest tests.test_nuget -v` | created by the task | ⬜ pending |
 | 02-10-02 | 02-10 | 5 | PKG-07, HARD-04 | T-02-29 | Shared tool builds wait on one lock; translator and survey builds checked | integration | `.venv/bin/python -m unittest tests.test_lock tests.test_nuget -v` | ✅ extend | ⬜ pending |
 | 02-10-03 | 02-10 | 5 | (SC 5) | — | CONCERNS.md closure table, one row per concern | static | `grep -c "## Closure (Phase 2)" .planning/codebase/CONCERNS.md` | n/a | ⬜ pending |
+| 02-11-01 | 02-11 (gap) | 1 | HARD-01, TEST-01 | T-02-31 | A link that runs through a later link is refused in either order (CR-01); nothing outside, no `.unpack` left; NDK links kept | unit | `.venv/bin/python -m unittest tests.test_fetch -v` | ✅ extend | ⬜ pending |
+| 02-11-02 | 02-11 (gap) | 1 | (SC 5) | — | The CONCERNS.md zip-symlink row names its test | static | `grep -c "test_link_through_later_link_refused" .planning/codebase/CONCERNS.md` | n/a | ⬜ pending |
+| 02-12-01 | 02-12 (gap) | 1 | HARD-04 | T-02-33, T-02-35 | A translator for a new key builds in its own `dmsh_xlate-<key[:12]>` folder; the old one stays (CR-03 b) | unit | `.venv/bin/python -m unittest tests.test_lock -v` | ✅ extend | ⬜ pending |
+| 02-12-02 | 02-12 (gap) | 1 | HARD-04 | T-02-34 | The holder lookup never reads past byte AT (unbuffered lock file, CR-02) | unit | `.venv/bin/python -m unittest tests.test_lock tests.test_nuget tests.test_datapack -v` | ✅ extend | ⬜ pending |
+| 02-12-03 | 02-12 (gap) | 1 | HARD-04 | T-02-33 | A port that waited on the tools lock reuses the first port's translator and runs no build (CR-03 a) | integration | `.venv/bin/python -m unittest tests.test_lock tests.test_nuget -v` | ✅ extend | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -97,7 +102,7 @@ Each new test file is created by the first task that needs it (no separate scaff
 
 | Behavior | Requirement | Why Manual | Test Instructions |
 |----------|-------------|------------|-------------------|
-| Windows byte-range lock blocks a second porter but lets it read the holder | HARD-04 | Needs a Windows host; covered by the `windows-2025` CI job, not local macOS runs | Check `tests.test_lock` passes on the Windows job of `fork-ci.yml` |
+| Windows byte-range lock blocks a second porter but lets it read the holder | HARD-04 | Needs a Windows host; covered by the `windows-2025` CI job, not local macOS runs | Check `tests.test_lock` (including 02-12's test_holder_read_stays_below_lock, the CR-02 bound) and `tests.test_datapack` pass on the Windows job of `fork-ci.yml` |
 | Windows `env` cannot override PATH lookup; absolute tool paths used | HARD-06 | Windows-only behaviour | Check `tests.test_porter.Env` passes on the Windows job of `fork-ci.yml` |
 
 ---
