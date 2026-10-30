@@ -1,6 +1,6 @@
 # The build-folder lock (porter/lock.py, D-06, D-07, D-14): a second port or install of a held <tid>_build/ stops at once naming the holder, and a dead
 # holder never blocks the next one. Holders are child processes; each test has its own NX2A_HOME; no game files, toolchains or device.
-import json, os, subprocess, sys, tempfile, unittest
+import json, os, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -20,11 +20,11 @@ def setUpModule():   # not a module-level SkipTest: `python -m unittest tests.te
     if MISSING: raise unittest.SkipTest(f'{MISSING} is not installed (python -m pip install -r requirements.txt)')
 
 
-# argv: repo, build folder, command. Holds the lock until killed
+# argv: repo, build folder, command[, seconds]. Holds the lock until killed, or for that many seconds
 HOLD = '''import sys, time
 sys.path.insert(0, sys.argv[1])
 from porter import lock
-f = lock.take(sys.argv[2], sys.argv[3]); print('held', flush=True); time.sleep(60)'''
+f = lock.take(sys.argv[2], sys.argv[3]); print('held', flush=True); time.sleep(float(sys.argv[4]) if len(sys.argv) > 4 else 60)'''
 # the OS lock only, with no text in the file (as take's branches)
 RAW = '''import os, sys, time
 from pathlib import Path
@@ -50,8 +50,8 @@ class Lock(unittest.TestCase):
     def setUp(self):
         self.work = Path(tempfile.mkdtemp(prefix='nx2a_test_lock_')) / '0100000000AAA000_build'; self.work.mkdir()
 
-    def hold(self, work, cmd='port', prog=HOLD):
-        p = subprocess.Popen([sys.executable, '-c', prog, str(REPO), str(work), cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    def hold(self, work, cmd='port', prog=HOLD, *more):
+        p = subprocess.Popen([sys.executable, '-c', prog, str(REPO), str(work), cmd, *more], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: (p.kill(), p.wait(), p.stdout.close(), p.stderr.close()))
         self.assertEqual(p.stdout.readline().strip(), 'held', p.stderr.read() if p.poll() is not None else '')
         return p
@@ -63,6 +63,20 @@ class Lock(unittest.TestCase):
         with self.assertRaises(BuildError) as c: lock.take(self.work, 'install')
         self.assertTrue(str(c.exception).startswith(f'already running: porter port, PID {p.pid}, started '), str(c.exception))
         self.assertIn(str(self.work), str(c.exception))
+
+    def test_wait_for_holder(self):   # the shared tools lock: a second port waits for the first instead of stopping
+        from porter import lock
+        self.hold(self.work, 'tool build', HOLD, '2'); t = time.monotonic()
+        f = lock.take(self.work, 'tool build', wait=True); self.addCleanup(f.close)
+        self.assertGreaterEqual(time.monotonic() - t, 1); self.assertLess(time.monotonic() - t, 10)
+        self.assertTrue((self.work / '.porter.lock').read_text(encoding='utf-8').startswith(f'porter tool build, PID {os.getpid()}, '))
+
+    def test_wait_false_unchanged(self):
+        from porter import lock
+        from porter.upstream import BuildError
+        self.hold(self.work); t = time.monotonic()
+        with self.assertRaises(BuildError) as c: lock.take(self.work, 'port')
+        self.assertIn('already running', str(c.exception)); self.assertLess(time.monotonic() - t, 1)
 
     def test_freed_when_holder_dies(self):
         from porter import lock

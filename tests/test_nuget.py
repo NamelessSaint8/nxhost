@@ -74,6 +74,16 @@ class Check(unittest.TestCase):
         self.assertEqual(cmd[:3], [str(Path('/sdk/dotnet')), 'restore', str(proj)]); self.assertEqual((lg, e), (log, env))
         self.assertTrue(log.parent.is_dir())
 
+    def test_restored_holds_tools_lock(self):   # restore, check and the caller's build of a tool every game shares run one port at a time
+        from porter import lock, paths
+        tools = paths.user_dir() / 'tools'
+        with mock.patch.object(nsp, 'run', lambda *a, **kw: None), mock.patch.object(nuget, 'check', lambda project: None):
+            with nuget.restored(Path('proj'), 'dotnet', {}, Path(tempfile.mkdtemp()) / 'r.log'):
+                self.assertTrue((tools / '.porter.lock').read_text(encoding='utf-8').startswith(f'porter tool build, PID {os.getpid()}'))
+                with self.assertRaises(BuildError) as c: lock.take(tools, 'tool build')
+                self.assertIn('already running', str(c.exception))
+        lock.take(tools, 'tool build').close()
+
 
 class Pins(unittest.TestCase):
     def test_nuget_pins(self):
