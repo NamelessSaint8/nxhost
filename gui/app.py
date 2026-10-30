@@ -3,11 +3,11 @@
 #   Setup  the tools a port needs (porter doctor), downloading the missing ones (porter tools --download), and the saved settings (porter.config): prod.keys, the NDK,
 #          dotnet, adb, the output folder, the device
 #   Games  the game profiles (porter profiles --all)
-import html, os, subprocess, sys, time
+import html, subprocess, sys, time
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QFont
+from PySide6.QtGui import QColor, QDesktopServices, QFontDatabase
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
                                QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
                                QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
@@ -96,7 +96,7 @@ class PortTab(QWidget):
         split = QSplitter(Qt.Vertical)
         self.stages = QTreeWidget(); self.stages.setHeaderLabels(['', 'Stage', 'Result', 'Time']); self.stages.setRootIsDecorated(False)
         hh = self.stages.header(); hh.setSectionResizeMode(0, QHeaderView.ResizeToContents); hh.setSectionResizeMode(1, QHeaderView.ResizeToContents); hh.setSectionResizeMode(2, QHeaderView.Stretch)
-        self.log = QPlainTextEdit(); self.log.setReadOnly(True); self.log.setFont(QFont('Consolas' if os.name == 'nt' else 'Menlo', 9)); self.log.setMaximumBlockCount(20000)
+        self.log = QPlainTextEdit(); self.log.setReadOnly(True); mono = QFontDatabase.systemFont(QFontDatabase.FixedFont); mono.setPointSize(9); self.log.setFont(mono); self.log.setMaximumBlockCount(20000)
         split.addWidget(self.stages); split.addWidget(self.log); split.setSizes([180, 220])
         v.addWidget(split, 1)
         self.tick = QTimer(self); self.tick.timeout.connect(self.on_tick); self.tick.start(1000)
@@ -115,7 +115,7 @@ class PortTab(QWidget):
         d = self.folder.text().strip()
         self.info = None; self.port_btn.setEnabled(False)
         if not d: return
-        if not Path(d).is_dir(): self.card.setText(f'<span style="color:#c62828">Not a folder: {d}</span>'); return
+        if not Path(d).is_dir(): self.card.setText(f'<span style="color:#c62828">Not a folder: {html.escape(d, quote=True)}</span>'); return
         self.card.setText('Reading the game folder…')
         call_json(self, ['inspect', d, '--json'], self.on_inspect)
 
@@ -125,15 +125,15 @@ class PortTab(QWidget):
         cur = self.language.currentData(); self.language.clear(); self.language.addItem('English (default)', '')   # porter inspect's languages (D-12), the choice kept
         for x in info.get('languages') or []: self.language.addItem(x['name'], x['code'])
         self.language.setCurrentIndex(max(self.language.findData(cur), 0))
-        a = info.get('android') or {}
+        a = info.get('android') or {}; e = lambda x: html.escape(str(x), quote=True)   # the game's, the profile's and porter's strings are text, not markup
         st = a.get('status', 'ios only' if info.get('profile') else 'not supported')
         col = STATUS_COLOUR.get(st, '#c62828')
-        rows = [(f'<b>{info["name"]}</b> &nbsp; <span style="color:#757575">{info["title_id"]}</span>' if info.get('name') else f'<b>{info["title_id"]}</b>') + ' &nbsp; '
+        rows = [(f'<b>{e(info["name"])}</b> &nbsp; <span style="color:#757575">{e(info["title_id"])}</span>' if info.get('name') else f'<b>{e(info["title_id"])}</b>') + ' &nbsp; '
                 f'<span style="background:{col};color:white;padding:1px 6px">&nbsp;{st}&nbsp;</span>']
-        files = [f'base game' ] + [f'update {u["version"]}' for u in info['updates']] + ([f'{len(info["dlc"])} DLC'] if info['dlc'] else [])
-        rows.append('In the folder: ' + ', '.join(files) + (f' — packs <b>{info["pack"]}</b>' if info.get('pack') else ''))
-        if a.get('tested'): rows.append(f'Tested: {a["tested"]}')
-        if info.get('reason'): rows.append(f'<span style="color:{"#ef6c00" if info["supported"] else "#c62828"}">{info["reason"]}</span>')
+        files = [f'base game' ] + [f'update {e(u["version"])}' for u in info['updates']] + ([f'{len(info["dlc"])} DLC'] if info['dlc'] else [])
+        rows.append('In the folder: ' + ', '.join(files) + (f' — packs <b>{e(info["pack"])}</b>' if info.get('pack') else ''))
+        if a.get('tested'): rows.append(f'Tested: {e(a["tested"])}')
+        if info.get('reason'): rows.append(f'<span style="color:{"#ef6c00" if info["supported"] else "#c62828"}">{e(info["reason"])}</span>')
         self.card.setText('<br>'.join(rows))
         self.app_name.setPlaceholderText(info.get('name') or 'the game\'s name')
         self.update_port_button()
