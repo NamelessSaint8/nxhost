@@ -274,3 +274,68 @@ Other potential blockers that need no change today: `porter/paths.py` already se
 ---
 
 *Concerns audit: 2026-10-29*
+
+## Closure (Phase 2)
+
+**Closed:** 2026-10-30. One row per concern above: the phase and plan that closed it and the test or file that shows it, or "no action" with the reason. Phase 1 rows come from `.planning/phases/01-bridge-bundles-and-ci/01-VERIFICATION.md`; Phase 2 rows from the 02-01 to 02-10 summaries.
+
+| Concern (its bold heading, row or bullet) | Closed by | Evidence |
+|-------------------------------------------|-----------|----------|
+| Monkey-patched upstream module at import time | Phase 2, 02-05: `_overrides(m)` checks every attribute it replaces and fails at import naming the missing one | `tests/test_porter.py` Overrides |
+| Process-wide environment mutation in the port pipeline | Phase 2, 02-05: every child gets `self.env`; `os.environ` is never written; `build_nx_extract` runs dotnet by absolute path | `tests/test_porter.py` Env |
+| Shared work directory with the iOS build | Phase 2, 02-01: the sharing rule is in `docs/ARCHITECTURE.md`, and porter locks `<tid>_build/.porter.lock` | `tests/test_lock.py` Lock, `docs/ARCHITECTURE.md` |
+| `inspect` failure is reported as "no game found" | Phase 1, 01-04: the card shows porter's error document, the stderr tail or the timeout with Retry; Phase 2, 02-07 pins inspect's error paths | `tests/test_bridge.py` Timeout (test_inspect_card_retry), `tests/test_cli.py` ErrorPaths |
+| Tracked and untracked repository hygiene | Phase 2, 02-03: `*.code-workspace` is ignored | `.gitignore`, `tests/test_housekeeping.py` Hooks (test_workspace_ignored) |
+| GUI cancel on macOS and Linux leaves children running | Phase 1, 01-02 and 01-03: porter runs in its own session (a Job Object on Windows) and stop kills the whole tree | `tests/test_bridge.py` Stop, `tests/test_runlog.py` Stop |
+| Missing dependency reported as a network or empty-list failure | Phase 1, 01-04 (one-shot calls show the stderr tail) and 01-07 (a missing `lz4` is a named skip, a failure in CI) | `tests/test_bridge.py` Errors (test_doctor_crash_shows_stderr), `tests/test_porter_guard.py` |
+| `PortTab.cancel` reports cancellation before the child exits | Phase 1, 01-03: "cancelled" is shown only once the run has stopped | `tests/test_bridge.py` Stop (test_port_tab_status) |
+| Zip extraction writes symlinks from unsanitized member names | Phase 2, 02-04: every member is checked before anything is written; links are made last and must resolve inside the unpack folder | `tests/test_fetch.py` Unpack |
+| Tar extraction falls back to unfiltered extraction on older Pythons | Phase 2, 02-04: `filter='data'` plus the same name check, and the Python floors 3.11.13 / 3.12.11 / 3.13.4 / 3.14 | `tests/test_fetch.py` Unpack (test_tar_refused), `tests/test_toolchain.py` PythonFloor |
+| APK signing key is stored unencrypted with default permissions | Phase 2, 02-02: written once, whole and 0600; an unreadable key stops with the recovery steps; the doctor's Signing key row | `tests/test_signing.py` Key, Preflight |
+| Duplicate, diverged signing code under `probes/` | Phase 2, 02-02: the probe app uses nxnative's `mkapk.py`; the copy is gone | `tests/test_signing.py` Probe |
+| Third-party configuration fetched at port time and applied to game memory | Phase 2, 02-08: fetched at the commit pinned in `porter/pins.py` `FPSLOCKER`; the commit and the config's SHA-256 are in the log, `fpslock.tsv` and `patches.py` | `tests/test_porter.py` FpsLocker |
+| Download integrity relies on the same origin as the archive | Phase 2, 02-04 (toolchains pinned by version and hash in `porter/pins.py`) and 02-10 (NuGet packages pinned by content hash in `pins.NUGET`) | `tests/test_fetch.py` Pins, `tests/test_nuget.py` Check, Pins |
+| Full rebuild of the data pack on any change | Phase 2, 02-01: the old pack is renamed aside first, so a crash leaves one whole pack (the rebuild itself takes seconds and stays) | `tests/test_datapack.py` Swap |
+| Install reads whole files into memory to compare MD5s | Phase 2, 02-01: `adb.md5` hashes in pieces | `tests/test_datapack.py` Swap (test_md5_in_pieces), `tests/test_adb.py` Push |
+| The engine's shader and rewrite steps depend on exact upstream outputs | Phase 2, 02-03: the strings and keys porter parses are pinned by tests | `tests/test_housekeeping.py` UpstreamOutput |
+| Per-game data sits next to shared core in one tree | Phase 2, 02-03: `arch_rules.py` joins split string literals before it looks for title IDs | `tests/arch_rules.py` (run by `tests/test_architecture.py`) |
+| Commit hygiene is opt-in | Phase 2, 02-03: `python devtools/hooks.py` turns the hook on and README says to run it (D-11: nothing checks that it was run) | `devtools/hooks.py`, `tests/test_housekeeping.py` Hooks |
+| Tests that must import the full engine | Phase 1, 01-07: a missing engine module is a named skip locally and a failure in CI | `tests/test_porter_guard.py` |
+| Disk use per port | Phase 2, 02-05: `check_space` counts what the port reads, DLC included, and checks again after extraction | `tests/test_porter.py` Misc (check_space) |
+| Single-process port | Phase 2, 02-01 (one port or install per build folder) and 02-10 (builds of the tools every game shares take turns) | `tests/test_lock.py` Lock, `tests/test_nuget.py` Check (test_restored_holds_tools_lock) |
+| Unpinned Python dependencies | Phase 1, 01-01: hashed locks from `requirements*.in` | `tests/test_workflows.py` Lock |
+| Undeclared modules in developer tools | Phase 1, 01-01: `numpy` and `av` declared in `requirements-dev.in` and locked apart | `requirements-dev.in`, `tests/test_workflows.py` Lock (test_dev_apart) |
+| Vendored third-party code and its records | Phase 2, 02-03: FLIP v1.7 (commit `b475eb4`) recorded; the Ryujinx local changes kept as a proven patch | `tests/test_housekeeping.py` Records |
+| Subtree sync with a diverged tree | Phase 1, 01-08: the release workflow reports the `nxnative/` diff to upstream (CI-04, a report, not a gate); Phase 2 kept subtree edits to hook lines | `.github/workflows/fork-release.yml` (upstream-diff), `tests/arch_rules.py` |
+| No automated Windows/macOS/Linux bundle build or check | Phase 1, 01-06 and 01-08: one build script for the four hosts, smoke-tested in `fork-release.yml` | `tests/test_packaging.py`, `tests/test_workflows.py` Release |
+| No GUI tests and no GUI release check | Phase 1, 01-03 and 01-04: headless GUI tests and golden protocol streams, run in CI on every push | `tests/test_bridge.py` |
+| GUI (`gui/app.py`, `gui/runner.py`, `gui/__main__.py`) | Phase 1, 01-03 and 01-04 | `tests/test_bridge.py` Fake, Stop, Close, Replay |
+| Downloads and unpacking (`porter/fetch.py`) | Phase 2, 02-04 | `tests/test_fetch.py` Pins, Unpack |
+| ADB and install (`porter/adb.py`, `porter/install.py`) | Phase 2, 02-07 | `tests/test_adb.py` Sizes, Push, Install |
+| Toolchain detection (`porter/toolchain.py`, `porter/paths.py`) | Phase 2, 02-07 | `tests/test_toolchain.py` Detection |
+| Devtools (`devtools/*.py`, `devtools/*.sh`) | Phase 2, 02-07 for `devtools/device.py`, the resolver every script uses; no action for the other scripts: they are by-hand device tools with no logic of their own to pin | `tests/test_cli.py` DeviceTool |
+| Cross-platform: `gui/runner.py` `cancel` | Phase 1, 01-02 and 01-03 | `tests/test_bridge.py` Stop |
+| Cross-platform: `gui/app.py` font | Phase 2, 02-09: the system fixed-width font | `tests/test_bridge.py` Escaping (test_log_font) |
+| Cross-platform: `packaging/nx2android.py` | No change needed: its Fix column says keep the guard; the other hosts' entry point came with 01-06 | `tests/test_packaging.py` Bundle |
+| Cross-platform: `packaging/build_bootloader.py` | Phase 1, 01-06 | `tests/test_packaging.py`, `.github/workflows/fork-release.yml` |
+| Cross-platform: `packaging/build_bundle.py` | Phase 1, 01-06: builds on all four hosts | `tests/test_packaging.py` Bundle |
+| Cross-platform: `packaging/nx2android.spec` | Phase 1, 01-06: `nx2android.app` in a DMG on macOS | `tests/test_packaging.py` Bundle |
+| Cross-platform: `packaging/INSTALL.md` | Phase 1, 01-06: the four-host install guide | `packaging/INSTALL.md` |
+| Cross-platform: `devtools/*.sh` | No change needed, per its Fix column ("Keep; note in the header") | `devtools/soak.sh` |
+| Cross-platform: `devtools/burst.py`, `devtools/rec_flicker.py` | Phase 1, 01-01: declared in the dev lock | `requirements-dev.in` |
+| Cross-platform: `porter/adb.py` `LONG_PATH` | No action: correct as it is (its Fix column says None) | `porter/adb.py` |
+| Cross-platform: `build_ipa_from_nsp.py` `TOOL_PATHS` | No action: the port never calls upstream's `main()` | `nxnative/scripts/build_ipa_from_nsp.py` |
+| Cross-platform: `docs/RELEASE_CHECK.md` | Phase 1, 01-08: the four-host release check | `docs/RELEASE_CHECK.md` |
+| `gui/` bullet: no tests | Phase 1, 01-03 and 01-04 | `tests/test_bridge.py` |
+| `gui/` bullet: cancel is wrong on macOS and Linux | Phase 1, 01-02 and 01-03 | `tests/test_bridge.py` Stop |
+| `gui/` bullet: errors reduced to the last stderr line, `call_json` discards stderr | Phase 1, 01-03 (failed run: cause and Open log) and 01-04 (one-shot: stderr tail inline) | `tests/test_bridge.py` Errors |
+| `gui/` bullet: no window-close guard | Phase 1, 01-03: closing mid-port asks, then stops the run | `tests/test_bridge.py` Close |
+| `gui/` bullet: no timeouts on `call_json` | Phase 1, 01-04: per-command limits that kill the call's session | `tests/test_bridge.py` Timeout |
+| `gui/` bullet: monospace font chosen by `os.name` | Phase 2, 02-09 | `tests/test_bridge.py` Escaping (test_log_font) |
+| `gui/` bullet: game names in rich text unescaped | Phase 2, 02-09: every interpolated string html-escaped | `tests/test_bridge.py` Escaping (test_card_escapes) |
+| `gui/` bullet: `LANGUAGES` duplicates `nacp.LANGUAGES` | Phase 2, 02-09: the list comes from `porter inspect`, from upstream's `nacp.LANGUAGES` | `tests/test_cli.py` Languages, `tests/test_bridge.py` Escaping (test_one_language_source) |
+| Third-party: pins | Phase 2, 02-03 | `tests/test_housekeeping.py` Records |
+| Third-party: patching (Ryujinx changes only by hand) | Phase 2, 02-03: `nxnative-local.patch` against Canary-1.3.351, proven to apply | `nxnative/dm/third_party/ryujinx/nxnative-local.patch`, `tests/test_housekeeping.py` Records (test_ryujinx_patch) |
+| Third-party: syncing | Phase 1, 01-08 (CI-04 report) | `.github/workflows/fork-release.yml` (upstream-diff) |
+| Third-party: unrecorded FLIP version | Phase 2, 02-03 | `tests/test_housekeeping.py` Records (test_flip_version) |
+| Third-party: adapted code outside the directory | No action: attribution recorded in `nxnative/dm/third_party/README.md`; the adapted code is maintained as engine code | `nxnative/dm/third_party/README.md` |
