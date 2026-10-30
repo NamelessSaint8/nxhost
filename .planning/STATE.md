@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 02
 current_phase_name: Porter Hardening
 status: executing
-stopped_at: Completed 02-04-PLAN.md
-last_updated: "2026-10-30T18:01:52.105Z"
+stopped_at: Completed 02-05-PLAN.md
+last_updated: "2026-10-30T18:08:33.060Z"
 last_activity: 2026-10-30
 last_activity_desc: Phase 02 execution started
-state_head: 2016dd2bbd3d9260e3260fb5e211ce495707b4ac
+state_head: ec80cadbc2c7993b36fe48e25f662aa707b29faa
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 20
-  completed_plans: 14
+  completed_plans: 15
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-10-30)
 ## Current Position
 
 Phase: 02 (Porter Hardening) — EXECUTING
-Plan: 5 of 10
+Plan: 6 of 10
 Status: Ready to execute
 Last activity: 2026-10-30 — Phase 02 execution started
 
@@ -70,6 +70,7 @@ Progress: [██░░░░░░░░] 17%
 | Phase 02 P02 | 4 min | 3 tasks | 8 files |
 | Phase 02 P03 | 7 min | 3 tasks | 8 files |
 | Phase 02 P04 | 8 min | 3 tasks | 12 files |
+| Phase 02 P05 | 4 min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -114,6 +115,9 @@ Recent decisions affecting current work:
 - [Phase 02]: Toolchain downloads pinned in porter/pins.py (NDK r27c, platform-tools 37.0.1, .NET SDK 10.0.403); vendor-newest fallback only on 404/410, marked untested; NDK never falls back
 - [Phase 02]: Archive member-name check applies to tar too (filter='data' alone strips a leading / and extracts)
 - [Phase 02]: runlog.run refuses every command but doctor on a Python without the CVE-2025-4517 fix (floors or os.path.ALLOW_MISSING), error type PythonError
+- [Phase 02]: HARD-06: a port never writes os.environ; every child gets self.env with an absolute dotnet and DOTNET_ROOT, profiles load by path
+- [Phase 02]: HARD-09/D-15: disk check counts the scanned base, updates and DLC plus the build folder recursively, and re-checks after extraction (output volume too)
+- [Phase 02]: Upstream overrides live in porter/upstream.py _overrides and raise AssertionError naming the attribute at import
 
 ### Pending Todos
 
@@ -139,6 +143,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-30T18:01:52.025Z
-Stopped at: Completed 02-04-PLAN.md
+Last session: 2026-10-30T18:08:32.982Z
+Stopped at: Completed 02-05-PLAN.md
 Resume file: None
