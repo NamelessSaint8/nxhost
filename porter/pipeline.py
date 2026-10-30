@@ -344,6 +344,7 @@ class Port:
         out = paths.user_dir() / f'tools/dmsh_xlate-{key[:12]}'; kf = out.with_name(out.name + '.key'); dll = out / 'dmsh_xlate.dll'
         if dll.is_file() and nsp.reused(kf, key) is not None: return dll, key
         with nuget.restored(src, self.tools['dotnet'], self.env, self.logs / 'nuget_restore_translator.log'):   # .partial is shared by every game's port
+            if dll.is_file() and nsp.reused(kf, key) is not None: return dll, key   # CR-03: another port built it while this one waited for the tools lock
             tmp = out.with_name('dmsh_xlate.partial'); nsp.rmtree(tmp); nsp.rmtree(kf)
             nsp.run([self.tools['dotnet'], 'build', src, '-c', 'Release', '-o', tmp, '-nologo', '-v', 'quiet', '-nodeReuse:false'], self.logs / 'android_translator_build.log', env=self.env)
             if not (tmp / 'dmsh_xlate.dll').is_file(): raise BuildError(f'the translator built without dmsh_xlate.dll (see {self.logs / "android_translator_build.log"})')
