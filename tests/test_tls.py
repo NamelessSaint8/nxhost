@@ -1,6 +1,6 @@
 # porter/tls.py, the SSL context of every porter download (UAT G-01-6: the bundled OpenSSL's CA path is the CI runner's, so a player's host loads no CA).
 # Standard library only, so it runs on all four CI hosts without the engine modules.
-import os, re, ssl, sys, unittest
+import ast, os, ssl, sys, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -46,12 +46,11 @@ class Context(unittest.TestCase):
 
     def test_every_urlopen_passes_the_context(self):
         calls, bare = 0, []
-        for f in sorted((REPO / 'porter').glob('*.py')):
-            for n, ln in enumerate(f.read_text(encoding='utf-8').splitlines(), 1):
-                code = ln.split('#', 1)[0]
-                if not re.search(r'urlopen\(', code): continue
+        for f in sorted((REPO / 'porter').glob('*.py')):   # ast, so a wrapped call counts and context=None or an unverified context does not
+            for n in ast.walk(ast.parse(f.read_text(encoding='utf-8'))):
+                if not (isinstance(n, ast.Call) and ast.unparse(n.func).endswith('urlopen')): continue
                 calls += 1
-                if 'context=' not in code: bare.append(f'{f.relative_to(REPO).as_posix()}:{n}')
+                if not any(k.arg == 'context' and ast.unparse(k.value) == 'tls.context()' for k in n.keywords): bare.append(f'{f.relative_to(REPO).as_posix()}:{n.lineno}')
         self.assertEqual(bare, [], 'urlopen without context=tls.context(): the bundles would load no CA there')
         self.assertGreaterEqual(calls, 4)
 
