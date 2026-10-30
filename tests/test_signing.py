@@ -12,7 +12,7 @@ POSIX = os.name != 'nt'
 
 
 def mk(key, out, so=None):
-    return subprocess.Popen([sys.executable, str(MKAPK), str(so or Key.so), str(out), str(key)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    return subprocess.Popen([sys.executable, str(MKAPK), str(so or K.so), str(out), str(key)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
 
 def run(key, out):
@@ -23,16 +23,21 @@ def signer(o):
     m = SIGNER.search(o); return m and m.group(1)
 
 
-class Key(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):   # one key made once (pure-Python RSA takes seconds); later tests copy it
-        cls.tmp = Path(tempfile.mkdtemp(prefix='nx2a_sign_'))
-        cls.so = cls.tmp / 'libprobe.so'; cls.so.write_bytes(b'\x7fELF' + bytes(60))
-        cls.key = cls.tmp / 'base' / 'signing-key.json'; cls.key.parent.mkdir()
-        cls.rc, cls.out = run(cls.key, cls.tmp / 'base' / 'a.apk')
+def setUpModule():   # one key made once (pure-Python RSA takes seconds); later tests copy it
+    K.tmp = Path(tempfile.mkdtemp(prefix='nx2a_sign_'))
+    K.so = K.tmp / 'libprobe.so'; K.so.write_bytes(b'\x7fELF' + bytes(60))
+    K.key = K.tmp / 'base' / 'signing-key.json'; K.key.parent.mkdir()
+    K.rc, K.out = run(K.key, K.tmp / 'base' / 'a.apk')
 
-    @classmethod
-    def tearDownClass(cls): shutil.rmtree(cls.tmp, ignore_errors=True)
+
+def tearDownModule(): shutil.rmtree(K.tmp, ignore_errors=True)
+
+
+class K: pass   # the module's shared fake library and first key
+
+
+class Key(unittest.TestCase):
+    tmp = property(lambda s: K.tmp); key = property(lambda s: K.key); rc = property(lambda s: K.rc); out = property(lambda s: K.out)
 
     def setUp(self): self.d = Path(tempfile.mkdtemp(dir=self.tmp))
 
@@ -74,6 +79,37 @@ class Key(unittest.TestCase):
         outs = [p.communicate(timeout=300)[0] for p in ps]
         for p, o in zip(ps, outs): self.assertEqual(p.returncode, 0, o)
         self.assertIsNotNone(signer(outs[0])); self.assertEqual(signer(outs[0]), signer(outs[1]), outs)
+
+
+class Preflight(unittest.TestCase):   # porter doctor's Signing key row: a broken key stops a port before its first stage
+    def setUp(self):
+        self.old = os.environ.get('NX2A_HOME'); os.environ['NX2A_HOME'] = tempfile.mkdtemp(prefix='nx2a_test_home_')
+        from porter import paths, toolchain; self.paths, self.toolchain = paths, toolchain
+
+    def tearDown(self):
+        shutil.rmtree(os.environ['NX2A_HOME'], ignore_errors=True)
+        if self.old is None: os.environ.pop('NX2A_HOME', None)
+        else: os.environ['NX2A_HOME'] = self.old
+
+    def row(self): by = {r.name: r for r in self.toolchain.checks()}; self.assertIn('Signing key', by); return by['Signing key']
+
+    def broken(self): k = self.paths.signing_key(); k.parent.mkdir(parents=True, exist_ok=True); k.write_bytes(b'{"n": '); return k
+
+    def test_no_key_is_fine(self):
+        r = self.row(); self.assertTrue(r.ok); self.assertIn('made on the first port', r.detail)
+
+    def test_valid_key_is_fine(self):
+        k = self.paths.signing_key(); k.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(K.key, k)
+        r = self.row(); self.assertTrue(r.ok, r.detail)
+
+    def test_broken_key_is_red(self):
+        k = self.broken(); r = self.row()
+        self.assertFalse(r.ok); self.assertTrue(r.required); self.assertIn(str(k), r.detail); self.assertIn('--replace-signer', r.fix)
+
+    def test_require_stops(self):
+        k = self.broken()
+        with self.assertRaises(self.toolchain.ToolError) as c: self.toolchain.require()
+        self.assertIn('Signing key', str(c.exception)); self.assertIn(str(k), str(c.exception))
 
 
 if __name__ == '__main__': unittest.main()
