@@ -7,7 +7,8 @@
 #   settings.txt   the pause menu's first-launch defaults (the profile's setting rows); the installer never replaces the player's own
 #   nx2a-data.json what the pack is: the game, the package, the version, the device features the profile requires (android.tsv requires), which the installer checks
 # Beside the pack on the host only, never pushed: <name>-data.build, the build folder it was made from, whose lock `porter install` takes (D-07, D-14).
-# Big trees are hard links into the extraction when the volume allows, so the pack takes no extra space; the pack is rebuilt whole when anything in it changes.
+# Big trees are hard links into the extraction when the volume allows, so the pack takes no extra space; the pack is rebuilt whole when anything in it changes
+# and swapped in by renaming the old one aside first (<name>-data.old), so a crash at any point leaves a working pack (HARD-07).
 import json, os, shutil, time
 from pathlib import Path
 
@@ -39,6 +40,7 @@ def build(dst, *, profile, version, display, patched, romfs, shaders, aoc=None, 
     """Write the pack to dst (replacing it). profile: the AndroidProfile; package: the app's, when not the profile's; build: the build folder, named in the sidecar;
     env: more env.txt rows, after the profile's; files: {name in the pack: source} (the 60 fps memory writes, fpslock.tsv). Returns the manifest"""
     package = package or profile.package
+    recover(dst)
     tmp = dst.with_name(dst.name + '.partial')
     if tmp.exists(): shutil.rmtree(tmp)
     tmp.mkdir(parents=True)
@@ -58,11 +60,20 @@ def build(dst, *, profile, version, display, patched, romfs, shaders, aoc=None, 
     man = dict(title_id=profile.id, name=profile.name, package=package, version=version, display=display, language=language, requires=profile.requires,
                files=n, bytes=b, dlc=sorted(int(p.name) for p in aoc.iterdir() if p.is_dir() and p.name.isdigit()) if aoc else [], made=time.strftime('%Y-%m-%d %H:%M:%S'))
     (tmp / MANIFEST).write_text(json.dumps(man, indent=2), encoding='utf-8')
-    if dst.exists(): shutil.rmtree(dst)
-    tmp.rename(dst)
+    from porter.upstream import nsp
+    old = dst.with_name(dst.name + '.old')
+    if old.exists(): shutil.rmtree(old)   # an earlier finished swap's leftover: recover() above already put back one that was the only pack
+    if dst.exists(): dst.rename(old)      # aside, not removed: the old pack goes only once the new one is in
+    nsp.swap_in(tmp, dst)                 # dst is gone, so this is the rename, with its retry while a Windows virus scanner holds a new file
+    shutil.rmtree(old, ignore_errors=True)   # a leftover goes with the next build
     if build:   # the build folder whose lock `porter install` takes (D-07): beside the pack, never in it, because the pack is pushed and no host path may reach the device (D-14)
         s = dst.with_name(dst.name + SIDECAR + '.tmp'); s.write_text(str(Path(build).resolve()), encoding='utf-8'); os.replace(s, dst.with_name(dst.name + SIDECAR))
     return man
+
+
+def recover(dst):   # a crash mid-swap: the old pack is aside and none is in place, so the aside copy comes back
+    dst = Path(dst); old = dst.with_name(dst.name + '.old')
+    if old.is_dir() and not dst.exists(): old.rename(dst)
 
 
 def build_dir(dst):   # the build folder the pack's sidecar names, or None (a pack made before the sidecar, or copied without it)

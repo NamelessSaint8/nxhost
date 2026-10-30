@@ -6,6 +6,10 @@ import contextlib, hashlib, os, shlex, shutil, subprocess, tempfile, time
 from pathlib import Path
 
 
+def md5(p):   # in pieces: a rewritten module can be hundreds of MB
+    with open(p, 'rb') as f: return hashlib.file_digest(f, 'md5').hexdigest()
+
+
 class AdbError(Exception):
     pass
 
@@ -152,7 +156,7 @@ class Adb:
         have = self.remote_sizes(remote)
         same = [rel for rel, p in files if verify and verify(rel) and rel not in keep and rel not in skip and have.get(rel) == p.stat().st_size]
         rmd5 = self.remote_md5(remote, same) if same else {}
-        changed = {rel for rel, p in files if rel in same and rmd5.get(rel) != hashlib.md5(p.read_bytes()).hexdigest()}
+        changed = {rel for rel, p in files if rel in same and rmd5.get(rel) != md5(p)}
         todo = [(rel, p, p.stat().st_size) for rel, p in files
                 if rel not in skip and not rel.startswith('.dmpart') and (rel not in have if rel in keep else have.get(rel) != p.stat().st_size or rel in changed)]
         total, done = sum(s for _, _, s in todo), 0

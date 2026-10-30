@@ -107,6 +107,7 @@ def cmd_install(a):
     from porter.upstream import BuildError, PROG
     def go():
         data = Path(a.data).resolve()
+        datapack.recover(data)   # HARD-07: a pack a crash left aside is put back before it is read
         b = datapack.build_dir(data); held = lock.take(b, 'install') if b and b.is_dir() else None   # D-07: the port's lock, on the folder the pack's sidecar names (D-14)
         apk = Path(a.apk) if a.apk else data.with_name(data.name.removesuffix('-data') + '.apk')
         PROG.plan(1)
