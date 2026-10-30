@@ -167,6 +167,12 @@ class Unpack(unittest.TestCase):   # fetch._install on crafted archives: refused
         for members in ([('l', '/etc', 0)], [('esc', '../outside', 0)], [('d', '.', 0), ('d/x', '../y', 0)]):
             with self.subTest(members=members): self.refused(evil_zip(self.arcs / 'link.zip', [('ok', None, 0o644), *members]), members[-1][0])
 
+    @unittest.skipIf(os.name == 'nt', 'links are unpacked on POSIX only')
+    def test_link_through_later_link_refused(self):   # CR-01, the verifier's three-entry zip: at 02-04's code a resolved outside, d1/d2/b not made yet when a was checked
+        a, b = ('a', 'd1/d2/b/../../../escaped', 0), ('d1/d2/b', '../..', 0)
+        for order, links in (('forward', [a, b]), ('reversed', [b, a])):
+            with self.subTest(order=order): self.refused(evil_zip(self.arcs / 'order.zip', [('d1/d2/keep.txt', None, 0o644), *links]), 'a')
+
     def test_valid_zip_kept(self):
         arc = evil_zip(self.arcs / 'ok.zip', [('top/bin/tool', None, 0o755), ('top/lib/libc++.so', None, 0o644), ('top/lib/libc++.so.1', 'libc++.so', 0),
                                              ('top/shader/x/libc++.so', '../../lib/libc++.so', 0)])   # the NDK's shader-tools link shape
