@@ -121,33 +121,50 @@ def _download(it, dest):   # to dest, counting bytes and hashing as it goes; a w
     part.replace(dest)
 
 
+def _bad_name(n):   # absolute, a drive, a backslash or a .. part: refused before anything is written
+    return n.startswith('/') or '\\' in n or ':' in n.split('/', 1)[0] or '..' in n.split('/')
+
+
+def _refuse_names(arc, names):
+    if bad := next((n for n in names if _bad_name(n)), None): raise BuildError(f'{arc.name}: refused, member {bad} would land outside the unpack folder')
+
+
 def _unzip(arc, into):   # zipfile drops Unix modes and symlinks; the NDK and platform-tools need both outside Windows
     with zipfile.ZipFile(arc) as z:
         infos = z.infolist(); PROG.set(step='unpacking', done=0, total=len(infos), unit='files')
-        for i, info in enumerate(infos):
-            mode = info.external_attr >> 16
-            if os.name != 'nt' and stat.S_ISLNK(mode):
-                t = into / info.filename; t.parent.mkdir(parents=True, exist_ok=True); t.unlink(missing_ok=True); os.symlink(z.read(info).decode(), t)
-            else:
-                p = Path(z.extract(info, into))
-                if os.name != 'nt' and mode & 0o777 and not info.is_dir(): p.chmod(mode & 0o777)
-            if i % 200 == 0: PROG.set(done=i)
+        _refuse_names(arc, (i.filename for i in infos))
+        link = lambda i: os.name != 'nt' and stat.S_ISLNK(i.external_attr >> 16)
+        for k, info in enumerate(i for i in infos if not link(i)):
+            mode = info.external_attr >> 16; p = Path(z.extract(info, into))
+            if os.name != 'nt' and mode & 0o777 and not info.is_dir(): p.chmod(mode & 0o777)
+            if k % 200 == 0: PROG.set(done=k)
+        root = into.resolve()   # both sides resolved: /tmp and /var are links on macOS
+        for info in filter(link, infos):   # links last, after every file: no file is ever written through a link
+            t, target = into / info.filename, z.read(info).decode(); par = t.parent.resolve()
+            if target.startswith('/') or not par.is_relative_to(root) or not (par / target).resolve().is_relative_to(root):
+                raise BuildError(f'{arc.name}: refused, link {info.filename} → {target} leaves the unpack folder')
+            t.parent.mkdir(parents=True, exist_ok=True); t.unlink(missing_ok=True); os.symlink(target, t)
 
 
-def _untar(arc, into):
+def _untar(arc, into):   # the data filter, always: its bypasses fixed in 3.11.13 / 3.12.11 / 3.13.4 are why porter refuses older Pythons (runlog.run)
     with tarfile.open(arc) as t:
-        PROG.set(step='unpacking'); t.extractall(into, **({'filter': 'tar'} if hasattr(tarfile, 'tar_filter') else {}))   # the filter: Python 3.12+ (3.11.4)
+        PROG.set(step='unpacking'); _refuse_names(arc, t.getnames())   # the filter would strip a leading / and go on: the whole archive is refused instead
+        try: t.extractall(into, filter='data')
+        except tarfile.FilterError as e: raise BuildError(f'{arc.name}: refused, {e}') from e
 
 
 def _install(it, arc):
-    """Unpack arc into player_tools()/it.folder: an archive with one top folder (the NDK, platform-tools) gives that folder, one without (.NET) is the folder"""
+    """Unpack arc into player_tools()/it.folder: an archive with one top folder (the NDK, platform-tools) gives that folder, one without (.NET) is the folder.
+    A refused or failed unpack removes its partial .unpack folder"""
     root = player_tools(); tmp = root / f'.{it.folder}.unpack'
     shutil.rmtree(tmp, ignore_errors=True); tmp.mkdir(parents=True)
-    (_unzip if arc.suffix == '.zip' else _untar)(arc, tmp)
-    top = list(tmp.iterdir())
-    src = top[0] if len(top) == 1 and top[0].is_dir() and it.folder != 'dotnet' else tmp
-    dest = root / it.folder
-    shutil.rmtree(dest, ignore_errors=True); src.replace(dest)
+    try:
+        (_unzip if arc.suffix == '.zip' else _untar)(arc, tmp)
+        top = list(tmp.iterdir())
+        src = top[0] if len(top) == 1 and top[0].is_dir() and it.folder != 'dotnet' else tmp
+        dest = root / it.folder
+        shutil.rmtree(dest, ignore_errors=True); src.replace(dest)
+    except BaseException: shutil.rmtree(tmp, ignore_errors=True); raise
     shutil.rmtree(tmp, ignore_errors=True)
     return dest
 
