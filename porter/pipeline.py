@@ -189,7 +189,8 @@ class Port:
         if g is None:
             if (d / 'game.tsv').is_file(): say(f'no game profile for {tid}: reusing the provisional profile from the last run ({d}; delete it to survey again)')
             else:
-                facts = nsp.survey(self.o.folder, self.app, self.fam, self.o.keys, NXNATIVE, PY, self.env)
+                with nuget.restored(NXNATIVE / 'dm/tools/nx_extract', self.tools['dotnet'], self.env, self.work / 'logs' / 'nuget_restore.log'):   # survey builds nx_extract
+                    facts = nsp.survey(self.o.folder, self.app, self.fam, self.o.keys, NXNATIVE, PY, self.env)
                 facts['survey'] = f'<NSP folder>/{tid}_survey/survey.md'
                 nsp.rmtree(tmp); nsp.write_profile(tmp, self.app, facts); nsp.swap_in(tmp, d)
             self.provisional = True
@@ -340,10 +341,11 @@ class Port:
         key = nsp.fingerprint(('files', files), ('cmd', [str(self.tools['dotnet']), '--version']), env=self.env)
         out = paths.user_dir() / 'tools/dmsh_xlate'; kf = out.with_name('dmsh_xlate.key'); dll = out / 'dmsh_xlate.dll'
         if dll.is_file() and nsp.reused(kf, key) is not None: return dll, key
-        tmp = out.with_name('dmsh_xlate.partial'); nsp.rmtree(tmp); nsp.rmtree(kf)
-        nsp.run([self.tools['dotnet'], 'build', src, '-c', 'Release', '-o', tmp, '-nologo', '-v', 'quiet', '-nodeReuse:false'], self.logs / 'android_translator_build.log', env=self.env)
-        if not (tmp / 'dmsh_xlate.dll').is_file(): raise BuildError(f'the translator built without dmsh_xlate.dll (see {self.logs / "android_translator_build.log"})')
-        nsp.swap_in(tmp, out); nsp.write_whole(kf, f'{key}\n')
+        with nuget.restored(src, self.tools['dotnet'], self.env, self.logs / 'nuget_restore_translator.log'):   # .partial is shared by every game's port
+            tmp = out.with_name('dmsh_xlate.partial'); nsp.rmtree(tmp); nsp.rmtree(kf)
+            nsp.run([self.tools['dotnet'], 'build', src, '-c', 'Release', '-o', tmp, '-nologo', '-v', 'quiet', '-nodeReuse:false'], self.logs / 'android_translator_build.log', env=self.env)
+            if not (tmp / 'dmsh_xlate.dll').is_file(): raise BuildError(f'the translator built without dmsh_xlate.dll (see {self.logs / "android_translator_build.log"})')
+            nsp.swap_in(tmp, out); nsp.write_whole(kf, f'{key}\n')
         return dll, key
 
     # ---- host: the Android host built for this profile with the player's NDK ----

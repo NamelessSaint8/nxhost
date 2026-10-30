@@ -5,7 +5,7 @@
 import contextlib, json, shutil
 from pathlib import Path
 
-from porter import pins
+from porter import lock, paths, pins
 
 
 def hashes(project):
@@ -30,9 +30,13 @@ def check(project):
 
 @contextlib.contextmanager
 def restored(project, dotnet, env, log):
-    """with restored(...): <build>. dotnet restore of project with env (its NUGET_PACKAGES), then check(), then the body"""
+    """with restored(...): <build>. dotnet restore of project with env (its NUGET_PACKAGES), then check(), then the body, all under the shared tools lock"""
     from porter.upstream import nsp
-    Path(log).parent.mkdir(parents=True, exist_ok=True)
-    nsp.run([str(dotnet), 'restore', str(project), '--nologo', '-v', 'quiet'], log, env=env)
-    check(project)
-    yield
+    # the engine's nx_extract and dmsh_xlate obj/ folders and <user dir>/tools/dmsh_xlate.partial are shared by every game's port (RESEARCH Pitfall 6)
+    held = lock.take(paths.user_dir() / 'tools', 'tool build', wait=True)
+    try:
+        Path(log).parent.mkdir(parents=True, exist_ok=True)
+        nsp.run([str(dotnet), 'restore', str(project), '--nologo', '-v', 'quiet'], log, env=env)
+        check(project)
+        yield
+    finally: held.close()
