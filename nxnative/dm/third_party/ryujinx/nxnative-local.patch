@@ -1,0 +1,652 @@
+diff --git a/src/Ryujinx.Graphics.Shader/CodeGen/Spirv/Instructions.cs b/src/Ryujinx.Graphics.Shader/CodeGen/Spirv/Instructions.cs
+index 79383ec..8ad6ff7 100644
+--- a/src/Ryujinx.Graphics.Shader/CodeGen/Spirv/Instructions.cs
++++ b/src/Ryujinx.Graphics.Shader/CodeGen/Spirv/Instructions.cs
+@@ -1308,6 +1308,11 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
+                 lod = Src(coordType);
+             }
+ 
++            // nxnative: texel offsets read from a register (Maxwell AOFFI / PTP from a non-immediate) are not constants. Upstream put them
++            // into an OpConstantComposite and passed them as ConstOffset / ConstOffsets: invalid SPIR-V, on which SPIRV-Cross throws "nullptr"
++            // (the shader never builds). Constant offsets keep the old form byte for byte; runtime ones use Offset (see the gather below)
++            bool offsetsConst = true;
++
+             SpvInstruction AssembleOffsetVector(int count)
+             {
+                 if (count > 1)
+@@ -1321,11 +1326,25 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
+ 
+                     SpvInstruction vectorType = context.TypeVector(context.TypeS32(), count);
+ 
++                    if (Array.Exists(elems, e => e.Opcode != Op.OpConstant))
++                    {
++                        offsetsConst = false;
++
++                        return context.CompositeConstruct(vectorType, elems);
++                    }
++
+                     return context.ConstantComposite(vectorType, elems);
+                 }
+                 else
+                 {
+-                    return Src(AggregateType.S32);
++                    SpvInstruction elem = Src(AggregateType.S32);
++
++                    if (elem.Opcode != Op.OpConstant)
++                    {
++                        offsetsConst = false;
++                    }
++
++                    return elem;
+                 }
+             }
+ 
+@@ -1398,10 +1417,10 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
+ 
+             if (hasOffset)
+             {
+-                operandsMask |= ImageOperandsMask.ConstOffset;
++                operandsMask |= offsetsConst ? ImageOperandsMask.ConstOffset : ImageOperandsMask.Offset;
+                 operandsList.Add(offsets[0]);
+             }
+-            else if (hasOffsets)
++            else if (hasOffsets && offsetsConst)
+             {
+                 operandsMask |= ImageOperandsMask.ConstOffsets;
+                 SpvInstruction arrayv2 = context.TypeArray(context.TypeVector(context.TypeS32(), 2), context.Constant(context.TypeU32(), 4));
+@@ -1431,6 +1450,25 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
+             {
+                 result = context.ImageFetch(resultType, image, pCoords, operandsMask, operands);
+             }
++            else if (isGather && hasOffsets && !offsetsConst)
++            {
++                // nxnative: ConstOffsets must be constant. Each texel of a four-offset gather is texel (i0, j0) of a gather at that one offset,
++                // which is component w of its result (gather order: i0j1, i1j1, i1j0, i0j0)
++                SpvInstruction[] texels = new SpvInstruction[4];
++
++                for (int index = 0; index < 4; index++)
++                {
++                    SpvInstruction[] gatherOperands = [.. operands, offsets[index]];
++                    ImageOperandsMask gatherMask = operandsMask | ImageOperandsMask.Offset;
++                    SpvInstruction texel4 = isShadow
++                        ? context.ImageDrefGather(resultType, image, pCoords, dRef, gatherMask, gatherOperands)
++                        : context.ImageGather(resultType, image, pCoords, compIdx, gatherMask, gatherOperands);
++
++                    texels[index] = context.CompositeExtract(context.TypeFP32(), texel4, 3);
++                }
++
++                result = context.CompositeConstruct(resultType, texels);
++            }
+             else if (isGather)
+             {
+                 if (isShadow)
+diff --git a/src/Ryujinx.Graphics.Shader/IGpuAccessor.cs b/src/Ryujinx.Graphics.Shader/IGpuAccessor.cs
+index 77953df..979df4f 100644
+--- a/src/Ryujinx.Graphics.Shader/IGpuAccessor.cs
++++ b/src/Ryujinx.Graphics.Shader/IGpuAccessor.cs
+@@ -8,6 +8,9 @@ namespace Ryujinx.Graphics.Shader
+     /// </summary>
+     public interface IGpuAccessor : ILogger
+     {
++        // Fixed VS capture ABI used by the offline Metal geometry path.
++        bool QueryGeometryInputFixed() => false;
++
+         /// <summary>
+         /// Reads data from the constant buffer 1.
+         /// </summary>
+@@ -421,6 +424,15 @@ namespace Ryujinx.Graphics.Shader
+             return SamplerType.Texture2D;
+         }
+ 
++        /// <summary>
++        /// nxnative: a 1D integer-coordinate fetch (TLD / TLDS 1D) of the bound texture handle was translated as a 2D read at (x &amp; 0x3FFF, x &gt;&gt; 14),
++        /// because the texture type query did not say it is a texture buffer.
++        /// </summary>
++        /// <param name="handle">Texture handle</param>
++        void RecordTexelFetch1D(int handle)
++        {
++        }
++
+         /// <summary>
+         /// Gets the size in bytes of a bound constant buffer for the current shader stage.
+         /// </summary>
+diff --git a/src/Ryujinx.Graphics.Shader/Instructions/InstEmitFlowControl.cs b/src/Ryujinx.Graphics.Shader/Instructions/InstEmitFlowControl.cs
+index e863288..43524eb 100644
+--- a/src/Ryujinx.Graphics.Shader/Instructions/InstEmitFlowControl.cs
++++ b/src/Ryujinx.Graphics.Shader/Instructions/InstEmitFlowControl.cs
+@@ -54,6 +54,12 @@ namespace Ryujinx.Graphics.Shader.Instructions
+                 }
+             }
+ 
++            // nxnative: the chained form is not used. When the target blocks end by jumping past the later targets (the cases of a switch), the structured program
++            // lost the jumps to the next target: Xenoblade Chronicles 3's movie shader (16653b901bfc4560) picks the byte of a word through a 3-entry jump table in c1,
++            // and its second and third cases became unreachable code (every other pair of pixels unset: vertical stripes over every movie). The sequential branches below
++            // are always correct
++            allTargetsSinglePred = false;
++
+             if (allTargetsSinglePred)
+             {
+                 // Chain blocks, each target block will check if the BRX target address
+diff --git a/src/Ryujinx.Graphics.Shader/Instructions/InstEmitTexture.cs b/src/Ryujinx.Graphics.Shader/Instructions/InstEmitTexture.cs
+index fa0b873..67e57fb 100644
+--- a/src/Ryujinx.Graphics.Shader/Instructions/InstEmitTexture.cs
++++ b/src/Ryujinx.Graphics.Shader/Instructions/InstEmitTexture.cs
+@@ -210,6 +210,7 @@ namespace Ryujinx.Graphics.Shader.Instructions
+             }
+ 
+             bool hasLod = lodMode > Lod.Lz;
++            bool wrap1D = false;
+ 
+             if (type == SamplerType.Texture1D && (flags & ~TextureFlags.Bindless) == TextureFlags.IntCoords && !(
+                 hasLod ||
+@@ -225,6 +226,11 @@ namespace Ryujinx.Graphics.Shader.Instructions
+                 {
+                     type = SamplerType.TextureBuffer;
+                 }
++                else
++                {
++                    // nxnative: the descriptor decides between a 1D texture and a texture buffer, so the 2D read below wraps x into rows of 16384 texels (see the TLDS Texture1DLodZero case)
++                    wrap1D = Sample1DAs2D;
++                }
+             }
+ 
+             int coordsCount = type.Dimensions;
+@@ -238,7 +244,17 @@ namespace Ryujinx.Graphics.Shader.Instructions
+ 
+             if (Sample1DAs2D && (type & SamplerType.Mask) == SamplerType.Texture1D)
+             {
+-                sourcesList.Add(ConstF(0));
++                if (wrap1D)
++                {
++                    Operand x = sourcesList[^1];
++                    sourcesList[^1] = context.BitwiseAnd(x, Const(0x3FFF));
++                    sourcesList.Add(context.ShiftRightU32(x, Const(14)));
++                    context.TranslatorContext.GpuAccessor.RecordTexelFetch1D(imm);
++                }
++                else
++                {
++                    sourcesList.Add(ConstF(0));
++                }
+ 
+                 type = SamplerType.Texture2D | (type & SamplerType.Array);
+                 is1DTo2D = true;
+@@ -496,7 +512,13 @@ namespace Ryujinx.Graphics.Shader.Instructions
+                         {
+                             if (Sample1DAs2D)
+                             {
+-                                sourcesList.Add(ConstF(0));
++                                // nxnative: Maxwell fetches a 1D texture and a texture buffer with the same instruction, and the descriptor decides. With no type answer the read is
++                                // 2D at (x & 0x3FFF, x >> 14): a 1D texture (a one-row 2D texture at most 16384 wide on the host) reads (x, 0) as before, and the host binds a texture
++                                // buffer in such a slot as a linear 2D texture of 16384-texel rows over the same memory (nvn_mtl.m tbuf_as_2d)
++                                Operand x = sourcesList[^1];
++                                sourcesList[^1] = context.BitwiseAnd(x, Const(0x3FFF));
++                                sourcesList.Add(context.ShiftRightU32(x, Const(14)));
++                                context.TranslatorContext.GpuAccessor.RecordTexelFetch1D(tldsOp.TidB);
+ 
+                                 type &= ~SamplerType.Mask;
+                                 type |= SamplerType.Texture2D;
+diff --git a/src/Ryujinx.Graphics.Shader/StructuredIr/AstOptimizer.cs b/src/Ryujinx.Graphics.Shader/StructuredIr/AstOptimizer.cs
+index 3f2e499..7cdc4de 100644
+--- a/src/Ryujinx.Graphics.Shader/StructuredIr/AstOptimizer.cs
++++ b/src/Ryujinx.Graphics.Shader/StructuredIr/AstOptimizer.cs
+@@ -1,4 +1,5 @@
+ using Ryujinx.Graphics.Shader.IntermediateRepresentation;
++using Ryujinx.Graphics.Shader.Translation;
+ using System.Collections.Generic;
+ using System.Linq;
+ 
+@@ -8,7 +9,7 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
+ {
+     static class AstOptimizer
+     {
+-        public static void Optimize(StructuredProgramContext context)
++        public static void Optimize(StructuredProgramContext context, TargetLanguage targetLanguage)
+         {
+             AstBlock mainBlock = context.CurrentFunction.MainBlock;
+ 
+@@ -24,7 +25,9 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
+                     {
+                         bool isWorthPropagating = propVar.Uses.Count == 1 || IsWorthPropagating(assignment.Source);
+ 
+-                        if (propVar.Defs.Count == 1 && isWorthPropagating)
++                        // nxnative: a call's arguments stay the locals StructuredProgram copied them to (SPIR-V passes them by pointer). Propagated, the call
++                        // kept a local whose declaration was removed (KeyNotFoundException in CodeGen/Spirv GetLocalPointer: 1,894 shaders of Viractal)
++                        if (propVar.Defs.Count == 1 && isWorthPropagating && !UsedByCall(propVar))
+                         {
+                             PropagateExpression(propVar, assignment.Source);
+                         }
+@@ -39,7 +42,20 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
+                 }
+             }
+ 
+-            RemoveEmptyBlocks(mainBlock);
++            RemoveEmptyBlocks(mainBlock, targetLanguage);
++        }
++
++        private static bool UsedByCall(AstOperand propVar)
++        {
++            foreach (IAstNode use in propVar.Uses)
++            {
++                if (use is AstOperation operation && operation.Inst == Instruction.Call)
++                {
++                    return true;
++                }
++            }
++
++            return false;
+         }
+ 
+         private static bool IsWorthPropagating(IAstNode source)
+@@ -84,7 +100,7 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
+             }
+         }
+ 
+-        private static void RemoveEmptyBlocks(AstBlock mainBlock)
++        private static void RemoveEmptyBlocks(AstBlock mainBlock, TargetLanguage targetLanguage)
+         {
+             Queue<AstBlock> pending = new();
+ 
+@@ -129,7 +145,10 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
+                         parent.Remove(block);
+                     }
+                 }
+-                else if (isIf && parent.Type == AstBlockType.Else && parent.Count == (hasElse ? 2 : 1))
++                // nxnative: not for SPIR-V. Its generator branches from an If only into an Else that follows it, never into an ElseIf, so the else-if's whole branch
++                // became unreachable code. Xenoblade Chronicles 3's volumetric cloud shaders (6a3bebeab80d95cb, fabb0ef84521a927) lost a loop's exit that way and
++                // spun until the GPU was reset (device lost on Adreno, a few seconds into the title)
++                else if (targetLanguage != TargetLanguage.Spirv && isIf && parent.Type == AstBlockType.Else && parent.Count == (hasElse ? 2 : 1))
+                 {
+                     AstBlock parentOfParent = parent.Parent;
+ 
+diff --git a/src/Ryujinx.Graphics.Shader/StructuredIr/StructuredProgram.cs b/src/Ryujinx.Graphics.Shader/StructuredIr/StructuredProgram.cs
+index 63bd820..7ce435b 100644
+--- a/src/Ryujinx.Graphics.Shader/StructuredIr/StructuredProgram.cs
++++ b/src/Ryujinx.Graphics.Shader/StructuredIr/StructuredProgram.cs
+@@ -70,7 +70,7 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
+ 
+                 GotoElimination.Eliminate(context.GetGotos());
+ 
+-                AstOptimizer.Optimize(context);
++                AstOptimizer.Optimize(context, targetLanguage);
+ 
+                 context.LeaveFunction();
+             }
+diff --git a/src/Ryujinx.Graphics.Shader/Translation/AttributeUsage.cs b/src/Ryujinx.Graphics.Shader/Translation/AttributeUsage.cs
+index 5504ef4..184a387 100644
+--- a/src/Ryujinx.Graphics.Shader/Translation/AttributeUsage.cs
++++ b/src/Ryujinx.Graphics.Shader/Translation/AttributeUsage.cs
+@@ -160,6 +160,13 @@ namespace Ryujinx.Graphics.Shader.Translation
+             ThisInputAttributesComponents |= ~UInt128.Zero >> (128 - Constants.MaxAttributes * 4);
+         }
+ 
++        // nxnative: the attributes a passthrough geometry shader forwards when the next stage is not known (TranslatorContext.Translate)
++        public void SetPassthroughWithoutNextStage(int mask)
++        {
++            _nextUsedInputAttributes = mask;
++            PassthroughAttributes = mask & ~UsedOutputAttributes;
++        }
++
+         public void SetAllOutputUserAttributes()
+         {
+             UsedOutputAttributes |= Constants.AllAttributesMask;
+diff --git a/src/Ryujinx.Graphics.Shader/Translation/EmitterContext.cs b/src/Ryujinx.Graphics.Shader/Translation/EmitterContext.cs
+index 62dd9e2..0e39de2 100644
+--- a/src/Ryujinx.Graphics.Shader/Translation/EmitterContext.cs
++++ b/src/Ryujinx.Graphics.Shader/Translation/EmitterContext.cs
+@@ -156,6 +156,20 @@ namespace Ryujinx.Graphics.Shader.Translation
+ 
+                     this.Store(StorageKind.LocalMemory, ResourceManager.LocalGeometryOutputVertexCountMemoryId, Const(0));
+                     this.Store(StorageKind.LocalMemory, ResourceManager.LocalGeometryOutputIndexCountMemoryId, Const(0));
++                    if (ResourceManager.Reservations.GeometryInputFixed)
++                    {
++                        this.Store(StorageKind.LocalMemory, ResourceManager.LocalGeometryPrimitiveOpenMemoryId, Const(0));
++                        for (int i = 0; i < ResourceManager.Reservations.OutputSizePerInvocation; i++)
++                            this.Store(StorageKind.LocalMemory, ResourceManager.LocalVertexDataMemoryId, Const(i), ConstF(0));
++                        void DefaultOne(IoVariable variable, int location, int component)
++                        {
++                            if (ResourceManager.Reservations.TryGetOffset(StorageKind.Output, variable, location, component, out int offset))
++                                this.Store(StorageKind.LocalMemory, ResourceManager.LocalVertexDataMemoryId, Const(offset), ConstF(1));
++                        }
++                        DefaultOne(IoVariable.Position, 0, 3);
++                        DefaultOne(IoVariable.PointSize, 0, 0);
++                        for (int i = 0; i < 32; i++) DefaultOne(IoVariable.UserDefined, i, 3);
++                    }
+                 }
+             }
+         }
+@@ -560,7 +574,7 @@ namespace Ryujinx.Graphics.Shader.Translation
+ 
+                     Operand writtenIndices = this.Load(StorageKind.LocalMemory, ResourceManager.LocalGeometryOutputIndexCountMemoryId);
+ 
+-                    int maxIndicesPerPrimitiveInvocation = TranslatorContext.Definitions.GetGeometryOutputIndexBufferStridePerInstance();
++                    int maxIndicesPerPrimitiveInvocation = TranslatorContext.Definitions.GetGeometryOutputIndexBufferStridePerInstance(ResourceManager.Reservations.GeometryInputFixed);
+                     int maxIndicesPerPrimitive = maxIndicesPerPrimitiveInvocation * TranslatorContext.Definitions.ThreadsPerInputPrimitive;
+ 
+                     this.BranchIfTrue(lblExit, this.ICompareGreaterOrEqualUnsigned(writtenIndices, Const(maxIndicesPerPrimitiveInvocation)));
+@@ -570,7 +584,7 @@ namespace Ryujinx.Graphics.Shader.Translation
+                     Operand primitiveIndex = this.Load(StorageKind.Input, IoVariable.GlobalId, Const(0));
+                     Operand instanceIndex = this.Load(StorageKind.Input, IoVariable.GlobalId, Const(1));
+                     Operand invocationId = this.Load(StorageKind.Input, IoVariable.GlobalId, Const(2));
+-                    Operand vertexCount = this.Load(StorageKind.ConstantBuffer, vertexInfoCbBinding, Const((int)VertexInfoBufferField.VertexCounts), Const(0));
++                    Operand vertexCount = this.Load(StorageKind.ConstantBuffer, vertexInfoCbBinding, Const((int)(ResourceManager.Reservations.GeometryInputFixed ? VertexInfoBufferField.GeometryCounts : VertexInfoBufferField.VertexCounts)), Const(0));
+                     Operand primitiveId = this.IAdd(this.IMultiply(instanceIndex, vertexCount), primitiveIndex);
+                     Operand ibOffset = this.IMultiply(primitiveId, Const(maxIndicesPerPrimitive));
+                     ibOffset = this.IAdd(ibOffset, this.IMultiply(invocationId, Const(maxIndicesPerPrimitiveInvocation)));
+diff --git a/src/Ryujinx.Graphics.Shader/Translation/EmitterContextInsts.cs b/src/Ryujinx.Graphics.Shader/Translation/EmitterContextInsts.cs
+index 3d19586..1367540 100644
+--- a/src/Ryujinx.Graphics.Shader/Translation/EmitterContextInsts.cs
++++ b/src/Ryujinx.Graphics.Shader/Translation/EmitterContextInsts.cs
+@@ -233,11 +233,31 @@ namespace Ryujinx.Graphics.Shader.Translation
+ 
+         public static Operand EmitVertex(this EmitterContext context)
+         {
++            if (context.VertexAsCompute && context.ResourceManager.Reservations.GeometryInputFixed)
++            {
++                Operand end = Label();
++                Operand count = context.Load(StorageKind.LocalMemory, context.ResourceManager.LocalGeometryOutputVertexCountMemoryId);
++                context.BranchIfTrue(end, context.ICompareGreaterOrEqualUnsigned(count, Const(context.TranslatorContext.Definitions.MaxOutputVertices)));
++                context.Store(StorageKind.LocalMemory, context.ResourceManager.LocalGeometryPrimitiveOpenMemoryId, Const(1));
++                context.Add(Instruction.EmitVertex);
++                context.MarkLabel(end);
++                return null;
++            }
+             return context.Add(Instruction.EmitVertex);
+         }
+ 
+         public static Operand EndPrimitive(this EmitterContext context)
+         {
++            if (context.VertexAsCompute && context.ResourceManager.Reservations.GeometryInputFixed)
++            {
++                Operand end = Label();
++                Operand open = context.Load(StorageKind.LocalMemory, context.ResourceManager.LocalGeometryPrimitiveOpenMemoryId);
++                context.BranchIfTrue(end, context.ICompareEqual(open, Const(0)));
++                context.Store(StorageKind.LocalMemory, context.ResourceManager.LocalGeometryPrimitiveOpenMemoryId, Const(0));
++                context.Add(Instruction.EndPrimitive);
++                context.MarkLabel(end);
++                return null;
++            }
+             return context.Add(Instruction.EndPrimitive);
+         }
+ 
+diff --git a/src/Ryujinx.Graphics.Shader/Translation/Optimizations/BindlessElimination.cs b/src/Ryujinx.Graphics.Shader/Translation/Optimizations/BindlessElimination.cs
+index c40568a..40cdad7 100644
+--- a/src/Ryujinx.Graphics.Shader/Translation/Optimizations/BindlessElimination.cs
++++ b/src/Ryujinx.Graphics.Shader/Translation/Optimizations/BindlessElimination.cs
+@@ -359,19 +359,51 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
+             {
+                 // If we have a phi, let's check if all inputs are effectively the same value.
+                 // If so, we can "see through" the phi and pick any of the inputs (since they are all the same).
++                // nxnative: the inputs are gathered through the phis they come from, as a loop makes (a handle kept in a loop variable
++                // reaches the phi from the loop's own phi). Upstream compared the phi's direct inputs only and gave up on such handles.
+ 
+-                Operand firstSrc = phi.GetSource(0);
++                Operand firstSrc = null;
++                HashSet<PhiNode> visited = new();
++                Stack<PhiNode> pending = new();
++                pending.Push(phi);
+ 
+-                for (int index = 1; index < phi.SourcesCount; index++)
++                while (pending.Count > 0)
+                 {
+-                    if (!IsSameOperand(firstSrc, phi.GetSource(index)))
++                    PhiNode current = pending.Pop();
++
++                    if (!visited.Add(current))
+                     {
+-                        outOperation = null;
++                        continue;
++                    }
+ 
+-                        return false;
++                    for (int index = 0; index < current.SourcesCount; index++)
++                    {
++                        Operand src = current.GetSource(index);
++
++                        if (src.AsgOp is PhiNode srcPhi)
++                        {
++                            pending.Push(srcPhi);
++                        }
++                        else if (firstSrc == null)
++                        {
++                            firstSrc = src;
++                        }
++                        else if (!IsSameOperand(firstSrc, src))
++                        {
++                            outOperation = null;
++
++                            return false;
++                        }
+                     }
+                 }
+ 
++                if (firstSrc == null)
++                {
++                    outOperation = null;
++
++                    return false;
++                }
++
+                 asgOp = firstSrc.AsgOp;
+             }
+ 
+@@ -389,14 +421,20 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
+ 
+         private static bool IsSameOperand(Operand x, Operand y)
+         {
++            if (x == y)
++            {
++                return true;
++            }
++
+             if (x.Type == y.Type && x.Type == OperandType.LocalVariable)
+             {
++                // nxnative: the second source may also be the same constant (a constant sampler ORed into a texture handle).
+                 return x.AsgOp is Operation xOp &&
+                     y.AsgOp is Operation yOp &&
+                     xOp.Inst == Instruction.BitwiseOr &&
+                     yOp.Inst == Instruction.BitwiseOr &&
+                     AreBothEqualConstantBuffers(xOp.GetSource(0), yOp.GetSource(0)) &&
+-                    AreBothEqualConstantBuffers(xOp.GetSource(1), yOp.GetSource(1));
++                    (AreBothEqualConstantBuffers(xOp.GetSource(1), yOp.GetSource(1)) || AreBothEqualConstants(xOp.GetSource(1), yOp.GetSource(1)));
+             }
+ 
+             return false;
+@@ -407,6 +445,11 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
+             return x.Type == y.Type && x.Value == y.Value && x.Type == OperandType.ConstantBuffer;
+         }
+ 
++        private static bool AreBothEqualConstants(Operand x, Operand y)
++        {
++            return x.Type == y.Type && x.Value == y.Value && x.Type == OperandType.Constant;
++        }
++
+         private static Operand GetSourceForMaskedHandle(Operation asgOp, uint mask)
+         {
+             // Assume it was already checked that the operation is bitwise AND.
+diff --git a/src/Ryujinx.Graphics.Shader/Translation/ResourceManager.cs b/src/Ryujinx.Graphics.Shader/Translation/ResourceManager.cs
+index 2fc1534..0d688ef 100644
+--- a/src/Ryujinx.Graphics.Shader/Translation/ResourceManager.cs
++++ b/src/Ryujinx.Graphics.Shader/Translation/ResourceManager.cs
+@@ -52,6 +52,7 @@ namespace Ryujinx.Graphics.Shader.Translation
+         public int LocalVertexIndexInstanceRateMemoryId { get; private set; }
+         public int LocalGeometryOutputVertexCountMemoryId { get; private set; }
+         public int LocalGeometryOutputIndexCountMemoryId { get; private set; }
++        public int LocalGeometryPrimitiveOpenMemoryId { get; private set; }
+ 
+         public ShaderProperties Properties { get; }
+ 
+@@ -137,6 +138,8 @@ namespace Ryujinx.Graphics.Shader.Translation
+ 
+                 LocalGeometryOutputVertexCountMemoryId = AddMemoryDefinition("local_geometry_output_vertex", AggregateType.U32);
+                 LocalGeometryOutputIndexCountMemoryId = AddMemoryDefinition("local_geometry_output_index", AggregateType.U32);
++                if (Reservations.GeometryInputFixed)
++                    LocalGeometryPrimitiveOpenMemoryId = AddMemoryDefinition("local_geometry_primitive_open", AggregateType.U32);
+             }
+         }
+ 
+diff --git a/src/Ryujinx.Graphics.Shader/Translation/ResourceReservations.cs b/src/Ryujinx.Graphics.Shader/Translation/ResourceReservations.cs
+index c89c4d0..ac66096 100644
+--- a/src/Ryujinx.Graphics.Shader/Translation/ResourceReservations.cs
++++ b/src/Ryujinx.Graphics.Shader/Translation/ResourceReservations.cs
+@@ -24,6 +24,7 @@ namespace Ryujinx.Graphics.Shader.Translation
+         public int ReservedStorageBuffers { get; }
+         public int ReservedTextures { get; }
+         public int ReservedImages { get; }
++        public bool GeometryInputFixed { get; }
+         public int InputSizePerInvocation { get; }
+         public int OutputSizePerInvocation { get; }
+         public int OutputSizeInBytesPerInvocation => OutputSizePerInvocation * sizeof(uint);
+@@ -81,16 +82,30 @@ namespace Ryujinx.Graphics.Shader.Translation
+             if (vertexAsCompute)
+             {
+                 _offsets = new();
++                GeometryInputFixed = gpuAccessor.QueryGeometryInputFixed();
+ 
+                 if (vacInput.HasValue)
+                 {
+-                    InputSizePerInvocation = FillIoOffsetMap(gpuAccessor, StorageKind.Input, vacInput.Value);
++                    InputSizePerInvocation = GeometryInputFixed ? FillGeometryInputMap() : FillIoOffsetMap(gpuAccessor, StorageKind.Input, vacInput.Value);
+                 }
+ 
+                 OutputSizePerInvocation = FillIoOffsetMap(gpuAccessor, StorageKind.Output, vacOutput);
+             }
+         }
+ 
++        // Matches dmsh_geometry.py: independent stages meet through the Maxwell attribute map.
++        private int FillGeometryInputMap()
++        {
++            for (int c = 0; c < 4; c++) _offsets.Add(new(StorageKind.Input, IoVariable.Position, 0, c), c);
++            _offsets.Add(new(StorageKind.Input, IoVariable.PointSize), 4);
++            for (int c = 0; c < 8; c++) _offsets.Add(new(StorageKind.Input, IoVariable.ClipDistance, 0, c), 5 + c);
++            _offsets.Add(new(StorageKind.Input, IoVariable.Layer), 13);
++            _offsets.Add(new(StorageKind.Input, IoVariable.ViewportIndex), 14);
++            for (int a = 0; a < 32; a++) for (int c = 0; c < 4; c++)
++                _offsets.Add(new(StorageKind.Input, IoVariable.UserDefined, a, c), 16 + 4 * a + c);
++            return 144;
++        }
++
+         private int FillIoOffsetMap(IGpuAccessor gpuAccessor, StorageKind storageKind, IoUsage vacUsage)
+         {
+             int offset = 0;
+diff --git a/src/Ryujinx.Graphics.Shader/Translation/ShaderDefinitions.cs b/src/Ryujinx.Graphics.Shader/Translation/ShaderDefinitions.cs
+index c11e658..c2126ac 100644
+--- a/src/Ryujinx.Graphics.Shader/Translation/ShaderDefinitions.cs
++++ b/src/Ryujinx.Graphics.Shader/Translation/ShaderDefinitions.cs
+@@ -337,8 +337,12 @@ namespace Ryujinx.Graphics.Shader.Translation
+             return _graphicsState.AttributeTypes[location].HasFlag(AttributeType.PackedRgb10A2Signed);
+         }
+ 
+-        public int GetGeometryOutputIndexBufferStridePerInstance()
++        public int GetGeometryOutputIndexBufferStridePerInstance(bool fixedInput = false)
+         {
++            // Even a strip with fewer than three vertices can be ended. Empty
++            // ends are ignored by the fixed-input emitter, so at most one
++            // restart per emitted vertex is needed.
++            if (fixedInput) return MaxOutputVertices * 2;
+             return MaxOutputVertices + OutputTopology switch
+             {
+                 OutputTopology.LineStrip => MaxOutputVertices / 2,
+@@ -347,9 +351,9 @@ namespace Ryujinx.Graphics.Shader.Translation
+             };
+         }
+ 
+-        public int GetGeometryOutputIndexBufferStride()
++        public int GetGeometryOutputIndexBufferStride(bool fixedInput = false)
+         {
+-            return GetGeometryOutputIndexBufferStridePerInstance() * ThreadsPerInputPrimitive;
++            return GetGeometryOutputIndexBufferStridePerInstance(fixedInput) * ThreadsPerInputPrimitive;
+         }
+     }
+ }
+diff --git a/src/Ryujinx.Graphics.Shader/Translation/Transforms/GeometryToCompute.cs b/src/Ryujinx.Graphics.Shader/Translation/Transforms/GeometryToCompute.cs
+index 573acc9..234e4eb 100644
+--- a/src/Ryujinx.Graphics.Shader/Translation/Transforms/GeometryToCompute.cs
++++ b/src/Ryujinx.Graphics.Shader/Translation/Transforms/GeometryToCompute.cs
+@@ -142,7 +142,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Transforms
+             Operand baseIndexOffset = GenerateBaseOffset(
+                 resourceManager,
+                 node,
+-                definitions.GetGeometryOutputIndexBufferStride(),
++                definitions.GetGeometryOutputIndexBufferStride(resourceManager.Reservations.GeometryInputFixed),
+                 definitions.ThreadsPerInputPrimitive);
+             Operand outputBaseIndex = Local();
+             node.List.AddBefore(node, new Operation(Instruction.Add, outputBaseIndex, new[] { baseIndexOffset, outputPrimIndex }));
+@@ -197,7 +197,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Transforms
+             Operand baseIndexOffset = GenerateBaseOffset(
+                 resourceManager,
+                 node,
+-                definitions.GetGeometryOutputIndexBufferStride(),
++                definitions.GetGeometryOutputIndexBufferStride(resourceManager.Reservations.GeometryInputFixed),
+                 definitions.ThreadsPerInputPrimitive);
+             Operand outputBaseIndex = Local();
+             node.List.AddBefore(node, new Operation(Instruction.Add, outputBaseIndex, new[] { baseIndexOffset, outputPrimIndex }));
+@@ -212,7 +212,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Transforms
+         private static Operand GenerateBaseOffset(ResourceManager resourceManager, LinkedListNode<INode> node, int stride, int threadsPerInputPrimitive)
+         {
+             Operand primitiveId = Local();
+-            GeneratePrimitiveId(resourceManager, node, primitiveId);
++            GeneratePrimitiveId(resourceManager, node, primitiveId, true);
+ 
+             Operand baseOffset = Local();
+             node.List.AddBefore(node, new Operation(Instruction.Multiply, baseOffset, new[] { primitiveId, Const(stride) }));
+@@ -303,8 +303,10 @@ namespace Ryujinx.Graphics.Shader.Translation.Transforms
+             return vertexElemOffset;
+         }
+ 
+-        private static LinkedListNode<INode> GeneratePrimitiveId(ResourceManager resourceManager, LinkedListNode<INode> node, Operand dest)
++        private static LinkedListNode<INode> GeneratePrimitiveId(ResourceManager resourceManager, LinkedListNode<INode> node, Operand dest, bool outputIndex = false)
+         {
++            if (resourceManager.Reservations.GeometryInputFixed && !outputIndex)
++                return node.List.AddBefore(node, new Operation(Instruction.Load, StorageKind.Input, dest, new[] { Const((int)IoVariable.GlobalId), Const(0) }));
+             int vertexInfoCbBinding = resourceManager.Reservations.VertexInfoConstantBufferBinding;
+ 
+             Operand vertexCount = Local();
+@@ -312,7 +314,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Transforms
+                 Instruction.Load,
+                 StorageKind.ConstantBuffer,
+                 vertexCount,
+-                new[] { Const(vertexInfoCbBinding), Const((int)VertexInfoBufferField.VertexCounts), Const(0) }));
++                new[] { Const(vertexInfoCbBinding), Const((int)(resourceManager.Reservations.GeometryInputFixed ? VertexInfoBufferField.GeometryCounts : VertexInfoBufferField.VertexCounts)), Const(0) }));
+ 
+             Operand vertexIndex = Local();
+             node.List.AddBefore(node, new Operation(
+diff --git a/src/Ryujinx.Graphics.Shader/Translation/TranslatorContext.cs b/src/Ryujinx.Graphics.Shader/Translation/TranslatorContext.cs
+index c7c5629..4fd8bdc 100644
+--- a/src/Ryujinx.Graphics.Shader/Translation/TranslatorContext.cs
++++ b/src/Ryujinx.Graphics.Shader/Translation/TranslatorContext.cs
+@@ -174,8 +174,11 @@ namespace Ryujinx.Graphics.Shader.Translation
+             Definitions.LastInVertexPipeline = true;
+         }
+ 
++        private bool _nextStageMerged;
++
+         public void SetNextStage(TranslatorContext nextStage)
+         {
++            _nextStageMerged = true;
+             AttributeUsage.MergeFromtNextStage(
+                 Definitions.GpPassthrough,
+                 nextStage._program.UsedFeatures.HasFlag(FeatureFlags.FixedFuncAttr),
+@@ -193,6 +196,14 @@ namespace Ryujinx.Graphics.Shader.Translation
+ 
+         public ShaderProgram Translate(bool asCompute = false)
+         {
++            // nxnative: a passthrough geometry shader translated alone (no SetNextStage: dmsh_xlate translates each shader by itself) for a host without passthrough would forward
++            // no attribute, and the fragment shader's inputs went unwritten (Xenoblade Chronicles 3's effect layer shaders; Adreno refused their pipelines). Maxwell forwards every
++            // attribute such a shader does not write: the first 16 are forwarded (64 components, Vulkan's minimum geometry input and output limit)
++            if (Definitions.GpPassthrough && !GpuAccessor.QueryHostSupportsGeometryShaderPassthrough() && !_nextStageMerged)
++            {
++                AttributeUsage.SetPassthroughWithoutNextStage(0xffff);
++            }
++
+             ResourceManager resourceManager = CreateResourceManager(asCompute);
+ 
+             bool usesLocalMemory = _program.UsedFeatures.HasFlag(FeatureFlags.LocalMemory);
+@@ -460,7 +471,7 @@ namespace Ryujinx.Graphics.Shader.Translation
+         {
+             if (vertexAsCompute)
+             {
+-                return new ShaderDefinitions(ShaderStage.Compute, 32, 32, 1);
++                return new ShaderDefinitions(ShaderStage.Compute, 32, GpuAccessor.QueryGeometryInputFixed() ? 1 : 32, 1);
+             }
+             else
+             {

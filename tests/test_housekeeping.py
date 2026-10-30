@@ -33,6 +33,14 @@ class Records(unittest.TestCase):
         s = (TP / 'README.md').read_text(encoding='utf-8')
         self.assertIn('b475eb4', s); self.assertIn('1.7', s)
 
+    def test_ryujinx_patch(self):
+        p = (TP / 'ryujinx/nxnative-local.patch').read_text(encoding='utf-8')
+        self.assertTrue(p.startswith('diff --git'))
+        paths = re.findall(r'^diff --git a/(\S+) b/(\S+)$', p, re.M)
+        self.assertTrue(paths); self.assertTrue(all(a.startswith('src/') and b.startswith('src/') for a, b in paths), paths)
+        self.assertIn('475615f', (TP / 'ryujinx/README.md').read_text(encoding='utf-8'))
+        for f in ('README.md', 'ryujinx/README.md'): self.assertNotIn('Ryujinx 1.3.2', (TP / f).read_text(encoding='utf-8'), f)
+
 
 class UpstreamOutput(unittest.TestCase):
     # porter/pipeline.py reads these lines of upstream tools: a wording change upstream must fail here, not in a player's port
