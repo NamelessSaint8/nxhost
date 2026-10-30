@@ -6,7 +6,7 @@ import errno, os, time
 from pathlib import Path
 
 NAME = '.porter.lock'
-AT = 4096   # Windows byte-range locks are mandatory and block reads: the locked byte sits past the text, so a second porter can still read who holds it
+AT = 4096   # Windows byte-range locks are mandatory and block reads: the locked byte sits past the text, and the file is unbuffered so reads stay below AT
 UNLOCKABLE = {errno.ENOLCK, errno.EOPNOTSUPP, getattr(errno, 'ENOTSUP', errno.EOPNOTSUPP)}   # a drive without file locks (some network shares)
 
 
@@ -15,7 +15,9 @@ def take(work, cmd, wait=False):
     or losing the last reference lets the lock go. Raises BuildError naming the holder when another porter has it; with wait, says once whom it waits for
     and tries again every second until it has it (non-blocking calls on both OSes: Windows' blocking mode gives up after 10 s)"""
     work = Path(work); work.mkdir(parents=True, exist_ok=True)
-    f = open(work / NAME, 'a+b')   # created if missing, never truncated before the lock is held
+    # created if missing, never truncated before the lock is held. Unbuffered (CR-02): on Python 3.14 a buffered read(4096) asked the OS for 131072 bytes
+    # from offset 0, past the locked byte, which Windows refuses (PermissionError inside the handler below: no "already running" and no wait)
+    f = open(work / NAME, 'a+b', buffering=0)
     told = False
     while True:
         try:
