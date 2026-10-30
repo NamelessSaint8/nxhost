@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 02
 current_phase_name: Porter Hardening
 status: executing
-stopped_at: Completed 02-05-PLAN.md
-last_updated: "2026-10-30T18:08:33.060Z"
+stopped_at: Completed 02-06-PLAN.md
+last_updated: "2026-10-30T18:17:17.481Z"
 last_activity: 2026-10-30
 last_activity_desc: Phase 02 execution started
-state_head: ec80cadbc2c7993b36fe48e25f662aa707b29faa
+state_head: 828a6a3f90590681f3ec72f4d98ee3ec3e90203c
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 20
-  completed_plans: 15
+  completed_plans: 16
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-10-30)
 ## Current Position
 
 Phase: 02 (Porter Hardening) — EXECUTING
-Plan: 6 of 10
+Plan: 7 of 10
 Status: Ready to execute
 Last activity: 2026-10-30 — Phase 02 execution started
 
@@ -71,6 +71,7 @@ Progress: [██░░░░░░░░] 17%
 | Phase 02 P03 | 7 min | 3 tasks | 8 files |
 | Phase 02 P04 | 8 min | 3 tasks | 12 files |
 | Phase 02 P05 | 4 min | 3 tasks | 4 files |
+| Phase 02 P06 | 5 min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -118,6 +119,8 @@ Recent decisions affecting current work:
 - [Phase 02]: HARD-06: a port never writes os.environ; every child gets self.env with an absolute dotnet and DOTNET_ROOT, profiles load by path
 - [Phase 02]: HARD-09/D-15: disk check counts the scanned base, updates and DLC plus the build folder recursively, and re-checks after extraction (output volume too)
 - [Phase 02]: Upstream overrides live in porter/upstream.py _overrides and raise AssertionError naming the attribute at import
+- [Phase 02]: HARD-05/D-08: every reuse key is written last and whole through write_whole (temp file + os.replace) after its outputs are swapped in; the experimental profile copy goes through <id>.partial + swap_in
+- [Phase 02]: D-09: the .port-running marker names the stage (rewritten at each stage start) and keeps every reuse key; the Phase 1 key sweep and its extract/ exemption are gone
 
 ### Pending Todos
 
@@ -127,7 +130,6 @@ None yet.
 
 - [Phase 1]: packaging/nx2android.spec refuses any PyInstaller but 6.22.3 (WR-03 fix): after recompiling requirements-build.txt to a newer 6.22.x, copy the stock QtGui/QtNetwork hooks into packaging/hooks/ again, keep the filter lines, then bump the version in the spec
 - [Phase 1]: A root CA that exists only in the macOS keychain (TLS-inspecting proxy) is not trusted; the player can set SSL_CERT_FILE. Read the keychain (truststore) when a tester needs it
-- [Phase 1→2]: Once cancel kills the whole tree (Phase 1), a cancelled run can leave a stage output the cache trusts until atomic stamps land (HARD-05, Phase 2). Clear the build folder after a cancel while testing in between
 - [Phase 2]: Research: whether older platform-tools URLs stay downloadable after pinning
 - [Phase 3]: Research: HomuHomu833 arm64 NDK (asset re-uploaded in place, so the pinned hash can drift; clang build parity with r27c; its glibc), minimum distro adb and when `push -Z` arrived (Debian 12 ships 29.0.6)
 - [Phase 5]: Research: confirm `feature:android.hardware.vulkan.version` on the Y700 via `pm list features`, and `pm list packages --show-versioncode` reliability
@@ -143,6 +145,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-30T18:08:32.982Z
-Stopped at: Completed 02-05-PLAN.md
+Last session: 2026-10-30T18:17:07.926Z
+Stopped at: Completed 02-06-PLAN.md
 Resume file: None
