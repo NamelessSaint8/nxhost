@@ -99,8 +99,10 @@ chore(release): version 0.1.1
 `.githooks/commit-msg` refuses other messages (merges, reverts and `fixup!` commits from git pass). Turn it on once per clone:
 
 ```
-git config core.hooksPath .githooks
+python devtools/hooks.py
 ```
+
+It sets `core.hooksPath` to `.githooks` for this clone.
 
 The commits before 2026-10-28 predate the rule.
 

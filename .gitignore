@@ -28,3 +28,6 @@ title.keys
 
 # The player bundle (python packaging/build_bundle.py)
 /dist/
+
+# Editor workspace files, per developer
+*.code-workspace
