@@ -78,6 +78,17 @@ created: "2026-10-29"
 | T-1-26 | Spoofing | DMG shipped without notarization | high | mitigate | notarytool `--wait` must return Accepted, then staple, `stapler validate`, `spctl`, and the smoke re-checks codesign (fork-release.yml:123-147, smoke_bundle.py:74-76); Release.test_macos_signs_and_notarizes; live: Accepted, "Notarized Developer ID" | closed |
 | T-1-27 | Elevation of privilege | GITHUB_TOKEN write scope | medium | mitigate | Top-level `contents: read`; `contents: write` only in the tag-gated release job (fork-release.yml:12-13, 177-181); Release.test_write_scope | closed |
 | T-1-SC (01-08) | Tampering | pip installs in release builds | high | mitigate | `--require-hashes -r requirements.txt -r requirements-build.txt` (fork-release.yml:50, 94); actions SHA-pinned as in T-1-21 | closed |
+| T-1-28 | Spoofing / Tampering | porter/tls.py context() | high | mitigate | Only adds anchors to `ssl.create_default_context()` (tls.py:21, 24); no `CERT_NONE` or `_create_unverified_context` in porter/; Context.test_no_host_file_stays_verifying asserts CERT_REQUIRED and check_hostname | closed |
+| T-1-29 | Elevation of privilege / Tampering | process environment | medium | mitigate | No `SSL_CERT_FILE`/`SSL_CERT_DIR` write in porter/, gui/ or the launcher; the CA file reaches only `context=`; Context.test_environment_untouched | closed |
+| T-1-30 | Tampering | CA_FILES host paths | low | accept | See AR-09 | closed |
+| T-1-31 | Repudiation / Tampering | a future urlopen without the context | low | mitigate | Context.test_every_urlopen_passes_the_context scans porter/*.py on all four CI hosts; every `urlopen(` in porter/ passes `context=tls.context()` | closed |
+| T-1-SC (01-09) | Tampering | package installs | high | mitigate | Standard-library ssl only; `requirements*` unchanged since 5ba4c02 | closed |
+| T-1-32 | Tampering / Denial of service | Linux bundle's bundled GLib/GIO | medium | mitigate | packaging/hooks filter `libqgtk3.so` (hook-PySide6.QtGui.py:9) and `libqglib.so` (hook-PySide6.QtNetwork.py:9); nx2android.spec:22-23 exits `[RED]` on `libgio-2.0.`/`libgtk-3.`; fork-release 41017737613 tarballs list none of the four names | closed |
+| T-1-33 | Elevation of privilege | environment of the app and its children | medium | mitigate | gui/ and packaging/nx2android.py unchanged since 5ba4c02; no GIO or Qt theme variable set anywhere | closed |
+| T-1-34 | Tampering | packaging/hooks overrides of stock PyInstaller hooks | low | accept | See AR-10 | closed |
+| T-1-35 | Elevation of privilege | push and workflow_dispatch on main | medium | mitigate | Push ran only after the blocking human-action gate (01-10 Task 2, answered "push"); .github/ unchanged since 5ba4c02; secrets stay under `environment: release` (fork-release.yml:84) | closed |
+| T-1-36 | Tampering | verification containers | low | accept | See AR-11 | closed |
+| T-1-SC (01-10) | Tampering | package installs | high | mitigate | No project package added; hashed locks unchanged; apt/dnf only inside throwaway containers from the distributions' signed repositories | closed |
 
 *Status: open · closed · open — below high threshold (non-blocking)*
 *Severity: critical > high > medium > low — only open threats at or above workflow.security_block_on count toward threats_open*
@@ -97,6 +108,9 @@ created: "2026-10-29"
 | AR-06 | T-1-15 | Same-user trust boundary; a new bundle version gets a fresh copy under a new id | plan 01-05 threat model | 2026-10-29 |
 | AR-07 | T-1-SC (01-05) | Standard library only; no installs in this plan | plan 01-05 threat model | 2026-10-29 |
 | AR-08 | T-1-19 | The identity name is public in every signature; no secret value passes through build_bundle | plan 01-06 threat model | 2026-10-29 |
+| AR-09 | T-1-30 | The CA paths are root-owned system files; a user who can write them already controls the host's trust store; read only when the default store is empty | plan 01-09 threat model | 2026-10-30 |
+| AR-10 | T-1-34 | PyInstaller is hash-pinned; the hook headers say to recopy the stock hook on upgrade; drift that brings GIO back fails the spec check, drift that drops a plugin fails the smoke test | plan 01-10 threat model | 2026-10-30 |
+| AR-11 | T-1-36 | Public debian:trixie and fedora:44 images run with --rm, artifacts mounted read-only, NX2A_HOME in a temp folder | plan 01-10 threat model | 2026-10-30 |
 
 *Accepted risks do not resurface in future audit runs.*
 
@@ -129,3 +143,11 @@ Found by the auditor while verifying; not counted in threats_open.
 - [x] `status: verified` set in frontmatter
 
 **Approval:** verified 2026-10-29
+
+## Security Audit 2026-10-30
+
+| Metric | Count |
+|---|---|
+| Threats found | 11 |
+| Closed | 11 |
+| Open | 0 |
