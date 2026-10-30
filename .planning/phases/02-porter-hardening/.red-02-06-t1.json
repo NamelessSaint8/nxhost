@@ -1,0 +1,10 @@
+{
+ "command": ".venv/bin/python -m unittest tests.test_stages -v",
+ "exitCode": 1,
+ "output": "test_killed_dlc_stage_redone (tests.test_stages.CutOff.test_killed_dlc_stage_redone) ... ok\ntest_write_whole_never_half (tests.test_stages.CutOff.test_write_whole_never_half) ... FAIL\n\n======================================================================\nFAIL: test_write_whole_never_half (tests.test_stages.CutOff.test_write_whole_never_half)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/Volumes/Data/Dev/nx2android/tests/test_stages.py\", line 69, in test_write_whole_never_half\n    self.assertTrue(hasattr(nsp, 'write_whole'), 'build_ipa_from_nsp.py has no write_whole')\n    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: False is not true : build_ipa_from_nsp.py has no write_whole\n\n----------------------------------------------------------------------\nRan 2 tests in 0.205s\n\nFAILED (failures=1)\n",
+ "targetTest": "test_write_whole_never_half",
+ "targetFile": "tests/test_stages.py",
+ "expected": "nsp.write_whole exists and writes a key whole",
+ "actual": "AssertionError: build_ipa_from_nsp.py has no write_whole",
+ "semanticAssessment": "Target ran and failed on its first planned assertion (no write_whole). test_killed_dlc_stage_redone passes before the change: extract_aoc already removes its key first and writes it last, as RESEARCH Pattern 6 found; it pins that behaviour with a real kill."
+}
