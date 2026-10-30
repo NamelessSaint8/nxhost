@@ -138,12 +138,15 @@ def _unzip(arc, into):   # zipfile drops Unix modes and symlinks; the NDK and pl
             mode = info.external_attr >> 16; p = Path(z.extract(info, into))
             if os.name != 'nt' and mode & 0o777 and not info.is_dir(): p.chmod(mode & 0o777)
             if k % 200 == 0: PROG.set(done=k)
-        root = into.resolve()   # both sides resolved: /tmp and /var are links on macOS
+        root = into.resolve(); made = []   # both sides resolved: /tmp and /var are links on macOS
+        refuse = lambda name, target: BuildError(f'{arc.name}: refused, link {name} → {target} leaves the unpack folder')
         for info in filter(link, infos):   # links last, after every file: no file is ever written through a link
-            t, target = into / info.filename, z.read(info).decode(); par = t.parent.resolve()
-            if target.startswith('/') or not par.is_relative_to(root) or not (par / target).resolve().is_relative_to(root):
-                raise BuildError(f'{arc.name}: refused, link {info.filename} → {target} leaves the unpack folder')
-            t.parent.mkdir(parents=True, exist_ok=True); t.unlink(missing_ok=True); os.symlink(target, t)
+            t, target = into / info.filename, z.read(info).decode()
+            if target.startswith('/') or not t.parent.resolve().is_relative_to(root): raise refuse(info.filename, target)   # its folder, through the links made so far
+            t.parent.mkdir(parents=True, exist_ok=True); t.unlink(missing_ok=True); os.symlink(target, t); made.append((info.filename, target))
+        # CR-01: a link resolved before a later link exists passes lexically (a -> d1/d2/b/../../../escaped, then d1/d2/b -> ../..),
+        # so every link is resolved once all of them exist
+        if bad := next(((n, tg) for n, tg in made if not (into / n).resolve().is_relative_to(root)), None): raise refuse(*bad)
 
 
 def _untar(arc, into):   # the data filter, always: its bypasses fixed in 3.11.13 / 3.12.11 / 3.13.4 are why porter refuses older Pythons (runlog.run)
