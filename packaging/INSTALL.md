@@ -39,6 +39,12 @@ It runs under X11 and Wayland. It uses the system's OpenGL/EGL, xkbcommon, fontc
 
 With **USB debugging** on (Settings → About → tap *Build number* seven times, then Settings → Developer options → USB debugging) and the device plugged in, tick **Install on the device when done** before porting, or click **Install on device** afterwards. Allow the PC when the device asks.
 
+## Your signing key
+
+The first port makes a signing key, `signing-key.json`, in your nx2android folder (the folder that also holds `logs`, listed below). Every port is signed with it, which is what lets a new port of a game install over the last one. Keep a backup copy of it somewhere safe.
+
+If the tool says the signing key cannot be read, put your backup copy back. If you have none, you can remove the file on purpose: the next port makes a new key, and each game you ported before must then be reinstalled with `--replace-signer`, which deletes that game's saves on the device.
+
 ## When something goes wrong
 
 The status line under the **Port** button shows the cause, and the log at the bottom of the Port tab has the details; lines in red are errors. **Open log** opens the full log of the run, which you can attach to an issue as it is (it holds no keys). The app keeps the logs of the last runs in the `logs` folder of your nx2android folder:

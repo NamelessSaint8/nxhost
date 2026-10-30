@@ -113,7 +113,7 @@ The device: **Snapdragon 8 Elite (SM8750P)**, 8 Oryon cores (6 Ã— 3.53 GHz + 2 Ã
 The test programs are in `probes/`, built with NDK r27c. Raw output is in `build/*.txt`. They ran twice:
 
 - from `adb shell` (the `shell` SELinux domain);
-- **inside an ordinary app**: `build/apk/nx2a-probe.apk`, a Java-free NativeActivity (targetSdk 36, debuggable) built and v2-signed by `probes/app/mkapk.py` with no JDK or Android SDK. It ran in SELinux context `u:r:untrusted_app:s0:c60,c257,c512,c768`, the domain a real port would use. Results are in `build/app_results.txt`.
+- **inside an ordinary app**: `build/apk/nx2a-probe.apk`, a Java-free NativeActivity (targetSdk 36, debuggable) built and v2-signed by `nxnative/dm/android/apk/mkapk.py` with no JDK or Android SDK. It ran in SELinux context `u:r:untrusted_app:s0:c60,c257,c512,c768`, the domain a real port would use. Results are in `build/app_results.txt`.
 
 **Every result below was identical in both domains.**
 

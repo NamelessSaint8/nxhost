@@ -3,6 +3,9 @@
 //   · the probe thread writes everything to <files>/results.txt and mirrors it to logcat (tag nx2a);
 //   · the UI thread draws that file into the window with a 5x7 bitmap font (software rendering, ANativeWindow_lock) and scrolls it by dragging.
 // The app stays open until the user leaves it (Back closes it). Results from the PC: adb shell run-as org.nx2a.probe cat files/results.txt
+// It is packed and signed by the port's own signer, with no JDK or Android SDK:
+//   python nxnative/dm/android/apk/mkapk.py build/libprobe.so build/apk/nx2a-probe.apk build/probe-signing-key.json --lib probe --package org.nx2a.probe --label "NX2A Probe"
+// Without --release the APK stays debuggable, which `adb shell run-as org.nx2a.probe` needs to read results.txt. The key file name matches .gitignore's *-signing-key.json.
 #include <android/input.h>
 #include <android/log.h>
 #include <android/looper.h>

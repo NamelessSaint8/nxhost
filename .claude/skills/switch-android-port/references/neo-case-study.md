@@ -20,7 +20,7 @@ The phases are in order. Each records what was done, what broke, how it was foun
   - cntfrq is 19.2 MHz, the same as the Switch. The largest PROT_NONE reservation is 256 GB.
   - BC1–7 textures are supported in hardware. `VK_EXT_external_memory_host` is missing.
   - **The deciding result:** an AHardwareBuffer's dma-buf can be `mmap(MAP_FIXED)` at the guest address and used by Vulkan. That gives zero-copy, cached, coherent guest memory pools (0 wrong words in 2 × 64 MB).
-- `probes/app/mkapk.py` builds and v2-signs an APK with the Python standard library only: no JDK, no Android SDK. Its descendant is `dm/android/apk/mkapk.py`.
+- `nxnative/dm/android/apk/mkapk.py` builds and v2-signs the APK with the Python standard library only: no JDK, no Android SDK.
 
 ## B. Toolchain, extraction, rewrite (about 15 min)
 - Installed the .NET 10 SDK and `nsz`. NSZ decompression gave a 6.7 GB base and a 517 MB update; extraction took 25 s.

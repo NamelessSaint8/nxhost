@@ -112,4 +112,11 @@ class Preflight(unittest.TestCase):   # porter doctor's Signing key row: a broke
         self.assertIn('Signing key', str(c.exception)); self.assertIn(str(k), str(c.exception))
 
 
+
+class Probe(unittest.TestCase):   # one signer in the repository (D-10): the probe app has no copy of its own
+    def test_one_signer(self):
+        self.assertFalse((REPO / 'probes' / 'app' / 'mkapk.py').exists())   # built from parts: the joined path is what the git grep gate looks for
+        self.assertIn('nxnative/dm/android/apk/mkapk.py', (REPO / 'probes/app/probeapp.c').read_text(encoding='utf-8'))
+
+
 if __name__ == '__main__': unittest.main()
