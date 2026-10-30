@@ -66,7 +66,7 @@ Requirements for the cross-platform GUI milestone. Each maps to a roadmap phase.
 - [x] **PKG-04**: User on Linux arm64 (glibc 2.39+: Ubuntu 24.04+, Debian 13, Fedora 40+) can unpack the `tar.gz` bundle and run it under X11 and Wayland
 - [x] **PKG-05**: The bundle never writes into its own folder; it runs from a read-only location, and the macOS signature still verifies after a full port
 - [x] **PKG-06**: Python dependencies are pinned in a hashed universal lockfile, with build and dev requirements declared separately
-- [ ] **PKG-07**: Downloaded toolchains (NDK, .NET, platform-tools) and NuGet packages are pinned to exact versions and hashes in one manifest
+- [x] **PKG-07**: Downloaded toolchains (NDK, .NET, platform-tools) and NuGet packages are pinned to exact versions and hashes in one manifest
 
 ### CI
 
@@ -87,7 +87,7 @@ Requirements for the cross-platform GUI milestone. Each maps to a roadmap phase.
 - [x] **HARD-01**: Zip and tar extraction cannot write outside the unpack folder (symlinks, `..`, absolute paths); tar uses `filter='data'` and porter refuses Pythons without the CVE-2025-4517 fix (3.11.13 / 3.12.11 / 3.13.4+)
 - [x] **HARD-02**: The signing key is created with mode 0600 and written atomically, and porter refuses to regenerate it when it exists but cannot be read
 - [x] **HARD-03**: FPSLocker configs come from a pinned commit or their hash is recorded and shown in the port log
-- [ ] **HARD-04**: User starting a second port of the same game folder gets a clear "already running" message (build-folder lock)
+- [x] **HARD-04**: User starting a second port of the same game folder gets a clear "already running" message (build-folder lock)
 - [x] **HARD-05**: A stage cut off mid-run is redone on the next run (stage stamps written last and atomically)
 - [x] **HARD-06**: The pipeline passes env dicts with absolute tool paths to subprocesses instead of mutating `os.environ`, and the upstream overrides are named and asserted at import
 - [x] **HARD-07**: A crash during the data-pack swap never leaves the game without a pack, and install hashes files in chunks
@@ -203,7 +203,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PKG-04 | Phase 1 | Complete |
 | PKG-05 | Phase 1 | Complete |
 | PKG-06 | Phase 1 | Complete |
-| PKG-07 | Phase 2 | Pending |
+| PKG-07 | Phase 2 | Complete |
 | CI-01 | Phase 1 | Complete |
 | CI-02 | Phase 1 | Complete |
 | CI-03 | Phase 1 | Complete |
@@ -215,7 +215,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HARD-01 | Phase 2 | Complete |
 | HARD-02 | Phase 2 | Complete |
 | HARD-03 | Phase 2 | Complete |
-| HARD-04 | Phase 2 | Pending |
+| HARD-04 | Phase 2 | Complete |
 | HARD-05 | Phase 2 | Complete |
 | HARD-06 | Phase 2 | Complete |
 | HARD-07 | Phase 2 | Complete |
