@@ -69,7 +69,7 @@ Plans:
   3. Each downloaded toolchain, NuGet package and FPSLocker config is checked against the exact version and hash recorded in one manifest, the FPSLocker hash appears in the port log, and a mismatch stops with a clear message.
   4. The signing key is created atomically with mode 0600, and when the key file exists but can't be read, porter stops with an error instead of making a new key.
   5. Every item in `.planning/codebase/CONCERNS.md` is closed (escaped game names, system monospace font, recursive disk-space check with a re-check after extraction, env dicts with absolute tool paths, named and asserted upstream overrides, repo housekeeping), and the suite covers downloads and unpacking, adb and install, per-OS toolchain detection and CLI error paths.
-**Plans**: 7/10 plans executed
+**Plans**: 8/10 plans executed
 
 Plans:
 **Wave 1**
@@ -86,7 +86,7 @@ Plans:
 - [x] 02-07-PLAN.md — Tests for CLI error paths, adb and install, per-OS toolchain detection; tools --only named error (TEST-01)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 02-08-PLAN.md — FPSLocker configs at a pinned commit with head fallback, commit and SHA-256 in the log and build folder (HARD-03, PKG-07)
+- [x] 02-08-PLAN.md — FPSLocker configs at a pinned commit with head fallback, commit and SHA-256 in the log and build folder (HARD-03, PKG-07)
 - [ ] 02-09-PLAN.md — One language list through porter inspect, escaped game card, system fixed font (HARD-08, HARD-10)
 
 **Wave 5** *(blocked on Wave 4 completion)*
@@ -149,7 +149,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Bridge, Bundles and CI | 10/10 | Complete    | 2026-10-30 |
-| 2. Porter Hardening | 7/10 | In Progress | - |
+| 2. Porter Hardening | 8/10 | In Progress | - |
 | 3. Host Toolchains and Guided First Run | 0/TBD | Not started | - |
 | 4. Game Library and Per-Game Settings | 0/TBD | Not started | - |
 | 5. Device Manager and Diagnostics | 0/TBD | Not started | - |
