@@ -37,6 +37,16 @@ else:
     import fcntl; fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
 print('held', flush=True); time.sleep(60)'''
 
+# argv: repo, folder, command, out folder, key, go-file. Holds the lock; once the go-file exists, builds a translator into the out folder (key file last) and exits
+BUILT = '''import sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from porter import lock
+f = lock.take(sys.argv[2], sys.argv[3]); print('held', flush=True)
+out, go = Path(sys.argv[4]), Path(sys.argv[6]); t = time.monotonic()
+while not go.exists() and time.monotonic() - t < 30: time.sleep(0.05)
+time.sleep(0.5); out.mkdir(parents=True, exist_ok=True); (out / 'dmsh_xlate.dll').write_text('built by the first port')
+(out.parent / (out.name + '.key')).write_text(sys.argv[5] + '\\n')'''
 
 class Spy(io.FileIO):   # CR-02: Windows refuses a read that overlaps another process's locked range; this makes POSIX refuse it too, so the bound is pinned off Windows
     def __init__(self, *a, **kw): super().__init__(*a, **kw); self.reads = []
@@ -87,6 +97,20 @@ class Lock(unittest.TestCase):
             d1, k1 = port.translator(); d2, k2 = port.translator()
             self.assertEqual((k1, k2), ('1' * 64, '2' * 64)); self.assertNotEqual(d1, d2)
             self.assertEqual(d1.read_text(), '1' * 64); self.assertEqual(d2.read_text(), '2' * 64)
+
+    def test_waiting_port_reuses_translator(self):   # CR-03: the two first ports after an engine update; the one that waited used to rebuild and swap over the translator the first had just built
+        from porter import nuget, paths, pipeline
+        K = 'c' * 64; ran = []
+        with mock.patch.dict(os.environ, {'NX2A_HOME': tempfile.mkdtemp(prefix='nx2a_test_home_')}):
+            tools = paths.user_dir() / 'tools'; out = tools / f'dmsh_xlate-{K[:12]}'; go = tools / 'go'
+            self.hold(tools, 'tool build', BUILT, str(out), K, str(go))
+            def fp(*a, **kw): go.touch(); return K   # runs just before translator()'s first reuse check: the holder builds only after that check has failed
+            def run(cmd, log, env=None, **kw):
+                ran.append(cmd[1])
+                if cmd[1] == 'build': o = Path(cmd[cmd.index('-o') + 1]); o.mkdir(parents=True, exist_ok=True); (o / 'dmsh_xlate.dll').write_text('rebuilt')
+            with mock.patch.object(pipeline.nsp, 'fingerprint', fp), mock.patch.object(pipeline.nsp, 'run', run), mock.patch.object(nuget, 'check', lambda project: None):
+                self.assertEqual(self.translator_port().translator(), (out / 'dmsh_xlate.dll', K))
+            self.assertEqual(ran, ['restore']); self.assertEqual((out / 'dmsh_xlate.dll').read_text(), 'built by the first port')
 
     def test_second_take_names_holder(self):
         from porter import lock
