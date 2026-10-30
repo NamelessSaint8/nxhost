@@ -100,7 +100,7 @@ if dst.exists(): shutil.rmtree(dst)
 tmp.rename(dst)
 return man
 ```
-Replace with aside swap + `recover(dst)` (RESEARCH Pattern 6). Module is stdlib-only; if not importing `nsp.swap_in`, copy its Windows retry loop (build_ipa_from_nsp.py:365-369, the Tales of Eternia comment). Manifest gains additive `build=str(work)` (or sidecar, Open Question 3). Hook `datapack.recover(data)` in `cli.cmd_install` before reading the manifest.
+Replace with aside swap + `recover(dst)` (RESEARCH Pattern 6). Module is stdlib-only; if not importing `nsp.swap_in`, copy its Windows retry loop (build_ipa_from_nsp.py:365-369, the Tales of Eternia comment). The build folder goes in a host-only sidecar `<App>-data.build` beside the pack, never in the manifest (D-14, decided 2026-10-30; Open Question 3 resolved). Hook `datapack.recover(data)` in `cli.cmd_install` before reading the sidecar.
 
 ### `porter/adb.py` (MOD)
 One line in `push_tree` (~line 155):

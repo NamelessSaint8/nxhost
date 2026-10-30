@@ -635,16 +635,22 @@ def fake(table, calls):
 | A9 | `os.link` no-clobber publish of the key is worth it over `os.replace` (two simultaneous first ports) | Pattern 7 | Over-engineering at worst; the locked text says `os.replace` (user may prefer it) |
 | A10 | Power loss after D-09 is an accepted residual risk | Pitfall 10 | A rare corrupt reuse after a machine crash; the user deletes the build folder |
 
-## Open Questions
+**Confirmed 2026-10-30:** the developer confirmed A1 (version floor or the `ALLOW_MISSING` marker, now D-13) and A2 (compare the contentHash, D-05 as amended). See the amendment in `02-CONTEXT.md`. A9 stays the planner's choice in a discretion area.
+
+## Open Questions (RESOLVED)
 
 1. **Lock shared tool builds across different games?**
    - What we know: the per-folder lock leaves `<user dir>/tools/dmsh_xlate.partial` and the engine `obj/` folders open to two ports of different games.
    - Recommendation: add the blocking `tools/.build.lock` (three lines with the same helper). Ask only if the planner wants to keep HARD-04 strictly scoped.
+   - **Resolution:** Added (planner decision, no user input needed). Plan 02-10 Task 2 gives `porter/lock.py` `take(..., wait=True)` and holds `<user dir>/tools/.porter.lock` around NuGet restore, the check and the build. Two ports of different games would otherwise build the shared translator and the engine's `nx_extract` `obj/` folders at the same time. The per-folder lock (02-01) still stops at once; the tools lock waits and says whom it is waiting for.
 2. **HARD-09 "recursive, including DLC folders":** count the files the port reads (exact; DLC NSPs are top-level per `scan_nsps`), or `rglob` the folder for `.nsp/.xci` (literal, over-counts subfolders the port ignores)?
    - Recommendation: the scanned family plus the re-check after extraction. Confirm with the user if the literal wording is meant.
+   - **Resolution:** Developer confirmed on 2026-10-30 (D-15): count the base, update and DLC files that `inspect`/`scan_nsps` picked, plus a recursive count of the build folder, then check again after extraction with the real sizes. Plan 02-05 implements this.
 3. **Where install finds the build folder:** a `build` key in `nx2a-data.json` (pushed to the device, so the device sees a local path) or a sidecar beside the pack?
    - Recommendation: manifest key (simplest); a sidecar if the user minds the path on the device.
+   - **Resolution:** Developer chose the sidecar on 2026-10-30 (D-14). `datapack.build` writes the build folder's path to `<App>-data.build`, a file next to the `<App>-data/` pack folder on the host and outside the folder that gets pushed. `porter install` reads it to find the lock. `nx2a-data.json` gets no `build` key, and no host path reaches the device. Plan 02-01 implements it and tests that the pack holds no host path.
 4. **Ryujinx patch base:** confirm the unmarked Shader hunks are local changes and not upstream commits between canaries; the patch task should review them before recording "Canary-1.3.351 + patch".
+   - **Resolution:** Planner decision, no user input needed. The patch is made against Ryubing Canary-1.3.351 (`475615f`), the closest upstream commit. Shader diffs without `nxnative:` markers are treated as local changes. "Canary-1.3.351 + nxnative-local.patch" rebuilds the vendored tree either way, because every hunk is by definition a difference from that base. Plan 02-03 checks this by applying the patch to a clean `475615f` checkout and comparing the result with the vendored tree, and its README lists the unmarked files so a later re-vendor can review them.
 
 ## Environment Availability
 

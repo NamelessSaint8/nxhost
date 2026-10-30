@@ -64,7 +64,7 @@ Plans:
 **Depends on**: Phase 1
 **Requirements**: HARD-01, HARD-02, HARD-03, HARD-04, HARD-05, HARD-06, HARD-07, HARD-08, HARD-09, HARD-10, PKG-07, TEST-01
 **Success Criteria** (what must be TRUE):
-  1. Crafted zip and tar archives with `..`, absolute paths or symlinks are refused and write nothing outside the unpack folder, and porter refuses to run on a Python older than 3.11.13, 3.12.11 or 3.13.4.
+  1. Crafted zip and tar archives with `..`, absolute paths or symlinks are refused and write nothing outside the unpack folder, and porter refuses to run on a Python without the CVE-2025-4517 tarfile fix (below 3.11.13, 3.12.11 or 3.13.4 and lacking `os.path.ALLOW_MISSING`).
   2. A port killed at any stage redoes that stage on the next run, a crash during the data-pack swap leaves the game with a working pack, and starting a second port of the same game folder shows "already running".
   3. Each downloaded toolchain, NuGet package and FPSLocker config is checked against the exact version and hash recorded in one manifest, the FPSLocker hash appears in the port log, and a mismatch stops with a clear message.
   4. The signing key is created atomically with mode 0600, and when the key file exists but can't be read, porter stops with an error instead of making a new key.
@@ -73,7 +73,7 @@ Plans:
 
 Plans:
 **Wave 1**
-- [ ] 02-01-PLAN.md — Build-folder lock shared by port and install, data pack swapped aside with recovery, chunked install MD5 (HARD-04, HARD-07)
+- [ ] 02-01-PLAN.md — Build-folder lock shared by port and install (found through a host-only sidecar), data pack swapped aside with recovery, chunked install MD5 (HARD-04, HARD-07)
 - [ ] 02-02-PLAN.md — Signing key written whole and 0600, unreadable key refused (mkapk + doctor row), probe app on the committed signer (HARD-02, HARD-10)
 - [ ] 02-03-PLAN.md — Hook bootstrap script, *.code-workspace ignored, FLIP version, Ryujinx patch against Canary-1.3.351, arch_rules and upstream-output checks (HARD-10)
 
@@ -90,7 +90,7 @@ Plans:
 - [ ] 02-09-PLAN.md — One language list through porter inspect, escaped game card, system fixed font (HARD-08, HARD-10)
 
 **Wave 5** *(blocked on Wave 4 completion)*
-- [ ] 02-10-PLAN.md — NuGet pins generated and checked before every build, shared tools lock, CONCERNS.md closure table (PKG-07, HARD-04)
+- [ ] 02-10-PLAN.md — NuGet content-hash pins generated and checked before every build, shared tools lock, CONCERNS.md closure table (PKG-07, HARD-04)
 
 ### Phase 3: Host Toolchains and Guided First Run
 **Goal**: A tester on any of the four hosts goes from a fresh download to a ready setup (keys, toolchains, a connected device) by following the GUI
