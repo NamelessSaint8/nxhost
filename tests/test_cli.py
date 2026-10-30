@@ -1,6 +1,7 @@
 # porter's command line answers every error with a named message, never a bare traceback: each case runs `python -m porter` as a subprocess with its own NX2A_HOME
 # (no game files, toolchains or device), and devtools/device.py takes its device and app from the environment before devtools/device.json.
-import json, os, subprocess, sys, tempfile, unittest
+import contextlib, io, json, os, struct, subprocess, sys, tempfile, unittest
+from argparse import Namespace
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -74,6 +75,45 @@ class ErrorPaths(unittest.TestCase):
         r = porter('config', 'nope', 'x', home=self.home)
         self.assertEqual(r.returncode, 1, r.stderr); self.no_traceback(r)
         self.assertIn('nope', r.stderr)
+
+
+class Languages(unittest.TestCase):   # D-12: inspect's languages are upstream's nacp.LANGUAGES, narrowed by the control.nacp of an extraction a port made
+    TID = '0100000000AAA000'
+
+    def setUp(self): self.dir = Path(tempfile.mkdtemp())
+
+    def languages(self, pack='v0'):   # cmd_inspect in process, pipeline.inspect stood in for (no game files)
+        from unittest import mock
+        from porter import cli
+        out = io.StringIO()
+        with mock.patch('porter.pipeline.inspect', return_value={'title_id': self.TID, 'pack': pack, 'supported': True}), contextlib.redirect_stdout(out):
+            self.assertEqual(cli.cmd_inspect(Namespace(folder=str(self.dir), json=True)), 0)
+        return json.loads(out.getvalue())['languages']
+
+    def nacp(self, flags, version='v0'):
+        b = bytearray(0x4000); struct.pack_into('<I', b, 0x302C, flags)
+        d = self.dir / f'{self.TID}_build/extract/{version}'; d.mkdir(parents=True); (d / 'control.nacp').write_bytes(b)
+
+    def full(self):
+        from porter.upstream import nacp
+        return [{'code': c, 'name': n} for c, n in nacp.LANGUAGES]
+
+    def test_from_extraction(self):
+        self.nacp(1 << 2 | 1 << 3)
+        self.assertEqual(self.languages(), [{'code': 'ja', 'name': 'Japanese'}, {'code': 'fr', 'name': 'French'}])
+
+    def test_packed_version_first(self):
+        self.nacp(1 << 2); self.nacp(1 << 3, 'v65536')
+        self.assertEqual([x['code'] for x in self.languages('v65536')], ['fr'])
+
+    def test_no_extraction_full_list(self):
+        got = self.languages()
+        self.assertEqual(len(got), 16); self.assertEqual(got, self.full())
+        self.assertEqual(len({x['code'] for x in got}), 16)
+
+    def test_no_flags_full_list(self):
+        self.nacp(0)
+        self.assertEqual(self.languages(), self.full())
 
 
 class DeviceTool(unittest.TestCase):

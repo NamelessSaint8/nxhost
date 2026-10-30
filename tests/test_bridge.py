@@ -406,6 +406,24 @@ class Downloads(unittest.TestCase):   # the Setup tab's confirm dialog: an untes
         self.assertNotIn('<b>x</b>', text)
 
 
+class Escaping(unittest.TestCase):   # the game card shows porter's strings as text, the language box offers porter's list, the log takes the system fixed font
+    def info(self, **kw): return dict({'title_id': '0100000000AAA000', 'updates': [], 'dlc': [], 'android': None, 'supported': True, 'reason': ''}, **kw)
+
+    def test_language_box(self):
+        w = window(self); port = w.port; box = port.language
+        langs = lambda *cs: [{'code': c, 'name': n} for c, n in cs]
+        port.on_inspect(self.info(languages=langs(('ja', 'Japanese'), ('fr', 'French'))), 0, None)
+        self.assertEqual([box.itemData(i) for i in range(box.count())], ['', 'ja', 'fr']); self.assertEqual(box.itemText(0), 'English (default)')
+        box.setCurrentIndex(box.findData('fr'))
+        port.on_inspect(self.info(languages=langs(('fr', 'French'), ('de', 'German'))), 0, None)
+        self.assertEqual(box.currentData(), 'fr')
+        port.on_inspect(self.info(), 0, None)
+        self.assertEqual(box.count(), 1); self.assertEqual(box.currentData(), '')
+
+    def test_one_language_source(self):   # upstream's nacp.LANGUAGES through porter inspect, no copy in the GUI
+        self.assertIsNone(re.search(r'^LANGUAGES\b', (REPO / 'gui/app.py').read_text(encoding='utf-8'), re.M))
+
+
 FIXTURES = REPO / 'tests/fixtures/bridge'
 
 
