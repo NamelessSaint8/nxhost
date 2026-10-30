@@ -109,19 +109,32 @@ class Marker(InProcess):
             self.assertEqual(self.run_cmd(fn)[0], code)
             self.assertEqual((seen, self.marker().is_file()), ([True], kept), code)
 
-    def test_cut_off_redoes_stages(self):
+    def cut_off(self, marker, stage=None):   # a port that finds this marker and stops (130) after build_folder, or after stage
         from porter import runlog
-        old = [self.work / 'aoc.key', self.work / 'android/shaders.dmsv.key']; game_file = self.work / 'extract/RomFS/data.key'
-        for f in old + [game_file]: f.parent.mkdir(parents=True, exist_ok=True); f.write_text('k', encoding='utf-8')
-        self.marker().write_text('1 earlier', encoding='utf-8')
-        fresh = []
+        from porter.upstream import PROG
+        keys = [self.work / 'aoc.key', self.work / 'android/shaders.dmsv.key']
+        for f in keys: f.parent.mkdir(parents=True, exist_ok=True); f.write_text('k', encoding='utf-8')
+        if marker is not None: self.marker().write_text(marker, encoding='utf-8')
         def fn(a):
-            runlog.build_folder(self.work, self.work / 'logs'); fresh.append(self.marker().read_text(encoding='utf-8')); return 130
+            runlog.build_folder(self.work, self.work / 'logs')
+            if stage: PROG.stage(stage)
+            return 130
         self.run_cmd(fn)
-        self.assertEqual([f.exists() for f in old], [False, False])
-        self.assertTrue(game_file.is_file())
-        self.assertNotEqual(fresh, ['1 earlier'])
-        self.assertIn('the last port of this game was cut off', self.log())
+        return [f.is_file() for f in keys]
+
+    def test_cut_off_names_stage_keeps_keys(self):   # D-09: the keys, written last and whole, decide what runs again
+        self.assertEqual(self.cut_off('1 earlier\tshader split'), [True, True])
+        self.assertNotEqual(self.marker().read_text(encoding='utf-8'), '1 earlier\tshader split')
+        self.assertIn('[RED] the last port of this game was cut off in shader split: the stages it had not finished run again', self.log())
+
+    def test_old_marker_without_stage(self):   # a marker Phase 1 wrote: no stage after the time
+        self.assertEqual(self.cut_off('1 earlier'), [True, True])
+        self.assertIn('the last port of this game was cut off: the stages it had not finished run again', self.log())
+        self.assertNotIn('cut off in', self.log())
+
+    def test_stage_written_into_marker(self):
+        self.cut_off(None, stage='rewrite')
+        self.assertTrue(self.marker().read_text(encoding='utf-8').rstrip('\n').endswith('\trewrite'))
 
 
 class Retention(InProcess):
