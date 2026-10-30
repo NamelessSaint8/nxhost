@@ -298,7 +298,9 @@ class SetupTab(QWidget):
         self.dl_btn.setEnabled(True); self.dl_step.setText('')
         if fail: self.dl_step.setTextFormat(Qt.RichText); self.dl_step.setText(failed(fail)); return   # the real cause: a "check the connection" dialog hid a missing lz4
         if not items: QMessageBox.information(self, 'Download', 'Nothing to download: every tool is there.'); return
-        rows = ''.join(f'<li><b>{it["name"]}</b> {it["version"]}, {size(it["size"])}, from {it["url"].split("/")[2]} (<a href="{it["license"]}">license</a>)</li>' for it in items)
+        e = lambda x: html.escape(str(x), quote=True)   # index strings are text; quote=True for the href
+        rows = ''.join(f'<li><b>{e(it["name"])}</b> {e(it["version"])}{" (untested)" if it.get("untested") else ""}, {size(it["size"])}, from {e(it["url"].split("/")[2])}'
+                       f' (<a href="{e(it["license"])}">license</a>)</li>' for it in items)
         box = QMessageBox(QMessageBox.Question, 'Download missing tools', f'<p>Download and unpack into your nx2android folder:</p><ul>{rows}</ul>'
                           '<p>They come from their makers under their own licenses: downloading them means you accept those.</p>', QMessageBox.Yes | QMessageBox.No, self)
         box.setTextFormat(Qt.RichText)

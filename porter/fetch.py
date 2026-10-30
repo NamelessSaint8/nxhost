@@ -1,12 +1,13 @@
-# Downloading the toolchains a port needs, for a player who has none (`porter tools --download`, the Setup tab's Download button): the Android NDK r27c and
-# platform-tools from Google's SDK repository, the newest .NET SDK 10 from Microsoft's release list. Each archive is checked against the checksum its list gives,
-# then unpacked into the player's nx2android folder (paths.player_tools()), where toolchain.find_* look, and the settings point at it. The tool ships none of them:
-# they come from their makers, under their licenses (LICENSES).
-import hashlib, json, os, platform, shutil, stat, sys, tarfile, urllib.request, xml.etree.ElementTree as ET, zipfile
+# Downloading the toolchains a port needs, for a player who has none (`porter tools --download`, the Setup tab's Download button): the files pinned in
+# porter/pins.py (Android NDK r27c and platform-tools from Google, the .NET SDK 10 from Microsoft), each checked against its pinned hash. When a vendor no longer
+# serves a pinned file (404/410), platform-tools and .NET take the vendor's newest (same .NET major) checked against the vendor's listed hash, marked untested;
+# the NDK never falls back. Then unpacked into the player's nx2android folder (paths.player_tools()), where toolchain.find_* look, and the settings point at it.
+# The tool ships none of them: they come from their makers, under their licenses (LICENSES).
+import hashlib, json, os, platform, shutil, stat, sys, tarfile, urllib.error, urllib.request, xml.etree.ElementTree as ET, zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from porter import config, toolchain, tls
+from porter import config, pins, toolchain, tls
 from porter.paths import player_tools
 from porter.upstream import BuildError, PROG
 
@@ -16,6 +17,7 @@ DOTNET_INDEX = f'https://builds.dotnet.microsoft.com/dotnet/release-metadata/{to
 LICENSES = {'Android NDK': 'https://developer.android.com/studio/terms', 'adb': 'https://developer.android.com/studio/terms',
             '.NET SDK': 'https://github.com/dotnet/core/blob/main/license-information.md'}
 NDK_PACKAGE = f'ndk;{toolchain.NDK_REVISION}'
+FOLDERS = {'Android NDK': f'android-ndk-{toolchain.NDK_RELEASE}', 'adb': 'platform-tools', '.NET SDK': 'dotnet'}   # under player_tools()
 UNPACKED = {'Android NDK': 2.6 * 2**30, '.NET SDK': 0.9 * 2**30, 'adb': 0.05 * 2**30}   # disk space unpacked (r27c on Windows: 2.5 GB), for the free-space check
 
 
@@ -29,12 +31,17 @@ class Item:
     algo: str      # 'sha1' / 'sha512'
     folder: str    # under player_tools(): android-ndk-r27c, dotnet, platform-tools
     license: str
+    untested: bool = False   # not the pinned file: the vendor's newest, or a host with no pinned row
 
     def as_dict(self): return dict(self.__dict__)
 
 
 def _get(url, timeout=60):
     with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'nx2android'}), timeout=timeout, context=tls.context()) as r: return r.read()
+
+
+def _head(url):   # the size a HEAD gives (0 when the server names none); a gone file raises HTTPError
+    with urllib.request.urlopen(urllib.request.Request(url, method='HEAD', headers={'User-Agent': 'nx2android'}), timeout=60, context=tls.context()) as r: return int(r.headers.get('Content-Length') or 0)
 
 
 def _google_os(): return {'win32': 'windows', 'darwin': 'macosx'}.get(sys.platform, 'linux')
@@ -69,6 +76,13 @@ def _dotnet():
     raise BuildError(f'no .NET SDK {toolchain.DOTNET_MAJOR} for {rid} in {DOTNET_INDEX}')
 
 
+def _pinned(name):
+    """(version, url, size, algo, hash) of the pinned file for this host, or None: no row (the index path, untested)"""
+    pin, host = {'Android NDK': (pins.NDK, _google_os()), 'adb': (pins.PLATFORM_TOOLS, _google_os()), '.NET SDK': (pins.DOTNET, _dotnet_rid())}[name]
+    row = pin['files'].get(host)
+    return (pin['version'], *row) if row else None
+
+
 def missing(cfg=None):
     """The doctor's rows a download can fix: NDK r27c, .NET SDK 10, adb"""
     rows = {r.name: r for r in toolchain.checks(cfg)}
@@ -76,17 +90,21 @@ def missing(cfg=None):
 
 
 def plan(names=None):
-    """The Items to download: the missing tools (or `names`), with their sizes"""
+    """The Items to download: the missing tools (or `names`), with their sizes. The pinned file first; the vendor's newest only when it is gone, marked untested"""
     names = missing() if names is None else names
     out, index = [], None
     for n in names:
+        if p := _pinned(n):
+            v, url, size, algo, h = p
+            try: out.append(Item(n, v, url, _head(url) or size, h, algo, FOLDERS[n], LICENSES[n])); continue
+            except urllib.error.HTTPError as e:
+                if e.code not in (404, 410): raise   # gone is not a mismatch; any other answer stops as before
+                if n == 'Android NDK': raise BuildError(f'NDK {toolchain.NDK_RELEASE} is no longer served at {url}: install it yourself (developer.android.com/ndk/downloads) and set its folder') from e
         if n in ('Android NDK', 'adb') and index is None: index = ET.fromstring(_get(GOOGLE_INDEX))
-        if n == 'Android NDK': out.append(_google(index, NDK_PACKAGE, n, f'android-ndk-{toolchain.NDK_RELEASE}'))
-        elif n == 'adb': out.append(_google(index, 'platform-tools', n, 'platform-tools'))
-        elif n == '.NET SDK': out.append(_dotnet())
+        it = _dotnet() if n == '.NET SDK' else _google(index, NDK_PACKAGE if n == 'Android NDK' else 'platform-tools', n, FOLDERS[n])
+        it.untested = True; out.append(it)   # checked against the vendor's own listed hash
     for it in out:
-        if not it.size:
-            with urllib.request.urlopen(urllib.request.Request(it.url, method='HEAD', headers={'User-Agent': 'nx2android'}), timeout=60, context=tls.context()) as r: it.size = int(r.headers.get('Content-Length') or 0)
+        if not it.size: it.size = _head(it.url)
     return out
 
 
@@ -97,8 +115,9 @@ def _download(it, dest):   # to dest, counting bytes and hashing as it goes; a w
         PROG.set(step='downloading', done=0, total=total or None, unit='B')
         while chunk := r.read(1 << 20):
             f.write(chunk); h.update(chunk); done += len(chunk); PROG.set(done=done)
-    if h.hexdigest().lower() != it.hash.lower():
-        part.unlink(missing_ok=True); raise BuildError(f'{it.url}: the download\'s {it.algo} is not the one its list gives (try again)')
+    if (got := h.hexdigest().lower()) != it.hash.lower():
+        part.unlink(missing_ok=True)
+        raise BuildError(f'{Path(it.url).name}: its {it.algo} is {got}, not the expected {it.hash} (from {it.url}): try again, and report it if it repeats')
     part.replace(dest)
 
 
@@ -141,6 +160,7 @@ def download(items):
     PROG.plan(len(items))
     keys = {'Android NDK': ('ndk', ''), '.NET SDK': ('dotnet', f'dotnet{toolchain.EXE}'), 'adb': ('adb', f'adb{toolchain.EXE}')}
     for it in items:
+        if it.untested: PROG.say(f'[RED] {it.name} {it.version} is not the version porter pins (porter/pins.py): untested')
         PROG.stage(f'{it.name} {it.version}', step='downloading')
         arc = root / Path(it.url).name
         try:
