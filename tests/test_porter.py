@@ -171,15 +171,39 @@ class Misc(unittest.TestCase):
     def test_app_stem(self):
         self.assertEqual(pipeline.app_stem(game.load(NEO), 'NEO'), 'NeoTheWorldEndsWithYou')
 
-    def test_disk_space(self):   # twice the game files, less what the build folder holds, plus 1 GB
+    def test_disk_space(self):   # twice the files the port reads (base, updates, DLC, wherever they sit), less what the build folder holds, plus 1 GB (D-15)
         from types import SimpleNamespace as NS
-        d = Path(tempfile.mkdtemp(prefix='nx2a_test_game_')); (d / 'g.nsp').write_bytes(b'\0' * 2**20); work = d / 'build'
-        p = NS(o=NS(folder=d), work=work); real = shutil.disk_usage
+        d = Path(tempfile.mkdtemp(prefix='nx2a_test_game_')); work = d / 'build'; (d / 'dlc').mkdir(); M, G = 2**20, 2**30
+        fam = {'base': d / 'g.nsp', 'updates': [(65536, d / 'u.nsp')], 'dlc': [(1, 0, d / 'dlc/a.nsp')]}
+        for f in (d / 'g.nsp', d / 'u.nsp', d / 'dlc/a.nsp'): f.write_bytes(b'\0' * M)
+        (d / 'other.nsp').write_bytes(b'\0' * 2 * M)   # not in the family: not counted
+        p = NS(o=NS(folder=d), work=work, fam=fam); real = shutil.disk_usage
         try:
-            shutil.disk_usage = lambda _: NS(free=2**30 + 2**20)
+            shutil.disk_usage = lambda _: NS(free=6 * M + G - 1)
             with self.assertRaises(pipeline.BuildError): pipeline.Port.check_space(p)
-            work.mkdir(); (work / 'x').write_bytes(b'\0' * 2**20); pipeline.Port.check_space(p)   # a build folder already there counts
-        finally: shutil.disk_usage = real
+            shutil.disk_usage = lambda _: NS(free=6 * M + G); pipeline.Port.check_space(p)
+            shutil.disk_usage = lambda _: NS(free=5 * M + G)
+            work.mkdir(); (work / 'sub').mkdir(); (work / 'sub/x').write_bytes(b'\0' * M); pipeline.Port.check_space(p)   # a build folder already there counts, recursively
+        finally: shutil.disk_usage = real; shutil.rmtree(d, ignore_errors=True)
+
+    def test_disk_space_after_extraction(self):   # the re-check with real sizes; an output folder on another volume needs the RomFS and DLC again (hard links become copies)
+        from types import SimpleNamespace as NS
+        d = Path(tempfile.mkdtemp(prefix='nx2a_test_game_')); work, out = d / 'build', d / 'out'; M, G = 2**20, 2**30
+        (d / 'g.nsp').write_bytes(b'\0' * M); out.mkdir()
+        for f in (work / 'extract/v0/RomFS/f', work / 'aoc/1/f'): f.parent.mkdir(parents=True); f.write_bytes(b'\0' * M)
+        p = NS(o=NS(folder=d, out=out), work=work, fam={'base': d / 'g.nsp', 'updates': [], 'dlc': []}, game=work / 'extract/v0', aoc=work / 'aoc')
+        real_du, real_stat, free = shutil.disk_usage, os.stat, {}
+        try:
+            shutil.disk_usage = lambda q: NS(free=free.get(Path(q), G))
+            pipeline.Port.check_space(p, extracted=True)   # same volume: 2 × 1 MiB − 2 MiB built + 1 GiB
+            def stat(q, *a, **k):
+                r = real_stat(q, *a, **k)
+                return NS(st_dev=r.st_dev + 1, st_mode=r.st_mode, st_size=r.st_size) if Path(q) == out else r
+            os.stat = stat
+            free[out] = 2 * M + G - 1
+            with self.assertRaisesRegex(pipeline.BuildError, re.escape(str(out))): pipeline.Port.check_space(p, extracted=True)
+            free[out] = 2 * M + G; pipeline.Port.check_space(p, extracted=True)
+        finally: shutil.disk_usage, os.stat = real_du, real_stat; shutil.rmtree(d, ignore_errors=True)
 
 
 class FpsLocker(unittest.TestCase):   # porter/fpslocker.py: FPSLocker-Warehouse configs → the host's rows (hle_fpslock.c DM_FPS_LOCKS) and the rewriter's cuts
