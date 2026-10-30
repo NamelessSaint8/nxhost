@@ -141,6 +141,24 @@ class Env(unittest.TestCase):   # HARD-06: a port never writes os.environ; every
         self.assertIsNone(re.search(r"os\.environ\[[^]]*\]\s*=(?!=)|os\.environ\.(update|setdefault|pop)\(", code))
 
 
+class Overrides(unittest.TestCase):   # porter/upstream.py _overrides: what porter replaces in upstream's NSP script, checked at import
+    def test_loaded_module(self):
+        from porter import upstream
+        self.assertIs(nsp.nacp, upstream.nacp); self.assertIs(nsp.pg, upstream.profile_guess)
+        if sys.platform != 'darwin': self.assertFalse(nsp.can_clone(Path('.')))
+        self.assertNotIn('android.tsv', [f.name for f in nsp.profile_files(game.load(NEO))])
+
+    def test_missing_attribute_fails_loudly(self):   # an upstream rename fails at import, naming the attribute
+        from types import SimpleNamespace as NS
+        from porter.upstream import _overrides
+        def main():
+            global nacp, pg; nacp = pg = None
+        def main_no_pg():
+            global nacp; nacp = None
+        with self.assertRaisesRegex(AssertionError, 'profile_files'): _overrides(NS(main=main, can_clone=lambda d: True))
+        with self.assertRaisesRegex(AssertionError, 'nacp.*pg|pg.*nacp'): _overrides(NS(main=main_no_pg, can_clone=lambda d: True, profile_files=lambda g: []))
+
+
 class Misc(unittest.TestCase):
     def test_config_roundtrip(self):
         config.set_value('device', 'abc:5555'); self.assertEqual(config.load()['device'], 'abc:5555')
