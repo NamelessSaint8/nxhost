@@ -5,15 +5,15 @@ titles: json
 findings:
   - id: WR-01
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "The CA-file fallback can run on Windows, where `/etc/ssl/...` resolves against the current drive"
   - id: WR-02
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "The urlopen scan test accepts any `context=`, not `context=tls.context()`"
   - id: WR-03
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "The hook overrides are copies of PyInstaller 6.22.3's hooks, with nothing that fails when PyInstaller moves"
   - id: IN-01
     severity: info
@@ -43,18 +43,18 @@ findings:
     severity: info
     disposition: open
     title: "Two ways of escaping, and a misleading status on quit"
-open: 7
+open: 4
 total: 10
-recorded: 2026-10-30T07:51:36.899Z
+recorded: 2026-10-30T15:12:18.462Z
 ---
 
 # Phase 01: Code Review Disposition
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| WR-01 | warning | open | - |
-| WR-02 | warning | open | - |
-| WR-03 | warning | open | - |
+| WR-01 | warning | fixed | 01-REVIEW-FIX.md |
+| WR-02 | warning | fixed | 01-REVIEW-FIX.md |
+| WR-03 | warning | fixed | 01-REVIEW-FIX.md |
 | IN-01 | info | open | - |
 | IN-02 | info | open | - |
 | IN-03 | info | open | - |
