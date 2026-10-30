@@ -251,8 +251,50 @@ class FpsLocker(unittest.TestCase):   # porter/fpslocker.py: FPSLocker-Warehouse
         ns = {}; exec(fpslocker.patches_py(self.BID, cuts), ns); self.assertEqual(ns['CUTS'][self.BID][0][:3], (0x10, '101112', '1f2003'))
 
     def test_url(self):
-        from porter import fpslocker
+        from porter import fpslocker, pins
         self.assertTrue(fpslocker.url('0100fd501f95a000', self.BID).endswith('/patches/0100FD501F95A000/D49165C05EAD8AE1.yaml'))
+        self.assertIn(f'/{pins.FPSLOCKER}/', fpslocker.url('0100fd501f95a000', self.BID)); self.assertIn('/abc/', fpslocker.url('0100fd501f95a000', self.BID, 'abc'))
+
+    # fetch over a faked urlopen: {url: body} answers 200, any other URL a 404; the configs are the synthetic UNITY sample, never the warehouse's
+    TID, HEAD = '0100FD501F95A000', 'b' * 40
+
+    def fetch(self, table):
+        import io, urllib.error
+        from unittest import mock
+        from porter import fpslocker
+        seen = []
+        def urlopen(req, timeout=None, context=None):
+            seen.append(req.full_url)
+            if req.full_url not in table: raise urllib.error.HTTPError(req.full_url, 404, 'gone', {}, None)
+            return io.BytesIO(table[req.full_url].encode())
+        with mock.patch.object(fpslocker.urllib.request, 'urlopen', urlopen): return fpslocker.fetch(self.TID, self.BID), seen
+
+    def test_pinned_commit(self):
+        from porter import fpslocker, pins
+        got, seen = self.fetch({fpslocker.url(self.TID, self.BID): self.UNITY})
+        self.assertEqual(got, (self.UNITY, pins.FPSLOCKER)); self.assertNotIn(fpslocker.HEAD_API, seen)
+
+    def test_head_fallback(self):   # a build newer than the pin: the config at v4's head
+        from porter import fpslocker
+        got, _ = self.fetch({fpslocker.HEAD_API: self.HEAD + '\n', fpslocker.url(self.TID, self.BID, self.HEAD): self.UNITY})
+        self.assertEqual(got, (self.UNITY, self.HEAD))
+
+    def test_none_anywhere(self):
+        from porter import fpslocker, pins
+        self.assertIsNone(self.fetch({fpslocker.HEAD_API: self.HEAD})[0])
+        got, seen = self.fetch({fpslocker.HEAD_API: pins.FPSLOCKER})   # head is the pin: its config is not asked for twice
+        self.assertIsNone(got); self.assertEqual(seen.count(fpslocker.url(self.TID, self.BID)), 1)
+
+    def test_bad_head(self):   # a rate-limit page or anything not a commit takes the cached-copy path
+        from porter import fpslocker
+        with self.assertRaises(OSError): self.fetch({fpslocker.HEAD_API: '{"message": "API rate limit exceeded"}'})
+
+    def test_source_recorded(self):   # fps_unlock's source names the URL at the commit, the commit and the config's SHA-256; the build folder's fpslock.tsv keeps it
+        import hashlib
+        from porter import fpslocker
+        src = f'{fpslocker.url(self.TID, self.BID, self.HEAD)} (commit {self.HEAD[:12]}, sha256 {hashlib.sha256(self.UNITY.encode()).hexdigest()})'
+        tsv, _ = fpslocker.convert(self.UNITY, b'', self.BID, src)
+        self.assertIn(src, tsv.splitlines()[0]); self.assertIn(src, fpslocker.patches_py(self.BID, [], src).splitlines()[0])
 
 
 if __name__ == '__main__':
