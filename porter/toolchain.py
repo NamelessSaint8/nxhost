@@ -1,12 +1,12 @@
 # The tools a port needs on the player's machine, found and checked (`porter doctor`, the GUI's setup screen). Nothing here is shipped with the tool:
 # the player installs the Android NDK (r27c), the .NET SDK (10) and, to install from the tool, platform-tools (adb), or has `porter tools --download` (porter.fetch)
 # fetch them from Google and Microsoft into their nx2android folder (paths.player_tools()), which the finders here also search.
-import glob, importlib.util, os, re, shutil, subprocess, sys
+import glob, importlib.util, json, os, re, shutil, subprocess, sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from porter import config
-from porter.paths import LOCAL_TOOLS, player_tools
+from porter.paths import LOCAL_TOOLS, player_tools, signing_key
 
 NDK_REVISION = '27.2.12479018'   # r27c: the NDK the Android host is built and tested with
 NDK_RELEASE = 'r27c'
@@ -89,6 +89,16 @@ def _importable(m):
     except (ImportError, ValueError): return False
 
 
+def _signing_key_check():
+    # here, not only in mkapk.py: a broken key would otherwise stop the port at the APK stage, 20 minutes in, and mkapk.py must never be left to replace it
+    p = signing_key(); bad = None
+    if p.exists():
+        try: d = json.loads(p.read_text(encoding='utf-8')); [int(v) for a, v in d.items() if a != 'cert']; bytes.fromhex(d['cert'])
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as e: bad = e
+    return Check('Signing key', bad is None, f'{p} cannot be read ({bad})' if bad else (str(p) if p.exists() else f'made on the first port: {p}'), path=str(p) if p.exists() else '',
+                 fix='restore it from a backup; or remove it on purpose and reinstall every port with --replace-signer (their saves on the device go with them)' if bad else '')
+
+
 def checks(cfg=None, keys=None):
     """Every requirement, as Check rows (the order the setup screen shows them)"""
     cfg = cfg if cfg is not None else config.load()
@@ -113,6 +123,7 @@ def checks(cfg=None, keys=None):
     k = keys or cfg.get('keys')
     out.append(Check('prod.keys', bool(k) and Path(k).is_file(), k if k and Path(k).is_file() else (f'no such file: {k}' if k else 'not set'), path=k or '',
                      fix='' if k and Path(k).is_file() else 'dump prod.keys from your own Switch and set its path'))
+    out.append(_signing_key_check())
     where = Path(cfg.get('out') or Path.home())   # the output folder's drive, or the home folder's (a port's build folder goes beside the game files: the port checks that drive itself)
     where = next((p for p in (where, *where.parents) if p.exists()), Path.home())
     free = shutil.disk_usage(where).free / 2**30
