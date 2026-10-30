@@ -58,12 +58,15 @@ def cmd_profiles(a):
 
 def cmd_inspect(a):
     from porter import pipeline
-    from porter.upstream import BuildError
+    from porter.upstream import BuildError, nacp
     try: info = pipeline.inspect(a.folder)
     except BuildError as e:
         if a.json: _print_json({'error': str(e)})
         else: print(e, file=sys.stderr)
         return 2
+    # D-12: one language list, upstream's; the flags come only from an extraction a port made (inspect never extracts), and no flags means every language
+    x = Path(a.folder) / f'{info["title_id"]}_build/extract'; f = next((n for n in [x / str(info.get('pack')) / 'control.nacp', *sorted(x.glob('*/control.nacp'))] if n.is_file()), None)
+    have = nacp.languages(f) if f else []; info['languages'] = [{'code': c, 'name': n} for c, n in nacp.LANGUAGES if not have or c in have]
     if a.json: _print_json(info); return 0 if info['supported'] else 2
     print(f'{info["title_id"]}  {info.get("name", "")}\n  base: {info["base"]}')
     for u in info['updates']: print(f'  update {u["version"]}: {u["file"]}')

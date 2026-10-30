@@ -15,8 +15,6 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, 
 from porter import config
 from gui.runner import Porter, call_json
 
-LANGUAGES = [('', 'English (default)'), ('ja', 'Japanese'), ('fr', 'French'), ('de', 'German'), ('it', 'Italian'), ('es', 'Spanish'), ('nl', 'Dutch'), ('pt', 'Portuguese'),
-             ('ru', 'Russian'), ('ko', 'Korean'), ('zh-Hans', 'Chinese (Simplified)'), ('zh-Hant', 'Chinese (Traditional)')]
 STATUS_COLOUR = {'playable': '#2e7d32', 'wip': '#ef6c00', 'boots': '#ef6c00', 'experimental': '#ef6c00', 'ios only': '#757575'}
 
 
@@ -67,8 +65,7 @@ class PortTab(QWidget):
 
         o = QGroupBox('Options'); f = QFormLayout(o)
         self.app_name = QLineEdit(); self.app_name.setPlaceholderText('the game\'s name')
-        self.language = QComboBox()
-        for code, name in LANGUAGES: self.language.addItem(name, code)
+        self.language = QComboBox(); self.language.addItem('English (default)', '')   # no --language: porter's default; on_inspect adds the game's languages
         self.out = QLineEdit(); self.out.setPlaceholderText('the game folder')
         self.install = QCheckBox('Install on the device when done')
         self.device = QComboBox(); self.device.setMinimumWidth(260)
@@ -125,6 +122,9 @@ class PortTab(QWidget):
     def on_inspect(self, info, code, fail):
         self.info = info
         if fail: self.card.setText(failed(fail)); return   # porter's own error names the cause (no NSP or XCI, a bad file); a crash or a hang shows stderr
+        cur = self.language.currentData(); self.language.clear(); self.language.addItem('English (default)', '')   # porter inspect's languages (D-12), the choice kept
+        for x in info.get('languages') or []: self.language.addItem(x['name'], x['code'])
+        self.language.setCurrentIndex(max(self.language.findData(cur), 0))
         a = info.get('android') or {}
         st = a.get('status', 'ios only' if info.get('profile') else 'not supported')
         col = STATUS_COLOUR.get(st, '#c62828')
