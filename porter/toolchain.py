@@ -84,6 +84,15 @@ def find_adb(cfg=None):
     return None
 
 
+FLOORS = {11: 13, 12: 11, 13: 4}   # CVE-2025-4517 and its siblings: tarfile's 'data' filter could be bypassed before these micro versions (gh-135034)
+
+
+def python_ok(v=None, marker=None):
+    """3.11+ with the tarfile fix (D-13). A distro's patched build keeps its old micro version (Ubuntu 24.04's 3.12.3), but the fix added os.path.ALLOW_MISSING"""
+    v = v or sys.version_info; marker = 'ALLOW_MISSING' in vars(os.path) if marker is None else marker
+    return tuple(v) >= (3, 11) and (tuple(v[:2]) >= (3, 14) or v[2] >= FLOORS[v[1]] or marker)
+
+
 def _importable(m):
     try: return importlib.util.find_spec(m) is not None
     except (ImportError, ValueError): return False
@@ -104,7 +113,8 @@ def checks(cfg=None, keys=None):
     cfg = cfg if cfg is not None else config.load()
     out = []
     v = sys.version_info
-    out.append(Check('Python', v >= (3, 11), f'{v.major}.{v.minor}.{v.micro} ({sys.executable})', fix='Python 3.11 or later'))
+    out.append(Check('Python', python_ok(), f'{v.major}.{v.minor}.{v.micro} ({sys.executable})',
+                     fix='Python 3.11.13, 3.12.11, 3.13.4 or 3.14+ (the tarfile fix for CVE-2025-4517); the bundle needs no Python'))
     miss = [pip for m, pip in PY_MODULES.items() if not _importable(m)]
     if not (_importable('compression.zstd') or _importable('backports.zstd')): miss.append('backports.zstd')   # zstd: in the standard library from Python 3.14
     out.append(Check('Python modules', not miss, 'missing: ' + ', '.join(miss) if miss else 'lz4, capstone, zstd', fix='pip install ' + ' '.join(miss) if miss else ''))

@@ -3,9 +3,10 @@
 # The protocol gets {"ev":"log","path"} first, {"ev":"error","msg","type","log"} when the run fails and "log" on the result event (docs/ARCHITECTURE.md).
 # A one-shot --json command that crashes answers {"error": "<Type>: <message>"} on stdout instead of a bare traceback. D-08: a port's build folder holds
 # a marker while it runs, so the next port of a game that was cut off (a stop, a crash of the machine, a SIGKILL) redoes every cached stage.
+# Every command but doctor refuses a Python without the CVE-2025-4517 tarfile fix (toolchain.python_ok, D-13), with one message in the CLI, the JSON and the log.
 import json, os, platform, re, sys, threading, time, traceback
 
-from porter import paths, procs
+from porter import paths, procs, toolchain
 
 LONG = ('port', 'install')   # and tools --download
 MARKER, LOGS_KEPT = '.port-running', 30
@@ -112,10 +113,23 @@ def _wrap(prog, nsp):
     return lambda: [prog.__dict__.pop(n, None) for n in orig]   # the class's methods again (tests run several commands in one process)
 
 
+def _refuse(a, long):   # a Python whose tarfile filter can be bypassed: doctor still runs and shows the red row
+    v = sys.version_info
+    msg = f'Python {v.major}.{v.minor}.{v.micro} lacks the tarfile fix (CVE-2025-4517): use 3.11.13, 3.12.11, 3.13.4, 3.14 or later, or the bundle (porter doctor shows it)'
+    if getattr(a, 'json', False) and not long: print(json.dumps({'error': msg}, ensure_ascii=False), flush=True)
+    elif getattr(a, 'progress', '') != 'json': print(f'[RED] {msg}', file=sys.stderr)
+    if not long: return 1
+    reset(); p = _open(a); _w(f'[RED] {msg}')
+    _event(a, {'ev': 'log', 'path': str(p)}); _event(a, {'ev': 'error', 'msg': msg, 'type': 'PythonError', 'log': str(p)})
+    _close('failed'); return 1
+
+
 def run(a, fn):
     """Run one command; a long one inside its log"""
+    long = a.cmd in LONG or (a.cmd == 'tools' and getattr(a, 'download', False))
+    if a.cmd != 'doctor' and not toolchain.python_ok(): return _refuse(a, long)
     note = procs.setup(a, cut_off)
-    if not (a.cmd in LONG or (a.cmd == 'tools' and getattr(a, 'download', False))):
+    if not long:
         if not getattr(a, 'json', False): return fn(a)
         try: return fn(a)
         except Exception as e:   # a missing lz4 used to look like a network failure to the GUI
