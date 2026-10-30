@@ -396,6 +396,16 @@ class Timeout(Fake):   # a one-shot that never answers is killed at its own limi
         self.assertEqual(runner.TIMEOUTS, {'devices': 45, 'doctor': 30, 'inspect': 60, 'profiles': 20, 'tools': 60})
 
 
+class Downloads(unittest.TestCase):   # the Setup tab's confirm dialog: an untested fallback says so, and index strings are text, not markup
+    def test_untested_and_escaped(self):
+        w = window(self)
+        it = {'name': '<b>x</b>', 'version': '1', 'size': 1, 'url': 'https://h/a', 'license': '"onclick=', 'untested': True}
+        with mock.patch.object(app, 'QMessageBox') as box: w.setup.confirm_download([it], 0, None)
+        text = box.call_args[0][2]
+        for s in ('(untested)', '&lt;b&gt;x&lt;/b&gt;', '&quot;onclick='): self.assertIn(s, text)
+        self.assertNotIn('<b>x</b>', text)
+
+
 FIXTURES = REPO / 'tests/fixtures/bridge'
 
 
