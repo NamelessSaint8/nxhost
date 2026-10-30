@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 02
 current_phase_name: Porter Hardening
 status: executing
-stopped_at: Completed 02-02-PLAN.md
-last_updated: "2026-10-30T17:40:58.672Z"
+stopped_at: Completed 02-03-PLAN.md
+last_updated: "2026-10-30T17:50:03.119Z"
 last_activity: 2026-10-30
 last_activity_desc: Phase 02 execution started
-state_head: 777c42a8977adb7997219ead0d9355ed85a51940
+state_head: 9264b9111ea37fe36d79193ae7838ea9d6d2ea7a
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 20
-  completed_plans: 12
+  completed_plans: 13
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-10-30)
 ## Current Position
 
 Phase: 02 (Porter Hardening) — EXECUTING
-Plan: 3 of 10
+Plan: 4 of 10
 Status: Ready to execute
 Last activity: 2026-10-30 — Phase 02 execution started
 
@@ -68,6 +68,7 @@ Progress: [██░░░░░░░░] 17%
 | Phase 01 P10 | 77min | 3 tasks | 4 files |
 | Phase 02 P01 | 10 min | 2 tasks | 8 files |
 | Phase 02 P02 | 4 min | 3 tasks | 8 files |
+| Phase 02 P03 | 7 min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -107,6 +108,8 @@ Recent decisions affecting current work:
 - [Phase 02]: Signing key published with os.link (no-clobber), not os.replace: two simultaneous first ports end with one signer
 - [Phase 02]: An unreadable signing key is a required red doctor row, so porter port stops before any stage; mkapk.py never replaces it
 - [Phase 02]: Existing group/other-readable signing key tightened to 0600 on POSIX on next use
+- [Phase 02]: arch_rules join_literals joins a literal and the run after it, pairing left to right as rule 1 blanking does
+- [Phase 02]: Ryujinx base is Ryubing Canary-1.3.351 (475615f) plus nxnative-local.patch (paths relative to ryujinx/, apply with --directory); the unmarked hunks are the fixed-input geometry path
 
 ### Pending Todos
 
@@ -132,6 +135,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-30T17:40:58.601Z
-Stopped at: Completed 02-02-PLAN.md
+Last session: 2026-10-30T17:50:03.045Z
+Stopped at: Completed 02-03-PLAN.md
 Resume file: None
