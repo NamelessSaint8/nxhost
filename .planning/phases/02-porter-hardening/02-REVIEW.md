@@ -1,199 +1,177 @@
 ---
 phase: 02-porter-hardening
-reviewed: 2026-10-30T12:00:00Z
+reviewed: 2026-10-30T20:23:52Z
 depth: standard
-files_reviewed: 32
+files_reviewed: 6
 files_reviewed_list:
-  - devtools/hooks.py
-  - devtools/nuget_pins.py
-  - gui/app.py
-  - nxnative/dm/android/apk/mkapk.py
-  - nxnative/scripts/build_ipa_from_nsp.py
-  - porter/adb.py
-  - porter/cli.py
-  - porter/datapack.py
+  - docs/ARCHITECTURE.md
   - porter/fetch.py
-  - porter/fpslocker.py
   - porter/lock.py
-  - porter/nuget.py
-  - porter/pins.py
   - porter/pipeline.py
-  - porter/runlog.py
-  - porter/toolchain.py
-  - porter/upstream.py
-  - probes/app/probeapp.c
-  - tests/arch_rules.py
-  - tests/test_adb.py
-  - tests/test_bridge.py
-  - tests/test_cli.py
-  - tests/test_datapack.py
   - tests/test_fetch.py
-  - tests/test_housekeeping.py
   - tests/test_lock.py
-  - tests/test_nuget.py
-  - tests/test_porter.py
-  - tests/test_runlog.py
-  - tests/test_signing.py
-  - tests/test_stages.py
-  - tests/test_toolchain.py
 findings:
-  critical: 3
+  critical: 1
   warning: 6
-  info: 5
-  total: 14
+  info: 9
+  total: 16
 status: issues_found
 ---
 
 # Phase 02: Code Review Report
 
-**Reviewed:** 2026-10-30T12:00:00Z
+**Reviewed:** 2026-10-30T20:23:52Z
 **Depth:** standard
-**Files Reviewed:** 32
+**Files Reviewed:** 6
 **Status:** issues_found
 
 ## Summary
 
-I reviewed the diff from `74523e2..HEAD` across the 32 listed files, reading the code around each change. That covered the OS file locks, the data-pack swap, the signing-key write, pinned downloads with zip/tar unpacking, the Python floor, the per-child env, the whole-file stage keys, the FPSLocker pin, the NuGet hash check and the GUI escaping. The 141 unit tests in the phase's test modules pass on macOS.
+This is an incremental re-review of `git diff 472214a..HEAD` over the six listed files, after gap-closure plans 02-11 (CR-01) and 02-12 (CR-02, CR-03). I also read the code these changes call: `nsp.reused`, `nsp.swap_in`, `nsp.write_whole` and `nsp.rmtree` in `nxnative/scripts/build_ipa_from_nsp.py`, `nuget.restored`, and `fetch._install`. `tests.test_lock` and `tests.test_fetch` pass on macOS with Python 3.14.5 (25 tests).
 
-There are three blockers:
-- The zip symlink guard can be bypassed by the order the links come in. I reproduced this with a three-entry zip.
-- On Windows, the lock's "who holds it" read probably runs into the locked byte. If so, the second porter crashes instead of reporting the holder or waiting. This is from reading the code; it was not run on Windows.
-- The shared translator build checks whether it can reuse the last build before it takes the tools lock, and never checks again after. A port that waited then rebuilds and deletes the translator another port is using.
+Where the three earlier blockers stand:
 
-The warnings cover a recover-before-lock race in `porter install`, a tools lock held for a whole survey, hard-link-only key publishing, x86-64 pins served as "tested" to Linux arm64, and toolchain/pack replacements that are not atomic on Windows.
+| Earlier finding | Status | Notes |
+|---|---|---|
+| CR-01: a zip link through a later link escapes | **Closed for the reported repro; the guard still leaks, see CR-04** | The second pass resolves every link once all of them exist, which defeats the three-entry zip in both orders. The pass checks against the temporary `.<folder>.unpack` folder, though, and `_install` then installs a different tree: it strips the top folder and moves it to a new name. Links that pass the check can point outside the installed toolchain. I reproduced this (CR-04). |
+| CR-02: the Windows holder read crosses the locked byte | **Closed in code; not yet run on Windows** | With `buffering=0`, `f.read(AT)` is one raw `read(4096)` at offset 0, covering bytes 0 to 4095, and never reaches byte 4096. `tests/test_lock.py` `test_holder_read_stays_below_lock` pins that bound on POSIX. `main` is 106 commits ahead of `origin/main`, so the `windows-2025` job in `fork-ci.yml` has not run this code yet. |
+| CR-03: the translator rebuild deletes a dll that is in use | **Closed** | Each key now builds into its own `dmsh_xlate-<key[:12]>` folder, and reuse is checked again once the tools lock is held. A folder is only removed by a rebuild for its own key, and that runs only after the reuse check has failed under the lock, which means the key file is missing. A port that is using the folder read that key file, so this does not happen in normal operation. |
+
+There is one new blocker (CR-04). WR-01 to WR-06 and IN-01 to IN-05 from the earlier review are in files this change did not touch. I re-checked each at its line in the current tree and carry them forward unchanged.
+
+## Narrative Findings (AI reviewer)
 
 ## Critical Issues
 
-### CR-01: Zip symlink check depends on link order; a later link turns an accepted link into an escape
+### CR-04: Links are checked against the unpack folder, but a different tree is installed, so a link can leave the installed toolchain
 
-**File:** `porter/fetch.py:141-146`
-**Issue:** Each link is checked against the filesystem as it stands when that link is created. A link whose path runs through a component that does not exist yet is resolved lexically, and it passes. A later link can then create that component pointing back at the unpack root. The first link then escapes. Reproduced against `fetch._unzip` with three entries: a file `d1/d2/keep.txt`, then `a -> d1/d2/b/../../../escaped`, then `d1/d2/b -> ../..`. Result: `a` resolves to the parent of the unpack folder's parent, `is_relative_to(root)` is False, and no error is raised. The escape depth is arbitrary (one level per `..` behind the planted link). The archive does have to pass the pinned hash, or on the untested fallback the vendor's listed hash. But this guard exists for exactly the hostile-archive case, and it does not hold.
-**Fix:** Validate after all links exist, when the tree is final, and remove everything on failure (`_install` already removes `tmp` on any exception):
+**File:** `porter/fetch.py:141-149` (check), `porter/fetch.py:166-169` (`_install` strips the top folder and moves it)
+**Issue:** `_unzip` resolves every link and requires it to stay inside `into` (`<toolchains>/.<folder>.unpack`). `_install` then installs `src`, which is the single top folder when there is one, or the whole folder for .NET, under a different name, `<toolchains>/<folder>`. Relative link targets mean something different after that move:
+- **One archive, one level up.** In the unpack folder, `top/up -> ../adb` resolves to `.ndk.unpack/adb`, which is inside the folder, so it is accepted. After the move, `ndk/up` resolves to `<toolchains>/adb`, the sibling toolchain. Reproduced with `fetch._install`: `ACCEPTED ... up -> ../adb => .../toolchains/adb  inside dest: False`.
+- **Name tricks.** A target that climbs out and comes back in by the unpack folder's name (`../../.ndk.unpack/...`), or by a top folder that has a sibling's name (a top folder called `adb` with `x -> ../adb/...`), passes the check and points somewhere else after the move.
+- **Chained across installs, to any depth.** Reproduced: platform-tools with `platform-tools/z -> ..` is accepted, because it resolves to the unpack root. Installed, `adb/z` resolves to `<toolchains>`. A later NDK with `top/k -> ../adb/z/../config.json` is accepted, because `adb` does not exist in its unpack folder and the path is resolved lexically. Installed, `ndk/k` resolves to and reads `<user dir>/config.json`. The same folder holds `signing-key.json`. Each reinstall can stack one more level.
+
+The archives still have to match the pinned hash, or on the fallback path the vendor's listed hash. This guard exists for the hostile-archive case, and it does not hold for the tree the player actually gets. This is the same impact model the earlier CR-01 was rated on.
+**Fix:** Validate the tree where it will live. After `src.replace(dest)`, resolve every link under `dest` and require it to stay inside `dest`. Also refuse targets that climb above `dest` lexically. That second rule stops paths that pass through a sibling folder and back in, which a later reinstall of that sibling could redirect. On refusal, remove `dest`.
 ```python
-for info in filter(link, infos):
-    t, target = into / info.filename, z.read(info).decode()
-    if target.startswith('/') or '\\' in target: raise BuildError(...)
-    t.parent.mkdir(parents=True, exist_ok=True); t.unlink(missing_ok=True); os.symlink(target, t)
-for info in filter(link, infos):   # final tree: every link resolved with every other link in place
-    if not (into / info.filename).resolve().is_relative_to(root):
-        raise BuildError(f'{arc.name}: refused, link {info.filename} leaves the unpack folder')
+def _links_inside(arc, root):   # every link where it is installed, with every other link and every sibling toolchain in place
+    r = root.resolve()
+    for d, dirs, files in os.walk(root):   # followlinks=False: a link to a folder is checked, not entered
+        for n in dirs + files:
+            p = Path(d, n)
+            if not p.is_symlink(): continue
+            t = os.readlink(p); rel = os.path.normpath(os.path.join(os.path.relpath(d, root), t))
+            try: inside = not rel.startswith('..') and p.resolve().is_relative_to(r)
+            except RuntimeError: inside = False   # 3.11/3.12: a link loop
+            if not inside: raise BuildError(f'{arc.name}: refused, link {p.relative_to(root)} → {t} leaves {root.name}')
+
+# _install:
+        shutil.rmtree(dest, ignore_errors=True); src.replace(dest)
+        try: _links_inside(arc, dest)
+        except BaseException: shutil.rmtree(dest, ignore_errors=True); raise
 ```
-Add the three-entry zip above to `tests/test_fetch.py`.
-
-### CR-02: Windows lock holder lookup reads into the locked byte; the second porter crashes, and `wait=True` never waits
-
-**File:** `porter/lock.py:31` (with `AT = 4096`, line 9)
-**Issue:** `f` is a buffered `a+b` file. `f.read(AT)` asks for 4096 bytes, but CPython's `BufferedReader` fills its internal buffer with a raw read of `buffer_size` bytes (8 KiB, or more on newer versions) from offset 0. That raw `ReadFile` overlaps the holder's mandatory lock on byte 4096. Windows fails a read that overlaps another process's exclusive range (`ERROR_LOCK_VIOLATION`, which Python raises as `PermissionError`). The `OSError` is raised inside the `except OSError` handler, so it escapes `take()` as a raw traceback:
-- with `wait=False`, the user sees a crash instead of "already running: ... PID ...";
-- with `wait=True` (the shared tools lock in `porter/nuget.py:37`), the second port dies instead of waiting. That defeats the tools lock on the only platform the bundle ships for today.
-
-This was not run on Windows (the file's own comment assumes the read stays below the lock). The tests that would show it, such as `tests/test_lock.py` `test_second_take_names_holder`, have only run on POSIX.
-**Fix:** Read the holder text with an unbuffered read that cannot pass `AT`, and never let the lookup itself fail:
-```python
-try: os.lseek(f.fileno(), 0, os.SEEK_SET); who = os.read(f.fileno(), AT).decode('utf-8', errors='replace').strip() or 'another porter'
-except OSError: who = 'another porter'
-```
-Alternatively, open the lock file with `buffering=0`. Run `tests/test_lock.py` on a Windows runner before calling D-06/D-07 done.
-
-### CR-03: Translator reuse check is outside the tools lock and is not repeated inside it; a waiting port rebuilds and deletes the translator another port is using
-
-**File:** `porter/pipeline.py:343-349`
-**Issue:** `if dll.is_file() and nsp.reused(kf, key) is not None: return dll, key` runs before `nuget.restored(...)` takes the tools lock. Take two ports that start with a stale or missing key, for example the first ports after an engine update (the scenario Pitfall 6 describes). Port A builds while port B waits. When B gets the lock, it never checks reuse again. It unconditionally does `rmtree(kf)`, rebuilds, and calls `swap_in(tmp, out)`, which `rmtree`s `<user dir>/tools/dmsh_xlate`. Port A may by then be in its Vulkan shaders stage, running `shader_vk.py --xlate <out>/dmsh_xlate.dll`.
-- On POSIX, A's translator runs can find the dll or its dependencies missing mid-swap.
-- On Windows, B's `rmtree(out)` fails part-way on the dll A has loaded. Some files are deleted, the key is gone, and both ports can be left broken.
-**Fix:** Check reuse again once the lock is held, and only rebuild if it still fails:
-```python
-if dll.is_file() and nsp.reused(kf, key) is not None: return dll, key
-with nuget.restored(src, self.tools['dotnet'], self.env, self.logs / 'nuget_restore_translator.log'):
-    if dll.is_file() and nsp.reused(kf, key) is not None: return dll, key   # another port built it while this one waited
-    tmp = out.with_name('dmsh_xlate.partial'); ...
-```
-This still leaves a rebuild with a genuinely different key able to remove a dll that a concurrent port is using. Either hold the tools lock for shared reads too (lock with `wait=True` around the shaders stage's use of the dll), or build into a key-named folder (`dmsh_xlate-<key[:12]>`) and never delete it while in use.
+`_unzip`'s two passes can stay as they are, as the first line of defence. Add two tests to `tests/test_fetch.py`: `top/up -> ../adb` must be refused, and the platform-tools then NDK pair above must be refused.
 
 ## Warnings
 
-### WR-01: `porter install` recovers the pack before taking the port's lock
+### WR-01: `porter install` recovers the pack before taking the port's lock (carried forward, not touched by 02-11/02-12)
 
 **File:** `porter/cli.py:113-114`
-**Issue:** `datapack.recover(data)` runs before `lock.take(b, 'install')`. A port that is mid-swap has `dst` renamed to `.old` and is about to call `swap_in(tmp, dst)`. On Windows that window is up to 15 s while `swap_in` retries for a virus scanner. If `install` runs then, its `recover` renames `.old` back into `dst`. The port's `tmp.rename(dst)` then fails (dst exists), so the port fails at the data stage. `install` then fails too, on the lock it only takes afterwards.
-**Fix:** Take the lock first, then recover (the sidecar `<pack>.build` is beside the pack, so `build_dir(data)` does not need the pack to be in place):
+**Issue:** `datapack.recover(data)` runs before `lock.take(b, 'install')`. A port in the middle of a swap has renamed `dst` to `.old` and is about to call `swap_in(tmp, dst)`. On Windows that window lasts up to 15 s while `swap_in` retries. If `install` runs in that window, its `recover` renames `.old` back to `dst`. The port's `tmp.rename(dst)` then fails, and `install` fails too, on the lock it only takes afterwards.
+**Fix:** Take the lock first, then recover:
 ```python
 b = datapack.build_dir(data); held = lock.take(b, 'install') if b and b.is_dir() else None
 datapack.recover(data)
 ```
 
-### WR-02: The tools lock is held for a whole survey, not just the nx_extract build
+### WR-02: The tools lock is held for a whole survey, not just the nx_extract build (carried forward)
 
 **File:** `porter/pipeline.py:192-193`
-**Issue:** `with nuget.restored(...): facts = nsp.survey(...)` holds `<user dir>/tools/.porter.lock` while survey builds nx_extract, extracts the code modules and RomFS manifest, and reads them. That can take minutes. Every other game's port waits at its own `build nx_extract` or translator stage for the whole time, with only "waiting for porter tool build" to show for it.
-**Fix:** Build nx_extract under the lock and run the survey without it. For example, pass a prebuilt `nx` to survey, or wrap only `nsp.build_nx_extract` through a small override in `porter/upstream.py._overrides`, so `survey()`'s internal `build_nx_extract` call takes the lock itself.
+**Issue:** `with nuget.restored(...): facts = nsp.survey(...)` holds `<user dir>/tools/.porter.lock` while the survey builds nx_extract, extracts, and reads the results. That can take minutes. Every other game's port waits at its tool build stage the whole time.
+**Fix:** Build nx_extract under the lock and run the survey outside it. For example, wrap only `nsp.build_nx_extract` through an override in `porter/upstream.py`.
 
-### WR-03: The signing key is published only through `os.link`; a folder without hard links can never get a key
+### WR-03: The signing key is published only through `os.link` (carried forward)
 
 **File:** `nxnative/dm/android/apk/mkapk.py:199-201`
-**Issue:** Only `FileExistsError` is handled. On FAT32/exFAT, which is possible via `NX2A_HOME` on a USB drive, and on some SMB/network homes, `os.link` raises `PermissionError` or `OSError(EPERM/ENOTSUP)`. The `finally` removes the temp file and the APK stage dies with a traceback. Every later port repeats this, so no port on that setup can ever be signed.
-**Fix:** Fall back to a no-overwrite rename when hard links are unsupported:
-```python
-try: os.link(tmp, keyf)
-except FileExistsError: return False
-except OSError:
-    if os.path.exists(keyf): return False
-    os.rename(tmp, keyf)   # Windows: fails if keyf appeared; POSIX: a lost race here is the narrow window the link closed
-return True
-```
+**Issue:** Only `FileExistsError` is handled. On FAT32/exFAT (`NX2A_HOME` on a USB drive) or some SMB homes, `os.link` raises `PermissionError` or `OSError(EPERM/ENOTSUP)`, the APK stage dies, and no port on that setup can ever be signed.
+**Fix:** If the link fails for any other `OSError`, return `False` when `keyf` exists, and otherwise `os.rename(tmp, keyf)`.
 
-### WR-04: Linux arm64 gets the x86-64 NDK and platform-tools as "pinned", not flagged untested
+### WR-04: Linux arm64 gets the x86-64 NDK and platform-tools as "pinned" (carried forward)
 
-**File:** `porter/fetch.py:79-83`, `porter/pins.py` NDK/PLATFORM_TOOLS `'linux'` rows
-**Issue:** `_google_os()` returns `'linux'` on every Linux CPU, so `_pinned()` returns the x86-64 linux rows on an aarch64 host. `plan()` presents them as the pinned, tested files. `download()` then installs binaries that cannot run, and the player only finds out from the "downloaded, but the check still fails" error after a ~660 MB download. Linux arm64 is a stated target host.
-**Fix:** In `_pinned` (and `_google`), return `None` / refuse for `Android NDK` and `adb` when `sys.platform.startswith('linux') and platform.machine().lower() in ('aarch64', 'arm64')`. Point the player at distro adb and the community NDK (Phase 3), rather than downloading x86-64 binaries.
+**File:** `porter/fetch.py:47`, `porter/fetch.py:79-83`
+**Issue:** `_google_os()` returns `'linux'` on every Linux CPU. On aarch64 this installs x86-64 binaries that are presented as the tested pins, after a download of about 660 MB.
+**Fix:** In `_pinned`/`_google`, return `None` or refuse `Android NDK` and `adb` when `platform.machine()` is `aarch64` or `arm64` on Linux.
 
-### WR-05: Replacing an existing toolchain is not atomic; a failed replace leaves a half-deleted NDK/.NET
+### WR-05: Replacing an existing toolchain is not atomic (carried forward)
 
-**File:** `porter/fetch.py:166`
-**Issue:** `shutil.rmtree(dest, ignore_errors=True); src.replace(dest)`. On Windows, a `dotnet.exe`, `adb.exe` (the adb server keeps running) or NDK file that is in use survives `rmtree`, and the errors are ignored. `src.replace(dest)` then fails because `dest` is not empty. The new `except BaseException` cleans up `tmp` and re-raises, but the old toolchain is already partly deleted, and `config` still points at it. That is the "half-done swap" this phase set out to remove elsewhere.
-**Fix:** Move the old toolchain aside first, as `datapack.build` now does: `if dest.exists(): dest.rename(aside)`, then `src.replace(dest)`, then `rmtree(aside, ignore_errors=True)`. On failure, rename `aside` back. The rename itself fails cleanly while files are in use, which leaves the old toolchain intact.
+**File:** `porter/fetch.py:169`
+**Issue:** `shutil.rmtree(dest, ignore_errors=True); src.replace(dest)`. On Windows, a file that is in use survives `rmtree`, and then `replace` fails. The old toolchain is left half-deleted while `config` still points at it. The fix for CR-04 adds another failure point after this deletion, which makes this worse.
+**Fix:** Rename `dest` aside, run `src.replace(dest)` and the link check, then remove the aside copy. On failure, rename the aside copy back.
 
-### WR-06: Moving the old data pack aside has no Windows retry, unlike `swap_in`
+### WR-06: Moving the old data pack aside has no Windows retry, unlike `swap_in` (carried forward)
 
 **File:** `porter/datapack.py:66`
-**Issue:** `dst.rename(old)` renames a large directory that a virus scanner, Explorer or the indexer may hold briefly. That is the same `[WinError 5]` that `swap_in` retries for 15 s, but here there is no retry. The data stage fails at the end of a 20-minute port.
-**Fix:** Reuse the retry. For example, factor `swap_in`'s loop into a `rename_retry(a, b)` helper in the upstream script, or loop locally `for i in range(30 if os.name == 'nt' else 0)` around `dst.rename(old)`.
+**Issue:** `dst.rename(old)` has no retry for a scanner or indexer that holds files in the pack, which `swap_in` handles with up to 15 s of retries.
+**Fix:** Reuse `swap_in`'s retry loop around `dst.rename(old)`.
 
 ## Info
 
-### IN-01: The status badge text is the one game-card string left unescaped
+### IN-01: The status badge text is the one game-card string left unescaped (carried forward)
 
 **File:** `gui/app.py:132`
-**Issue:** `{st}` (`android.tsv` `status`, or the profile/inspect fallback) is placed in rich text without going through `e()`. Today `arch_rules` restricts the values, but an experimental or derived profile under the build folder is not checked by `arch_rules`.
 **Fix:** `&nbsp;{e(st)}&nbsp;`.
 
-### IN-02: A failed inspect keeps the previous game's language list
+### IN-02: A failed inspect keeps the previous game's language list (carried forward)
 
 **File:** `gui/app.py:123-125`
-**Issue:** The `fail` return happens before the combo is reset. After switching from game A to a broken folder B, A's languages stay selectable for the next inspect.
-**Fix:** Reset the combo to the default entry before the `if fail:` return.
+**Fix:** Reset the combo before the `if fail:` return.
 
-### IN-03: The NuGet check assumes the first package folder
+### IN-03: The NuGet check assumes the first package folder (carried forward)
 
 **File:** `porter/nuget.py:15`
-**Issue:** If NuGet resolves a package from a fallback folder (for example the Visual Studio offline folder on Windows), that package's real folder is not `packageFolders[0] / path`. On a mismatch, `rmtree` deletes nothing, and the bad package is restored again from the fallback every run.
-**Fix:** Look the package up in every `packageFolders` key, or set `RestoreFallbackFolders=` (clear) via env/`-p:` on the restore so NUGET_PACKAGES is the only source.
+**Fix:** Look the package up in every `packageFolders` key, or clear `RestoreFallbackFolders`.
 
-### IN-04: Two game folders of the same title, sharing one output folder, race on the pack's `.partial`
+### IN-04: Two game folders of one title with one output folder race on the pack's `.partial` (carried forward)
 
-**File:** `porter/datapack.py:47-49`
-**Issue:** The lock is per build folder, but `<out>/<stem>-data.partial` is per output folder. Two copies of one game that both output to the configured `out` `rmtree` each other's partial pack.
-**Fix:** Document it, or also lock `<out>/<stem>-data.build` with `lock.take`.
+**File:** `porter/datapack.py:44`
+**Fix:** Document it, or also lock `<out>/<stem>-data.build`.
 
-### IN-05: Stale reference to the deleted probe packer
+### IN-05: Stale reference to the deleted probe packer (carried forward)
 
 **File:** `.claude/CLAUDE.md:351`
-**Issue:** It still lists `probes/app/mkapk.py`, which this phase deleted (the probe now uses `nxnative/dm/android/apk/mkapk.py`, as `probes/app/probeapp.c` says).
-**Fix:** Update the line.
+**Fix:** Drop `probes/app/mkapk.py` from the line.
+
+### IN-06: Some hostile zips are refused with a raw OS error instead of the `refused` message
+
+**File:** `porter/fetch.py:145-149`
+**Issue:** These archives fail closed, and `_install` removes `.unpack`, but the player sees a traceback instead of a `BuildError`:
+- A link loop (`a -> b`, `b -> a`) raises `RuntimeError: Symlink loop` from `Path.resolve()` on Python 3.11/3.12. On 3.13+ the same loop is accepted. It is harmless, because the kernel fails ELOOP on any path through it.
+- A link entry with the same name as a folder entry fails `t.unlink` with `PermissionError`/`IsADirectoryError`.
+- A link under an earlier dangling link fails `mkdir` with `FileExistsError`.
+
+I reproduced all three.
+**Fix:** In the link loop, catch `(OSError, RuntimeError)` and raise `refuse(info.filename, target)` from it.
+
+### IN-07: The second reuse check runs after the restore and the NuGet check, not right after the lock
+
+**File:** `porter/pipeline.py:345-346`, `porter/nuget.py:36-40`
+**Issue:** A port that waited for the tools lock and only needs to reuse the translator still runs `dotnet restore` and `nuget.check` before it re-checks. If that restore fails, for example on a network or feed error during a non-no-op restore, the port fails even though a usable translator is already built.
+**Fix:** Give `restored()` an optional `ready` callable that is checked right after `lock.take`, and skip the restore when it returns true. Alternatively, take the lock in `translator()` itself and call `restored` only for a rebuild.
+
+### IN-08: Orphaned and unpruned translator folders
+
+**File:** `porter/pipeline.py:341-343`
+**Issue:** The pre-02-12 `<user dir>/tools/dmsh_xlate/` folder and `dmsh_xlate.key` are now never used or removed. Each new key leaves one more `dmsh_xlate-<k>/` folder plus its `.key`, which the code comment acknowledges as a shortcut.
+**Fix:** Remove the old `dmsh_xlate`/`dmsh_xlate.key` once, under the tools lock. Pruning other keys can wait until ports record which translator they use, as the shortcut comment says.
+
+### IN-09: `test_waiting_port_reuses_translator` depends on a 0.5 s window
+
+**File:** `tests/test_lock.py:48`, `tests/test_lock.py:107-113`
+**Issue:** The holder builds 0.5 s after the go file appears. If the test process stalls longer than that between `fp()` and the first reuse check (a loaded CI runner), the first check succeeds, `ran` is `[]`, and `assertEqual(ran, ['restore'])` fails. That is a false failure, not a false pass. `ran` is also never asserted in `test_new_translator_key_keeps_old`, and the `mkdtemp` folders the tests create are never removed.
+**Fix:** Have the holder build only after a second go file, which the test's `nuget.check` stub touches. That point is reached only after the lock has been taken, so the first check is guaranteed to fail first. In the other test, drop `ran` or assert it equals `['restore', 'build', 'restore', 'build']`.
 
 ---
 
-_Reviewed: 2026-10-30T12:00:00Z_
+_Reviewed: 2026-10-30T20:23:52Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
