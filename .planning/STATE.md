@@ -2,17 +2,17 @@
 gsd_state_version: "1.0"
 current_phase: 01
 current_phase_name: Bridge, Bundles and CI
-status: executing
-stopped_at: Completed 01-09-PLAN.md
-last_updated: "2026-10-30T06:24:13.283Z"
+status: verifying
+stopped_at: Completed 01-10-PLAN.md
+last_updated: "2026-10-30T07:42:13.870Z"
 last_activity: 2026-10-30
 last_activity_desc: Phase 01 execution started
-state_head: 4252df48ac67801b3358f5a4e041514a48003f32
+state_head: 1ce9643c60f1fbf0e15815e75e2cd4db8e5baf49
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 10
-  completed_plans: 9
+  completed_plans: 10
   percent: 0
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-10-29)
 
 Phase: 01 (Bridge, Bundles and CI) — EXECUTING
 Plan: 10 of 10
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-10-30 — Phase 01 execution started
 
 Progress: [░░░░░░░░░░] 0%
@@ -65,6 +65,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P07 | 2 fix rounds | 3 tasks | 12 files |
 | Phase 01 P08 | 3 sessions | 3 tasks | 7 files |
 | Phase 01 P09 | 2min | 2 tasks | 5 files |
+| Phase 01 P10 | 77min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -98,6 +99,7 @@ Recent decisions affecting current work:
 - [Phase 01]: Linux x64 floor is glibc 2.35 (PKG-03), not 2.34: the ubuntu-22.04 runner's libpython, libgcc_s, cairo, tcl and tk need it; user chose this over a container build or trimming (supersedes RESEARCH Open Question 4)
 - [Phase 01]: fork-release retries stapler staple up to 4 times; notarization itself is not retried
 - [Phase 01]: TLS trust: porter/tls.py context() loads the first host CA file only when the default store holds no CA; no truststore, no process-wide SSL_CERT_FILE
+- [Phase 01]: G-01-7 fixed by what ships: packaging/hooks overrides drop PySide6's gtk3 theme and glib network plugin, the spec refuses libgio-2.0/libgtk-3; no GIO or Qt theme env var
 
 ### Pending Todos
 
@@ -123,6 +125,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-30T06:24:13.202Z
-Stopped at: Completed 01-09-PLAN.md
+Last session: 2026-10-30T07:42:13.738Z
+Stopped at: Completed 01-10-PLAN.md
 Resume file: None
