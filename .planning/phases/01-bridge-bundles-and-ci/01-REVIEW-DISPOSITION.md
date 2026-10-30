@@ -5,16 +5,28 @@ titles: json
 findings:
   - id: WR-01
     severity: warning
-    disposition: fixed
-    title: "Windows stop without a Job Object orphans the whole tree"
+    disposition: open
+    title: "The CA-file fallback can run on Windows, where `/etc/ssl/...` resolves against the current drive"
   - id: WR-02
     severity: warning
-    disposition: fixed
-    title: "Child processes inherit the stop channel (porter's stdin), and `adb shell` can swallow \"stop\""
+    disposition: open
+    title: "The urlopen scan test accepts any `context=`, not `context=tls.context()`"
   - id: WR-03
     severity: warning
-    disposition: fixed
-    title: "The frozen engine copy runs at import time and has no recovery when it fails"
+    disposition: open
+    title: "The hook overrides are copies of PyInstaller 6.22.3's hooks, with nothing that fails when PyInstaller moves"
+  - id: IN-01
+    severity: info
+    disposition: open
+    title: "Only the first existing CA file is tried; an unreadable or empty one fails the download instead of falling through"
+  - id: IN-02
+    severity: info
+    disposition: open
+    title: "`x509_ca` does not count a capath store, so the \"used as it is\" contract is not exact"
+  - id: IN-03
+    severity: info
+    disposition: open
+    title: "`test_no_host_file_stays_verifying` asserts the mock's own defaults"
   - id: WR-04
     severity: warning
     disposition: fixed
@@ -27,41 +39,29 @@ findings:
     severity: warning
     disposition: fixed
     title: "Unit tests start the developer machine's real adb server"
-  - id: IN-01
-    severity: info
-    disposition: open
-    title: "The Windows watcher prints outside the emitter's lock"
-  - id: IN-02
-    severity: info
-    disposition: open
-    title: "The GUI does not check the shape of one-shot answers"
-  - id: IN-03
-    severity: info
-    disposition: open
-    title: "A local variable shadows the module-level `cause()`"
   - id: IN-04
     severity: info
     disposition: open
     title: "Two ways of escaping, and a misleading status on quit"
-open: 4
+open: 7
 total: 10
-recorded: 2026-10-29T21:11:47.122Z
+recorded: 2026-10-30T07:51:36.899Z
 ---
 
 # Phase 01: Code Review Disposition
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| WR-01 | warning | fixed | 01-REVIEW-FIX.md |
-| WR-02 | warning | fixed | 01-REVIEW-FIX.md |
-| WR-03 | warning | fixed | 01-REVIEW-FIX.md |
-| WR-04 | warning | fixed | 01-REVIEW-FIX.md |
-| WR-05 | warning | fixed | 01-REVIEW-FIX.md |
-| WR-06 | warning | fixed | 01-REVIEW-FIX.md |
+| WR-01 | warning | open | - |
+| WR-02 | warning | open | - |
+| WR-03 | warning | open | - |
 | IN-01 | info | open | - |
 | IN-02 | info | open | - |
 | IN-03 | info | open | - |
-| IN-04 | info | open | - |
+| WR-04 | warning | fixed | 01-REVIEW-FIX.md (not in the current review) |
+| WR-05 | warning | fixed | 01-REVIEW-FIX.md (not in the current review) |
+| WR-06 | warning | fixed | 01-REVIEW-FIX.md (not in the current review) |
+| IN-04 | info | open | - (not in the current review) |
 
 Dispositions: `open` (recorded, not yet triaged), `fixed`, `skipped`, `deferred`.
 Set `deferred` by hand and put the reason in the Source cell; both are preserved. A `|` in the reason is kept as prose and escaped on the next run.
