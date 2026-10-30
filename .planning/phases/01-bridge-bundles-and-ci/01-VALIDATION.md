@@ -51,6 +51,8 @@ created: "2026-10-29"
 | 1-07-01 | 01-07 | 5 | TEST-02 | — | Missing lz4 → skip with hint (setUpModule); with `CI` set → failure | unit + subprocess | `python -m unittest tests.test_porter tests.test_porter_guard -v` | ✅ | ✅ green |
 | 1-04-03 | 01-04 | 4 | TEST-03 | T-1-10 | Golden replays produce exact event sequences headless; fixtures scrubbed | integration | `QT_QPA_PLATFORM=offscreen python -m unittest tests.test_bridge.Replay -v` | ✅ | ✅ green |
 | 1-06-01, 1-06-03, 1-07-03, 1-08-03 | 01-06, 01-07, 01-08 | 2, 5, 6 | PKG-01..05, CI-01, CI-02 | T-1-17, T-1-26 | Frozen bundle doctor JSON, profiles, offscreen GUI start from a read-only copy; listing unchanged; codesign after (macOS); four-OS CI green | local + CI smoke | `python packaging/smoke_bundle.py <archive>` (and `fork-release.yml`, `fork-ci.yml` runs) | ✅ | ✅ green (fork-ci 40940462470, fork-release 40940461343 at f443063) |
+| 1-09-01, 1-09-02 | 01-09 | 1 | PKG-02, PKG-03, PKG-04 (G-01-6) | — | Every porter `urlopen` passes `tls.context()`; empty default store takes the first host CA file; no host file stays verifying (never unverified); working default kept; no `SSL_CERT_*` set | unit | `python -m unittest tests.test_tls -v` | ✅ | ✅ green (fork-ci 41017724428, four OSes) |
+| 1-10-01, 1-10-03 | 01-10 | 2 | PKG-02, PKG-03, PKG-04 (G-01-7) | — | Hook overrides used; Linux tarballs ship no `libgio-2.0`/`libgtk-3`/`libqgtk3.so`/`libqglib.so` (spec `[RED]` check stops the build otherwise); DMG notarized and stapled | build gate + CI | `python packaging/build_bundle.py` (spec check) and 01-10 Task 3 `<automated>` (tar listings of the fork-release tarballs) | ✅ | ✅ green (fork-release 41017737613 at 1ce9643) |
 
 *Task IDs are filled in by the planner. Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -78,6 +80,8 @@ created: "2026-10-29"
 | Notarized DMG opens from Finder after a browser download on macOS 14+ | PKG-02 | Gatekeeper quarantine path only exists for a real download | Download from the draft release; open in Finder; `spctl -a -t open --context context:primary-signature -v *.dmg` |
 | GUI starts under X11 and Wayland | PKG-03, PKG-04 | No real display server in CI | Launch with `QT_QPA_PLATFORM=xcb` and `wayland` on a tester machine or VM |
 | Full port from the mounted DMG / read-only copy; `codesign --verify --strict` after | PKG-05 | CI has no game files or keys | Port a real title from `/Volumes/nx2android/nx2android.app`; then `codesign --verify --deep --strict --verbose=2 /Volumes/nx2android/nx2android.app` |
+| Frozen bundles download over HTTPS (G-01-6): the notarized DMG and the Linux bundles on Fedora 44 load the download lists and fetch platform-tools | PKG-02, PKG-03 | Needs the mounted DMG on a Mac, a Fedora 44 container and a Finder download | Commands in 01-10-PLAN.md Task 3 `<human-check>`; then UAT test 6 |
+| No gvfs `undefined symbol` line and the folder picker opens on a GNOME desktop (G-01-7) | PKG-03, PKG-04 | Needs a real GNOME session on a Debian-family host and old-against-new container runs | Commands in 01-10-PLAN.md Task 3 `<human-check>` (Debian trixie, `XDG_CURRENT_DESKTOP=GNOME`); then UAT test 7 |
 
 *Record each in `docs/RELEASE_CHECK.md`.*
 
@@ -89,7 +93,7 @@ created: "2026-10-29"
 - [x] Sampling continuity: no 3 consecutive tasks without automated verify
 - [x] Wave 0 covers all MISSING references
 - [x] No watch-mode flags
-- [x] Feedback latency < 30s (full suite: 104 tests in about 12 s)
+- [x] Feedback latency < 30s (full suite: 114 tests in about 13 s after the gap plans 01-09 and 01-10)
 - [x] `nyquist_compliant: true` set in frontmatter
 
 **Approval:** validated 2026-10-29 (validate-phase). The manual-only rows above remain for the end-of-phase host checks.
@@ -100,4 +104,12 @@ created: "2026-10-29"
 |---|---|
 | Gaps found | 1 |
 | Resolved | 1 |
+| Escalated | 0 |
+
+## Validation Audit 2026-10-30
+
+| Metric | Count |
+|---|---|
+| Gaps found | 0 |
+| Resolved | 0 |
 | Escalated | 0 |
