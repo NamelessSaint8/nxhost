@@ -333,13 +333,15 @@ class Port:
 
     def translator(self):
         """The shader translator (dm/gfx/tools/dmsh_xlate over dm/third_party/ryujinx) built from the repository's source with the player's .NET SDK, once for every game,
-        in <user dir>/tools/dmsh_xlate: (dmsh_xlate.dll, the source's key). Not the iOS chain's prebuilt dm/gfx/tools/dmsh_xlate_bin, which only a Mac can rebuild
+        in <user dir>/tools/dmsh_xlate-<key[:12]>: (dmsh_xlate.dll, the source's key). Not the iOS chain's prebuilt dm/gfx/tools/dmsh_xlate_bin, which only a Mac can rebuild
         (its lock fingerprints Apple's Metal compiler): Android takes a translator fix as soon as it is in the source"""
         src = DM / 'gfx/tools/dmsh_xlate'; ryu = DM / 'third_party/ryujinx'
         files = sorted([*src.glob('*.cs'), *src.glob('*.csproj'), *ryu.glob('*.props')] + [p for p in (ryu / 'src').rglob('*') if p.suffix in ('.cs', '.csproj', '.props')
                                                                                          and not {'bin', 'obj'} & set(p.relative_to(ryu).parts)])
         key = nsp.fingerprint(('files', files), ('cmd', [str(self.tools['dotnet']), '--version']), env=self.env)
-        out = paths.user_dir() / 'tools/dmsh_xlate'; kf = out.with_name('dmsh_xlate.key'); dll = out / 'dmsh_xlate.dll'
+        # CR-03: each key builds into its own folder, so a rebuild for another key never removes a dll a running port's shader_vk.py --xlate is using
+        # shortcut: translators of older keys stay (about 5 MB each, one per translator source or .NET change); prune them once a port records which one it is using
+        out = paths.user_dir() / f'tools/dmsh_xlate-{key[:12]}'; kf = out.with_name(out.name + '.key'); dll = out / 'dmsh_xlate.dll'
         if dll.is_file() and nsp.reused(kf, key) is not None: return dll, key
         with nuget.restored(src, self.tools['dotnet'], self.env, self.logs / 'nuget_restore_translator.log'):   # .partial is shared by every game's port
             tmp = out.with_name('dmsh_xlate.partial'); nsp.rmtree(tmp); nsp.rmtree(kf)
