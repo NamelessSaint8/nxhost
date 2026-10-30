@@ -420,6 +420,31 @@ class Escaping(unittest.TestCase):   # the game card shows porter's strings as t
         port.on_inspect(self.info(), 0, None)
         self.assertEqual(box.count(), 1); self.assertEqual(box.currentData(), '')
 
+    def test_card_escapes(self):   # a game's strings are text: html.escape(..., quote=True) on each
+        w = window(self); port = w.port
+        port.on_inspect(self.info(name='<b>&x</b>', updates=[{'version': '<v>'}], pack='<i>p</i>', android={'status': 'playable', 'tested': '<u>t</u>'},
+                                  reason='<script>r</script>'), 0, None)
+        t = port.card.text()
+        for s in ('&lt;b&gt;&amp;x&lt;/b&gt;', '&lt;v&gt;', '&lt;i&gt;p&lt;/i&gt;', '&lt;u&gt;t&lt;/u&gt;', '&lt;script&gt;'): self.assertIn(s, t)
+        for s in ('<b>&x</b>', '<v>', '<i>p</i>', '<u>t</u>', '<script>'): self.assertNotIn(s, t)
+
+    def test_folder_path_escaped(self):
+        w = window(self); port = w.port
+        port.folder.setText('/no/such/<b>dir'); port.inspect()
+        t = port.card.text()
+        self.assertIn('Not a folder', t); self.assertIn('&lt;b&gt;', t); self.assertNotIn('<b>dir', t)
+
+    def test_empty_name_and_reason(self):   # no name: the title ID in bold; an empty reason adds no row
+        w = window(self); port = w.port
+        port.on_inspect(self.info(), 0, None)
+        t = port.card.text()
+        self.assertIn('<b>0100000000AAA000</b>', t); self.assertEqual(t.count('<br>'), 1, t)
+
+    def test_log_font(self):   # the platform's own fixed-width font, not one picked by OS name
+        from PySide6.QtGui import QFontDatabase
+        w = window(self); f = w.port.log.font()
+        self.assertEqual(f.family(), QFontDatabase.systemFont(QFontDatabase.FixedFont).family()); self.assertEqual(f.pointSize(), 9)
+
     def test_one_language_source(self):   # upstream's nacp.LANGUAGES through porter inspect, no copy in the GUI
         self.assertIsNone(re.search(r'^LANGUAGES\b', (REPO / 'gui/app.py').read_text(encoding='utf-8'), re.M))
 
