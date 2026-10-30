@@ -11,6 +11,13 @@ def check(name, ok, detail=''):
 
 def strip_c(s): return re.sub(r'//[^\n]*', '', re.sub(r'/\*.*?\*/', '', s, flags=re.S))
 def strip_py(s): return re.sub(r'#[^\n]*', '', s)
+# A title ID split across a concatenation ("0100" "000000AAA000", '0100' + '000000AAA000') passed rule 1 piece by piece (CONCERNS.md "Per-game data sits next to shared core").
+# Each match starts at a literal and takes the run after it, so literals pair left to right as rule 1's blanking pairs them.
+# shortcut: regex-based, so an escaped quote inside a literal can mis-join; upgrade to a tokenizer if that ever gives a false result.
+LIT_RUN = {q: re.compile(f'{q}[^{q}\\n]*{q}(?:\\s*\\+?\\s*{q}[^{q}\\n]*{q})*') for q in '"\''}
+def join_literals(code):
+    for q, rx in LIT_RUN.items(): code = rx.sub(lambda m: q + ''.join(re.findall(f'{q}([^{q}\\n]*){q}', m.group(0))) + q, code)
+    return code
 profiles = sorted(p.name for p in (R / 'nxnative/dm/games').iterdir() if p.is_dir() and re.fullmatch(r'0100[0-9A-F]{12}', p.name))
 names = set()
 for pid in profiles:
@@ -29,12 +36,13 @@ hits = []
 for f in files:
     if not f.startswith('nxnative/dm/android/') or not f.endswith(('.c', '.h', '.py', '.m')): continue
     s = (R / f).read_text(encoding='utf-8', errors='replace')
-    code = strip_c(s) if f.endswith(('.c', '.h', '.m')) else strip_py(s)
+    code = join_literals(strip_c(s) if f.endswith(('.c', '.h', '.m')) else strip_py(s))
     code = re.sub(r'"[^"\n]*"', lambda m: m.group(0) if GAME_RX.search(m.group(0)) or any(n in m.group(0) for n in names) else '""', code)
     for m in GAME_RX.finditer(code): hits.append(f'{f}: {m.group(0)}')
     for n in names:
         if n in code: hits.append(f'{f}: {n}')
 check('dm/android has no game-specific code', not hits, '; '.join(hits[:5]))
+check('arch_rules joins split string literals', all(GAME_RX.search(join_literals(s)) for s in ('x = "0100" "000000AAA000";', "x = ('0100' +\n     '000000AAA000')")))
 
 # 2. Core, shared: no title IDs in code outside the profiles (upstream's own per-game rules live in patches.py / sdk_patches.py)
 hits = []
