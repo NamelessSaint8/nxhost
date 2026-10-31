@@ -173,6 +173,34 @@ class Unpack(unittest.TestCase):   # fetch._install on crafted archives: refused
         for order, links in (('forward', [a, b]), ('reversed', [b, a])):
             with self.subTest(order=order): self.refused(evil_zip(self.arcs / 'order.zip', [('d1/d2/keep.txt', None, 0o644), *links]), 'a')
 
+    def test_link_to_sibling_refused(self):   # CR-04, one archive: the verifier's top/up -> ../platform-tools/adb passed 02-11's unpack-folder check, then pointed at the sibling toolchain once top was installed
+        self.refused(evil_zip(self.arcs / 'sib.zip', [('top/bin/tool', None, 0o755), ('top/up', '../adb', 0)]), 'top/up')
+
+    def test_link_above_root_refused(self):   # CR-04, two archives: the platform-tools half, z -> .. leaves the installed folder, so the second archive has no z to route through
+        self.refused(evil_zip(self.arcs / 'pt.zip', [('platform-tools/adb', None, 0o755), ('platform-tools/z', '..', 0)]), 'platform-tools/z')
+
+    def test_relocated_link_refused(self):   # 02-11's on-disk check passed this: b resolves to the installed root once top is stripped, and a climbs above it
+        self.refused(evil_zip(self.arcs / 'reloc.zip', [('top/keep', None, 0o644), ('top/d1/d2/b', '../..', 0), ('top/a', 'd1/d2/b/../top/y', 0)]), 'top/a')
+
+    def test_link_loop_refused(self):   # IN-06: Path.resolve raised RuntimeError on 3.11/3.12 for a loop and accepted it on 3.13+
+        for kind, links, member in (('pair', [('a', 'b', 0), ('b', 'a', 0)], 'a'), ('self', [('s', 's', 0)], 's')):
+            with self.subTest(kind): self.refused(evil_zip(self.arcs / 'loop.zip', [('ok', None, 0o644), *links]), member)
+
+    def test_link_beside_folder_refused(self):   # IN-06: d -> . with a member under d gave a raw PermissionError, not porter's refusal
+        self.refused(evil_zip(self.arcs / 'beside.zip', [('d/x', None, 0o644), ('d', '.', 0)]), 'd/x')
+
+    def test_link_under_link_refused(self):   # IN-06: a link under a dangling link gave a raw FileExistsError
+        self.refused(evil_zip(self.arcs / 'under.zip', [('ok', None, 0o644), ('a', 'nowhere', 0), ('a/b', 'x', 0)]), 'a/b')
+
+    def test_internal_links_kept(self):   # the NDK's own shapes: a folder link, a link through it, a same-folder link and a chain
+        links = {'lib': 'lib64', 'inc/x.so': '../lib/libx.so', 'bin/clang': 'clang-18', 'bin/ld.lld': 'lld', 'bin/ld': 'ld.lld'}
+        arc = evil_zip(self.arcs / 'in.zip', [(f'top/{f}', None, 0o755) for f in ('lib64/libx.so', 'bin/clang-18', 'bin/lld')] + [(f'top/{n}', t, 0) for n, t in links.items()])
+        dest = self.fetch._install(self.item, arc)
+        self.assertEqual(dest, self.root / 'x')
+        if os.name != 'nt':
+            for n, t in links.items():
+                with self.subTest(n): self.assertEqual(os.readlink(dest / n), t); r = (dest / n).resolve(); self.assertTrue(r.exists()); self.assertTrue(r.is_relative_to(dest.resolve()))   # lib is a folder
+
     def test_valid_zip_kept(self):
         arc = evil_zip(self.arcs / 'ok.zip', [('top/bin/tool', None, 0o755), ('top/lib/libc++.so', None, 0o644), ('top/lib/libc++.so.1', 'libc++.so', 0),
                                              ('top/shader/x/libc++.so', '../../lib/libc++.so', 0)])   # the NDK's shader-tools link shape
