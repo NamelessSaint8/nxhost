@@ -665,4 +665,77 @@ class Tools(unittest.TestCase):   # the tools page (D-07, D-21, D-23..D-26): Dow
         self.assertIn(a, p.status.text()); self.assertIn(b, p.status.text()); self.assertEqual(p.status.font().family(), firstrun.mono().family())
 
 
+    def buttons(self, p, row): w = p.table.cellWidget(row, 5); return {b.text(): b for b in w.findChildren(QPushButton)} if w else {}
+
+    def test_second_lines(self):
+        d = tools_doc(); note = 'community r27c build (HomuHomu833), clang 18.0.3: not the build the titles were tested with'; item(d, 'Android NDK')['note'] = note
+        w, calls, z, p = self.open(d); ndk, net = p.table.cellWidget(0, 1), p.table.cellWidget(1, 1)
+        self.assertIsNotNone(ndk, 'the Tool column has no cell widget')
+        self.assertIn(note, ndk.note.text()); self.assertIn('!', ndk.note.text()); self.assertIn(firstrun.colour(p, 'note'), ndk.note.text())
+        self.assertTrue(ndk.note.isVisibleTo(p)); self.assertTrue(ndk.note.wordWrap())
+        self.assertEqual(net.fix.text(), item(d, '.NET SDK')['fix']); self.assertTrue(net.fix.isVisibleTo(p))
+        self.assertTrue(net.fix.textInteractionFlags() & Qt.TextSelectableByMouse); self.assertFalse(net.note.isVisibleTo(p))
+        self.assertFalse(p.table.cellWidget(2, 1).fix.isVisibleTo(p))   # an ok row shows no fix
+
+    def test_use_own_ndk(self):
+        w, calls, z, p = self.open(); calls.hold.add('config'); b = self.buttons(p, 0)['Use my own…']
+        with mock.patch.object(firstrun.QFileDialog, 'getExistingDirectory', return_value='/opt/my-ndk'): b.click()
+        self.assertEqual(calls.sent('config'), [['config', 'ndk', '/opt/my-ndk', '--json']])
+        self.assertEqual(b.text(), 'saving…'); self.assertFalse(b.isEnabled())
+        w, calls, z, p = self.open(); n = len(calls.sent('setup'))
+        with mock.patch.object(firstrun.QFileDialog, 'getExistingDirectory', return_value='/opt/my-ndk'): self.buttons(p, 0)['Use my own…'].click()
+        self.assertTrue(until(lambda: len(calls.sent('setup')) > n, 2000))   # porter's verdict redraws the row
+        w, calls, z, p = self.open(); calls.fail['config'] = {'timeout': 0, 'error': 'no NDK in <dir>', 'stderr': ''}
+        with mock.patch.object(firstrun.QFileDialog, 'getExistingDirectory', return_value='/x'): self.buttons(p, 0)['Use my own…'].click()
+        self.assertTrue(until(lambda: 'no NDK in &lt;dir&gt;' in p.status.text(), 2000))
+        with mock.patch.object(firstrun.QFileDialog, 'getExistingDirectory', return_value=''): self.buttons(p, 0)['Use my own…'].click()   # cancelled: nothing sent
+        self.assertEqual(len(calls.sent('config')), 1)
+
+    def test_use_own_dotnet_adb(self):
+        d = tools_doc(); item(d, 'adb').update(ok=False, detail='not found', fix='Download missing tools, or set adb', path='')
+        for row, key in ((1, 'dotnet'), (2, 'adb')):
+            with self.subTest(key):
+                w, calls, z, p = self.open(copy.deepcopy(d)); calls.hold.add('config')
+                with mock.patch.object(firstrun.QFileDialog, 'getOpenFileName', return_value=(f'/opt/{key}', '')): self.buttons(p, row)['Use my own…'].click()
+                self.assertEqual(calls.sent('config'), [['config', key, f'/opt/{key}', '--json']])
+
+    def test_arm64_adb(self):   # D-25: no adb build for Linux arm64; porter sends the distribution's command
+        d = doc(); item(d, 'adb').update(ok=False, detail='not found', fix='Install adb from your distribution:', path='', command='sudo apt install adb')
+        w, calls, z, p = self.open(d); bs = self.buttons(p, 2)
+        self.assertEqual(set(bs), {'Copy command', 'Re-check', 'Use my own…'}); self.assertFalse(p.dl.isVisibleTo(p))
+        cell = p.table.cellWidget(2, 1); self.assertEqual(cell.command.text(), 'sudo apt install adb'); self.assertEqual(cell.command.font().family(), firstrun.mono().family())
+        bs['Copy command'].click(); self.assertEqual(QApplication.clipboard().text(), 'sudo apt install adb')
+        n = len(calls.sent('setup')); bs['Re-check'].click(); self.assertTrue(until(lambda: len(calls.sent('setup')) > n, 2000))
+
+    def test_prepare_chain(self):   # D-24: a download this page started ends 0, then Prepare .NET tools runs on the same fetch
+        w, calls, z, p = self.open()
+        with mock.patch.object(w.fetch, 'start') as start:
+            p.dl.click(); w.fetch.finished.emit(0)
+            self.assertEqual(start.call_args_list, [mock.call(['tools', '--download', '--progress', 'json'])])   # the next turn, not inside finished
+            self.assertTrue(until(lambda: start.call_count == 2, 1000))
+            self.assertEqual(start.call_args, mock.call(['tools', '--prepare', '--progress', 'json']))
+            w.fetch.finished.emit(0)
+        self.assertEqual(p.status.text(), '.NET tools are ready.'); QTest.qWait(50); self.assertEqual(start.call_count, 2)   # no chain after a Prepare
+        self.stand_in('--tree'); self.addCleanup(self.finish, w); evs = []; w.fetch.event.connect(evs.append); p.prepare()
+        self.assertTrue(until(lambda: any(e.get('ev') == 'pids' for e in evs), 10000))
+        pids = next(e for e in evs if e.get('ev') == 'pids'); self.addCleanup(reap, pids['detached']); self.addCleanup(reap, pids['child'])
+        self.assertEqual(p.dl.text(), 'Cancel .NET preparation'); p.dl.click()
+        self.assertTrue(until(lambda: not w.fetch.running(), 10000)); self.assertTrue(gone(pids['child']))
+
+    def test_prepare_button(self):   # .NET already here and nothing running: its row offers Prepare .NET tools
+        w, calls, z, p = self.open(doc()); b = self.buttons(p, 1).get('Prepare .NET tools'); self.assertIsNotNone(b)
+        self.assertNotIn('Prepare .NET tools', self.buttons(p, 0))
+        with mock.patch.object(w.fetch, 'start') as start: b.click()
+        start.assert_called_once_with(['tools', '--prepare', '--progress', 'json'])
+
+    def test_prepare_failure_is_note(self):
+        w, calls, z, p = self.open(doc()); log = os.path.join(HOME, 'prepare.log')
+        with mock.patch.object(w.fetch, 'start'): p.prepare()
+        w.fetch.event.emit({'ev': 'error', 'msg': 'NuGet restore failed: <offline>', 'type': 'ToolError', 'log': log}); w.fetch.finished.emit(1)
+        t = p.status.text()
+        self.assertIn('!', t); self.assertIn(firstrun.colour(p, 'note'), t); self.assertNotIn(firstrun.colour(p, 'bad'), t)
+        self.assertIn('NuGet restore failed: &lt;offline&gt;', t); self.assertIn('<a href="log">Open log</a>', t)
+        self.assertTrue(z.button(QWizard.NextButton).isEnabled()); self.assertTrue(p.isComplete())
+
+
 if __name__ == '__main__': unittest.main()
