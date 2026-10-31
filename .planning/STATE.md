@@ -2,17 +2,17 @@
 gsd_state_version: "1.0"
 current_phase: 03
 current_phase_name: Host Toolchains and Guided First Run
-status: executing
-stopped_at: Completed 03-10-PLAN.md
-last_updated: "2026-10-31T17:03:31.938Z"
+status: verifying
+stopped_at: Completed 03-11-PLAN.md
+last_updated: "2026-10-31T17:16:54.410Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 03 execution started
-state_head: 6e6d17d937bdd1ba1acf5eaca28f0759a8492dee
+state_head: d0d86998d260f0289a1f07d4370e515ceaebc843
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 35
-  completed_plans: 34
+  completed_plans: 35
   percent: 33
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-10-31)
 
 Phase: 03 (Host Toolchains and Guided First Run) — EXECUTING
 Plan: 12 of 12
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-10-31 — Phase 03 execution started
 
 Progress: [███░░░░░░░] 33%
@@ -91,6 +91,7 @@ Progress: [███░░░░░░░] 33%
 | Phase 03 P12 | 6min | 2 tasks | 2 files |
 | Phase 03 P09 | 15min | 2 tasks | 7 files |
 | Phase 03 P10 | 8 min | 2 tasks | 2 files |
+| Phase 03 P11 | 10min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -182,6 +183,9 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-10: device polling follows the wizard's currentIdChanged (QWizard skips initializePage on Back); the next devices --json is scheduled 2.5 s after each answer, one call outstanding
 - [Phase 03]: 03-10: the done page's No device yet note comes from the device page's last answer in this wizard (in memory, None when it never asked)
 - [Phase 03]: 03-10: QWizard.NoDefaultButton only on the done page keeps Port a game the default
+- [Phase 03]: 03-11: the progress line's speed is porter's rate; [k/n] joined with a space, the other parts with ' · '
+- [Phase 03]: 03-11: the Prepare .NET tools chain follows only a download the tools page started; a failed Prepare is a note, never a blocker
+- [Phase 03]: 03-11: Wizard.primary(i) makes a page's own primary button (done, tools) the default instead of QWizard's Next
 
 ### Pending Todos
 
@@ -206,6 +210,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-31T17:03:31.690Z
-Stopped at: Completed 03-10-PLAN.md
+Last session: 2026-10-31T17:16:54.161Z
+Stopped at: Completed 03-11-PLAN.md
 Resume file: None

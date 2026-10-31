@@ -79,7 +79,7 @@ Requirements for the cross-platform GUI milestone. Each maps to a roadmap phase.
 
 - [x] **TOOL-01**: User on Linux arm64 gets a community arm64 NDK r27c detected or downloaded, verified by hash and a compile probe, and the host build uses its `linux-arm64` folder
 - [x] **TOOL-02**: User on Linux arm64 gets .NET 10 detected or downloaded
-- [ ] **TOOL-03**: User on Linux sees the distro adb version; versions without `push -Z` are handled or refused with fix text, and "no permissions" points to the udev rules package
+- [x] **TOOL-03**: User on Linux sees the distro adb version; versions without `push -Z` are handled or refused with fix text, and "no permissions" points to the udev rules package
 - [x] **TOOL-04**: User launching the app from Finder or a desktop menu has every tool found by absolute path, without relying on the shell PATH
 
 ### Hardening
@@ -210,7 +210,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CI-04 | Phase 1 | Complete |
 | TOOL-01 | Phase 3 | Complete |
 | TOOL-02 | Phase 3 | Complete |
-| TOOL-03 | Phase 3 | Pending |
+| TOOL-03 | Phase 3 | Complete |
 | TOOL-04 | Phase 3 | Complete |
 | HARD-01 | Phase 2 | Complete |
 | HARD-02 | Phase 2 | Complete |

@@ -256,3 +256,9 @@ None.
 ---
 *Phase: 03-host-toolchains-and-guided-first-run*
 *Completed: 2026-10-31*
+
+## Self-Check: PASSED
+- Files: gui/firstrun.py, gui/app.py, tests/test_firstrun.py, tests/test_bridge.py, tests/fixtures/bridge/fake_porter.py, tdd/03-11-t1/t2/t3-red.json found
+- Commits: 3ea20a5, 7939c4d, a69641c, 957ddb4, d8d30b1, 997745c are ancestors of HEAD
+- Acceptance: every grep count in the plan matches (progress_line 1, download args 1, prepare args 1, Copy command 2, TOOL_KEYS 3, fake --prepare 2, license phrase 0, app progress_line 1, app Cancel .NET preparation 1)
+- Plan verification: `unittest discover tests` OK (419), `tests/arch_rules.py` prints all checks passed
