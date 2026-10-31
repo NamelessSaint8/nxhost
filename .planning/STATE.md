@@ -2,17 +2,17 @@
 gsd_state_version: "1.0"
 current_phase: 02
 current_phase_name: Porter Hardening
-status: executing
-stopped_at: Completed 02-12-PLAN.md
-last_updated: "2026-10-30T21:17:24.622Z"
+status: verifying
+stopped_at: Completed 02-13-PLAN.md
+last_updated: "2026-10-31T01:58:02.720Z"
 last_activity: 2026-10-30
 last_activity_desc: Phase 02 execution started
-state_head: e482289555632f326d38d823dfbbad98b277a156
+state_head: 1961c0b793804d1b799212693d2e209444efd7a2
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 23
-  completed_plans: 22
+  completed_plans: 23
   percent: 17
 ---
 
@@ -27,9 +27,9 @@ See: .planning/PROJECT.md (updated 2026-10-30)
 
 ## Current Position
 
-Phase: 02 (Porter Hardening) — READY TO EXECUTE
-Plan: 12 of 12
-Status: Ready to execute
+Phase: 02 (Porter Hardening) — EXECUTING
+Plan: 13 of 13
+Status: Phase complete — ready for verification
 Last activity: 2026-10-30 — Phase 02 execution started
 
 Progress: [██░░░░░░░░] 17%
@@ -78,6 +78,7 @@ Progress: [██░░░░░░░░] 17%
 | Phase 02 P10 | 8 min | 3 tasks | 9 files |
 | Phase 02 P11 | 2 min | 2 tasks | 3 files |
 | Phase 02 P12 | 4 min | 3 tasks | 4 files |
+| Phase 02 P13 | 7 min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -137,6 +138,10 @@ Recent decisions affecting current work:
 - [Phase 02]: Shared tool builds (restore, check, nx_extract build, translator .partial/build/swap) hold <user dir>/tools/.porter.lock with wait=True
 - [Phase 02]: Zip links are checked in two passes: folder check as each link is made, then every link resolved once all exist (CR-01, order-independent)
 - [Phase 02]: 02-12: each shader-translator key builds into <user dir>/tools/dmsh_xlate-<key[:12]>, chosen over holding the tools lock around the shaders stage (deadlocks on POSIX flock); reuse is re-checked inside the lock; the lock file is opened unbuffered so the holder read stays below the Windows-locked byte
+- [Phase 02]: 02-13: links resolved in memory from the installed folder (_top), one rule for check and install (CR-04)
+- [Phase 02]: 02-13: link resolution capped at 40 substitutions so loops are a BuildError on every Python (IN-06)
+- [Phase 02]: 02-13: link names/targets must be printable ASCII; case-variant, duplicate and member-under-link refused (APFS)
+- [Phase 02]: 02-13: installed toolchain renamed to .<folder>.old and restored on failure or cut-off swap (WR-05)
 
 ### Pending Todos
 
@@ -161,6 +166,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-30T20:15:00.908Z
-Stopped at: Completed 02-12-PLAN.md
+Last session: 2026-10-31T01:58:02.628Z
+Stopped at: Completed 02-13-PLAN.md
 Resume file: None

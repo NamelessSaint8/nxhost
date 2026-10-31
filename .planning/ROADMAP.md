@@ -69,7 +69,7 @@ Plans:
   3. Each downloaded toolchain, NuGet package and FPSLocker config is checked against the exact version and hash recorded in one manifest, the FPSLocker hash appears in the port log, and a mismatch stops with a clear message.
   4. The signing key is created atomically with mode 0600, and when the key file exists but can't be read, porter stops with an error instead of making a new key.
   5. Every item in `.planning/codebase/CONCERNS.md` is closed (escaped game names, system monospace font, recursive disk-space check with a re-check after extraction, env dicts with absolute tool paths, named and asserted upstream overrides, repo housekeeping), and the suite covers downloads and unpacking, adb and install, per-OS toolchain detection and CLI error paths.
-**Plans**: 12/13 plans executed (1 gap-closure plan pending)
+**Plans**: 13/13 plans executed
 
 Plans:
 **Wave 1**
@@ -97,7 +97,7 @@ Plans:
 - [x] 02-12-PLAN.md — Translator built per key and reuse re-checked inside the tools lock (CR-03), lock holder read bounded below the locked byte (CR-02) (HARD-04)
 
 **Gap closure, round 2** *(from the re-verification: CR-04)*
-- [ ] 02-13-PLAN.md — Zip and tar links decided in memory from the folder that is installed, before anything is written (CR-04, IN-06); pinned zips' link tables as a fixture; installed toolchain moved aside until its replacement is in (WR-05) (HARD-01, TEST-01)
+- [x] 02-13-PLAN.md — Zip and tar links decided in memory from the folder that is installed, before anything is written (CR-04, IN-06); pinned zips' link tables as a fixture; installed toolchain moved aside until its replacement is in (WR-05) (HARD-01, TEST-01)
 
 ### Phase 3: Host Toolchains and Guided First Run
 **Goal**: A tester on any of the four hosts goes from a fresh download to a ready setup (keys, toolchains, a connected device) by following the GUI
@@ -156,7 +156,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Bridge, Bundles and CI | 10/10 | Complete    | 2026-10-30 |
-| 2. Porter Hardening | 12/12 | In Progress | - |
+| 2. Porter Hardening | 13/13 | In Progress | - |
 | 3. Host Toolchains and Guided First Run | 0/TBD | Not started | - |
 | 4. Game Library and Per-Game Settings | 0/TBD | Not started | - |
 | 5. Device Manager and Diagnostics | 0/TBD | Not started | - |
