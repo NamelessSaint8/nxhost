@@ -715,12 +715,20 @@ class Tools(unittest.TestCase):   # the tools page (D-07, D-21, D-23..D-26): Dow
             self.assertTrue(until(lambda: start.call_count == 2, 1000))
             self.assertEqual(start.call_args, mock.call(['tools', '--prepare', '--progress', 'json']))
             w.fetch.finished.emit(0)
-        self.assertEqual(p.status.text(), '.NET tools are ready.'); QTest.qWait(50); self.assertEqual(start.call_count, 2)   # no chain after a Prepare
+        self.assertEqual(firstrun.PREPARED, '.NET tools are ready.'); self.assertEqual(p.status.text(), firstrun.PREPARED)
+        QTest.qWait(50); self.assertEqual(start.call_count, 2)   # no chain after a Prepare
         self.stand_in('--tree'); self.addCleanup(self.finish, w); evs = []; w.fetch.event.connect(evs.append); p.prepare()
         self.assertTrue(until(lambda: any(e.get('ev') == 'pids' for e in evs), 10000))
         pids = next(e for e in evs if e.get('ev') == 'pids'); self.addCleanup(reap, pids['detached']); self.addCleanup(reap, pids['child'])
         self.assertEqual(p.dl.text(), 'Cancel .NET preparation'); p.dl.click()
         self.assertTrue(until(lambda: not w.fetch.running(), 10000)); self.assertTrue(gone(pids['child']))
+
+    def test_no_prepare_while_quitting(self):   # WR-05: Stop and quit as the download ends 0: no Prepare starts on the closing window
+        w, calls, z, p = self.open()
+        with mock.patch.object(w.fetch, 'start') as start:
+            p.dl.click(); w.quitting = True; w.fetch.finished.emit(0); QTest.qWait(50)
+            self.assertEqual(start.call_args_list, [mock.call(['tools', '--download', '--progress', 'json'])])
+            p.prepare(); QTest.qWait(50); self.assertEqual(start.call_count, 1)   # nor from the button
 
     def test_prepare_button(self):   # .NET already here and nothing running: its row offers Prepare .NET tools
         w, calls, z, p = self.open(doc()); b = self.buttons(p, 1).get('Prepare .NET tools'); self.assertIsNotNone(b)

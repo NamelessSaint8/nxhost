@@ -1,0 +1,10 @@
+{
+ "command": "QT_QPA_PLATFORM=offscreen NO_COLOR=1 .venv/bin/python -m unittest tests.test_firstrun.Tools.test_no_prepare_while_quitting",
+ "exitCode": 1,
+ "output": "qt.qpa.fonts: Populating font family aliases took 291 ms. Replace uses of missing font family \"Sans Serif\" with one that exists to avoid this cost. \nF\n======================================================================\nFAIL: test_no_prepare_while_quitting (tests.test_firstrun.Tools.test_no_prepare_while_quitting)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/Volumes/Data/Dev/nx2android/tests/test_firstrun.py\", line 730, in test_no_prepare_while_quitting\n    self.assertEqual(start.call_args_list, [mock.call(['tools', '--download', '--progress', 'json'])])\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: [call[38 chars] 'json']),\n call(['tools', '--prepare', '--progress', 'json'])] != [call[38 chars] 'json'])]\n\n----------------------------------------------------------------------\nRan 1 test in 0.578s\n\nFAILED (failures=1)\n",
+ "targetTest": "test_no_prepare_while_quitting",
+ "targetFile": "tests/test_firstrun.py",
+ "expected": "with the host window quitting, a download ending 0 starts no tools --prepare: fetch.start called once",
+ "actual": "fetch.start was called a second time with ['tools', '--prepare', '--progress', 'json'] on the next turn",
+ "semanticAssessment": "The target ran and failed on its planned assertion (the start call list), for the WR-05 reason: on_finished schedules the Prepare chain without looking at the window's quitting flag. No load, import or fixture fault."
+}
