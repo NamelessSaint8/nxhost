@@ -1,0 +1,10 @@
+{
+ "command": "NO_COLOR=1 QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest tests.test_firstrun.Device.test_no_stacking",
+ "exitCode": 1,
+ "output": "qt.qpa.fonts: Populating font family aliases took 305 ms. Replace uses of missing font family \"Sans Serif\" with one that exists to avoid this cost. \nF\n======================================================================\nFAIL: test_no_stacking (tests.test_firstrun.Device.test_no_stacking)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/Volumes/Data/Dev/nx2android/tests/test_firstrun.py\", line 417, in test_no_stacking\n    self.assertTrue(until(lambda: self.polls(calls) >= 1, 1000)); QTest.qWait(self.MS * 4)\n    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: False is not true\n\n----------------------------------------------------------------------\nRan 1 test in 1.467s\n\nFAILED (failures=1)",
+ "targetTest": "test_no_stacking",
+ "targetFile": "tests/test_firstrun.py",
+ "expected": "exactly one devices --json call outstanding from the device page",
+ "actual": "no devices --json call: the page does not poll yet",
+ "semanticAssessment": "Valid RED: test_no_stacking ran and failed on its first assertion (no devices --json call within 1 s) because DevicePage is still 03-05 step text and never polls; no import, fixture or syntax fault. The other Device tests fail the same way (no list/empty attributes, no instructions)."
+}

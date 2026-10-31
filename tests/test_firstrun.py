@@ -46,9 +46,10 @@ def until(pred, ms):   # spin the event loop until pred() holds
 def doc(name='setup_ready.json'): return json.loads((FIXTURES / name).read_text(encoding='utf-8'))
 
 
-class Calls:   # stands in for gui.runner.call_json: answers each command from self.answers (or self.fail) on the next turn, records every args list
+class Calls:   # stands in for gui.runner.call_json: answers each command from self.queue's next answer, else self.answers (or self.fail), on the next turn;
+    # a command in self.hold never answers; every args list is recorded
     def __init__(self, test, setup):
-        self.args, self.fail, self.hold = [], {}, set()
+        self.args, self.fail, self.hold, self.queue = [], {}, set(), {}
         self.answers = {'setup': setup, 'devices': [], 'profiles': []}
         for m in (app, firstrun):
             p = mock.patch.object(m, 'call_json', self); p.start(); test.addCleanup(p.stop)
@@ -57,7 +58,8 @@ class Calls:   # stands in for gui.runner.call_json: answers each command from s
         self.args.append(list(args)); cmd = args[0]
         if cmd in self.hold: return
         fail = self.fail.get(cmd)
-        obj = None if fail else {'key': args[1], 'value': args[2]} if cmd == 'config' else copy.deepcopy(self.answers.get(cmd))
+        q = self.queue.get(cmd)
+        obj = None if fail else {'key': args[1], 'value': args[2]} if cmd == 'config' else copy.deepcopy(q.pop(0) if q else self.answers.get(cmd))
         QTimer.singleShot(0, parent, lambda: done(obj, 1 if fail else 0, fail))   # never into a destroyed owner, as call_json
 
     def sent(self, cmd): return [a for a in self.args if a[0] == cmd]
@@ -367,6 +369,93 @@ class Keys(unittest.TestCase):   # the prod.keys page (03-12, D-05/D-06): porter
                 b = self.browse(p)
                 with mock.patch.object(firstrun.QFileDialog, 'getOpenFileName', return_value=('/opt/nx2a-test/mine/prod.keys', '')): b.click()
                 self.assertTrue(z.button(QWizard.NextButton).isEnabled()); self.assertTrue(p.isComplete())
+
+
+STEPS = ('1. On the device, open Settings › About and tap Build number seven times. 2. Open Settings › System › Developer options and turn on USB debugging. '
+         '3. Connect it by USB and tap Allow on the "Allow USB debugging?" prompt.')
+
+
+def dev(serial, state, fix='', model=None):   # one devices --json row as porter prints it
+    return {'serial': serial, 'state': state, 'info': f'model:{model} device:x' if model else '', 'detail': state, 'fix': fix}
+
+
+class Device(unittest.TestCase):   # the device page (D-15, DEV-01): devices --json asked again from each answer while the page shows; each row's adb state and porter's fix
+    MS = 300
+
+    def setUp(self): p = mock.patch.object(firstrun, 'POLL_MS', self.MS, create=True); p.start(); self.addCleanup(p.stop)
+
+    def open(self, *answers, hold=False):   # the wizard at the device page; devices --json answers each of `answers` in turn, then []
+        w, calls = launch(self); calls.queue['devices'] = [copy.deepcopy(a) for a in answers]
+        if hold: calls.hold.add('devices')
+        self.base = len(calls.sent('devices'))   # today's Port tab asks once on its own
+        z = firstrun.open_setup(w, 'device'); p = z.page(firstrun.PAGES.index('device'))
+        self.assertEqual(z.currentId(), firstrun.PAGES.index('device'))
+        return w, calls, z, p
+
+    def polls(self, calls): return len(calls.sent('devices')) - self.base
+
+    def row(self, p, i):
+        r = p.list.itemWidget(p.list.item(i)); self.assertIsNotNone(r, f'list row {i} has no row widget'); return r
+
+    def test_polls_while_current(self):
+        w, calls, z, p = self.open([], [], [])
+        self.assertTrue(until(lambda: self.polls(calls) >= 1, 1000)); self.assertEqual(calls.sent('devices')[-1], ['devices', '--json'])
+        QTest.qWait(self.MS // 3); self.assertEqual(self.polls(calls), 1)   # the next one waits POLL_MS after the answer
+        self.assertTrue(until(lambda: self.polls(calls) >= 2, 3000))
+        z.back(); n = self.polls(calls); QTest.qWait(self.MS * 3)
+        self.assertLessEqual(self.polls(calls), n + 1)   # at most the one already scheduled when Back was pressed... and then nothing
+        n = self.polls(calls); QTest.qWait(self.MS * 3); self.assertEqual(self.polls(calls), n)
+        z.next(); self.assertTrue(until(lambda: self.polls(calls) > n, 1000))   # back on the page: polling again
+        z.next(); self.assertEqual(z.currentId(), firstrun.PAGES.index('done'))
+        QTest.qWait(self.MS); n = self.polls(calls); QTest.qWait(self.MS * 3); self.assertEqual(self.polls(calls), n)
+        w, calls, z, p = self.open([], [])
+        self.assertTrue(until(lambda: self.polls(calls) >= 1, 1000)); z.close()
+        QTest.qWait(self.MS); n = self.polls(calls); QTest.qWait(self.MS * 3); self.assertEqual(self.polls(calls), n)
+
+    def test_no_stacking(self):   # a stalled adb: one call outstanding, never another on top
+        w, calls, z, p = self.open(hold=True)
+        self.assertTrue(until(lambda: self.polls(calls) >= 1, 1000)); QTest.qWait(self.MS * 4)
+        self.assertEqual(self.polls(calls), 1)
+        self.assertEqual(p.empty.text(), 'Looking again every few seconds…'); self.assertTrue(p.empty.isVisibleTo(p))
+
+    def test_rows(self):
+        rows = [dev('R5CT1', 'device', model='Lenovo_TB320FC'), dev('R5CT2', 'unauthorized', 'Unlock the device and tap Allow on the USB debugging prompt.'),
+                dev('R5CT3', 'offline', 'Unplug the cable and plug it in again, or try another cable or USB port.'),
+                dict(dev('R5CT4', 'no permissions', 'Run sudo apt install android-sdk-platform-tools-common, then unplug the device and plug it in again.'),
+                     detail='no permissions (user in plugdev group; are your udev rules wrong?)'),
+                dev('R5CT5', 'authorizing', 'Wait a moment.')]
+        w, calls, z, p = self.open(rows)
+        self.assertTrue(until(lambda: p.list.count() == 5, 2000))
+        for i, (r, mark, name) in enumerate(zip(rows, '✓✗✗✗▶', ('Lenovo TB320FC', 'R5CT2', 'R5CT3', 'R5CT4', 'R5CT5'))):
+            with self.subTest(r['state']):
+                x = self.row(p, i)
+                self.assertEqual(x.glyph.text(), mark); self.assertEqual(x.name.text(), name)
+                self.assertEqual(x.detail.text(), r['detail']); self.assertEqual(x.detail.font().family(), firstrun.mono().family())
+                self.assertEqual(x.fix.text(), r['fix']); self.assertTrue(x.fix.wordWrap()); self.assertTrue(x.fix.textInteractionFlags() & Qt.TextSelectableByMouse)
+                for lab in (x.name, x.detail, x.fix): self.assertEqual(lab.textFormat(), Qt.PlainText)   # text a USB device controls (T-03-31)
+        self.assertFalse(p.empty.isVisibleTo(p))
+
+    def test_live_change(self):
+        w, calls, z, p = self.open([dev('R5CT1', 'unauthorized', 'Unlock the device and tap Allow on the USB debugging prompt.')], [dev('R5CT1', 'device')])
+        self.assertTrue(until(lambda: p.list.count() == 1 and self.row(p, 0).glyph.text() == '✗', 2000))
+        self.assertTrue(until(lambda: self.row(p, 0).glyph.text() == '✓', 3000))
+
+    def test_empty_and_skip(self):
+        w, calls, z, p = self.open([])
+        self.assertTrue(until(lambda: p.empty.text() == 'No device found yet. Looking again every few seconds…', 2000))
+        self.assertTrue(p.empty.isVisibleTo(p)); self.assertEqual(z.button(QWizard.NextButton).text(), 'Skip: install later')
+        self.assertTrue(z.button(QWizard.NextButton).isEnabled())
+        w, calls, z, p = self.open([dev('R5CT1', 'device')])
+        self.assertTrue(until(lambda: z.button(QWizard.NextButton).text() == 'Next', 2000))
+
+    def test_failure_keeps_polling(self):
+        w, calls, z, p = self.open(); calls.fail['devices'] = {'timeout': 0, 'error': 'adb not found: install <adb>', 'stderr': ''}
+        self.assertTrue(until(lambda: 'adb not found: install <adb>' in p.empty.text(), 2000)); self.assertTrue(p.empty.isVisibleTo(p))
+        n = self.polls(calls); self.assertTrue(until(lambda: self.polls(calls) > n, 3000))
+
+    def test_instructions(self):
+        w, calls, z, p = self.open()
+        self.assertIn(STEPS, shown(p)); self.assertIn('Connect your Android device', shown(p))
 
 
 if __name__ == '__main__': unittest.main()
