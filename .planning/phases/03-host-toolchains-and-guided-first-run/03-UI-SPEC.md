@@ -1,10 +1,11 @@
 ---
 phase: "3"
 slug: "host-toolchains-and-guided-first-run"
-status: draft
+status: approved
 shadcn_initialized: false
 preset: none
 created: "2026-10-31"
+reviewed_at: "2026-10-31"
 ---
 
 # Phase 3 — UI Design Contract
@@ -171,13 +172,13 @@ Define these once in `gui/firstrun.py` as `COLOUR = {'ok': ('#2e7d32', '#81c784'
 
 ### Page 5: done (D-20, D-28)
 - Summary list, one row per step with its glyph and `detail`, then each `notes` entry with `!`.
-- **Games that play today**: names from `profiles --json` where `status` is `playable`, sorted, plain list.
-- Linux only, and only when porter reports the bundle as frozen: **Add to app menu** → `call_json(['desktop-entry', '--install', '--json'])` → the line `Added to the app menu.` or the failure cause. Nothing is written until pressed.
+- **Games that play today**: names from `profiles --json` where `status` is `playable`, sorted, plain list. With no playable title, or when `profiles --json` fails, the heading and list are hidden.
+- Linux only, and only when porter reports the bundle as frozen: **Add to app menu** → `call_json(['desktop-entry', '--install', '--json'])` → the line `Added to the app menu.` or the failure cause. While the call runs the button is disabled and reads `saving…`. Nothing is written until pressed.
 - **Port a game** (default, primary) closes the wizard, switches to the Port tab and calls `PortTab.pick_folder()`. **Close setup** just closes it.
 
 ### Setup tab additions (D-04, D-21, D-26)
 - `SetupTab.check` reads `setup --json` and renders `doc['checks']` with today's code.
-- **Run setup** button at the right of the Requirements group's first row: opens the wizard at the first not-ok step (same as Continue setup).
+- **Run setup** button at the right of the Requirements group's first row: opens the wizard at the first not-ok step (same as Continue setup), or at the done page when every step is ok.
 - Download row: `dl_btn` reads **Cancel download** while a download runs and **Cancel .NET preparation** while Prepare .NET tools runs (the same labels as the tools page), and calls `fetch.stop()`. `dl_step.setWordWrap(True)`. The progress text uses the same format as the tools page. These close UI review Top fix 3.
 - Soft notes (no adb, no authorized device) show as a `!` row in the checklist and never trigger the banner.
 
@@ -236,25 +237,77 @@ Never in any copy: links to keys or firmware, a firmware step, or key values.
 
 ## UI Considerations
 
-Applicable state considerations resolved: 11 covered, 3 backstop, 1 unresolved.
+> Populated by the ui-phase UI-consideration probe (Step 9.5) on 2026-10-31, after the checker approved this contract. Element kinds were confirmed by the developer (the button row is nav + control, the prod.keys page also counts as a form). Copy lives in `## Copywriting Contract`; rows here reference it.
+
+Applicable state considerations resolved: 40 covered, 11 backstop, 5 dismissed, 0 unresolved (56 from the probe), plus 1 open theme assumption outside the probe's taxonomy.
 
 | Category | Element(s) | Status | Resolution / Reason |
 |----------|------------|--------|---------------------|
-| loading | launch `setup --json` | ✅ covered | No wizard and no banner are shown until `setup --json` answers; a failure shows `failed()` with Retry on the Setup tab and calls `set_ready(False)` |
-| loading | legal Accept, Use my own…, key pick | ✅ covered | The pressed control is disabled and reads `saving…` until porter answers, then the row shows porter's verdict |
-| empty | key candidates | ✅ covered | No candidates shows the "Keys empty state" copy, and Browse… stays available |
-| empty | device list | ✅ covered | No device shows the "Device empty state" copy, and polling continues every 2.5 s |
-| empty | downloadable tools | ✅ covered | An empty `downloadable` list hides Download all missing and shows "Every tool is here." |
-| error | one-shot timeout or crash in the wizard | ✅ covered | Cause plus Retry inline on the page, the page stays usable, and the cause never says "porter" |
-| error | download / Prepare failure, hash mismatch | ✅ covered | Problem-coloured cause plus Open log, word-wrapped, hashes in Mono |
-| partial | download cancelled mid-file | ✅ covered | "stopping…" until `finished`, then the cancelled copy; tools finished in that run show ✓ after the re-check |
-| partial | ready without adb or device | ✅ covered | No banner; a `!` soft note on the Setup tab and done page |
-| zero-one-many | devices | ✅ covered | 0: empty copy and Skip: install later; 1: no selection needed; many: selecting one saves `config device` |
-| zero-one-many | banner missing items | ✅ covered | Lists every missing required item in step order, joined with ", " |
-| long-text | fix and error lines (8-line stderr, both hashes, distro commands) | 🧪 backstop | Every multi-line label has word wrap; held-out check: a 300-character hash-mismatch message does not widen the wizard past 760 px |
-| long-text | long paths in candidate and tool rows | 🧪 backstop | Paths elide in the middle in tables and lists (`Qt.ElideMiddle`), full path in the tooltip; held-out visual check at 720 px width |
-| overflow | 11+ playable titles, many tool rows | 🧪 backstop | Lists scroll inside the page; the button row stays visible at the 560 px minimum height |
-| overflow | dark theme on Linux desktops with a custom palette | ⚠ unresolved | Light/dark is decided by Window lightness < 128; a mid-grey theme may pick the less readable pair. Planner assumption: accept for the testers' hosts |
+| empty | launch and banner | ✅ covered | When `setup --json` reports `ready` true, no banner and no wizard are shown (Interaction: Launch 4) |
+| loading | launch and banner | ✅ covered | No wizard and no banner are shown until `setup --json` answers, with a 45 s timeout (Launch 1) |
+| error | launch and banner | ✅ covered | When `setup --json` fails or times out, no wizard or banner appears; the Setup tab's `check_msg` shows `failed(fail)` with Retry and `set_ready(False)` is called (Launch 8) |
+| populated | launch and banner | ✅ covered | The banner reads the Copywriting "Banner" row, with a Continue setup button that opens the wizard at the first not-ok step (Launch 5, 6) |
+| partial | launch and banner | ✅ covered | Ready with only soft notes (no adb, no device): no banner; the notes show as `!` rows on the Setup tab and done page (Launch 4) |
+| overflow | launch and banner | 🧪 backstop | With all five required items missing, the banner wraps inside the window at 720 px width and does not widen it (held-out visual check) |
+| zero-one-many | launch and banner | ✅ covered | 0 missing items: no banner; 1: that item's name; many: every missing required item in step order, joined with ", " (Launch 5) |
+| long-text | launch and banner | 🧪 backstop | The banner label has word wrap on; held-out visual check that the full missing list wraps at the 720 px minimum width |
+| loading | legal page | ✅ covered | While the acceptance saves, Accept and continue is disabled and reads `saving…` (Page 1) |
+| error | legal page | ✅ covered | A failed save shows `failed(fail)` with Retry under the notice and the wizard stays on the page (Page 1) |
+| overflow | legal page | 🧪 backstop | A notice taller than the page scrolls inside the page and the button row stays visible at the 560 px minimum height (held-out visual check) |
+| long-text | legal page | ✅ covered | The notice is a read-only, word-wrapped label (Page 1) |
+| empty | prod.keys page | ✅ covered | With no candidates, the Copywriting "Keys empty state" row shows and Browse… stays available (Page 2) |
+| loading | prod.keys page | ✅ covered | The picked row or Browse… is disabled and reads `saving…` until porter answers, then the row shows porter's verdict (Page 2) |
+| error | prod.keys page | ✅ covered | A bad file shows the Copywriting "Keys bad file" row; a failed one-shot shows the cause with Retry, and Next stays enabled (Page 2) |
+| populated | prod.keys page | ✅ covered | One row per candidate file: ✓/✗ glyph, path in Mono, porter's `detail` such as `keys up to generation 19` (Page 2) |
+| partial | prod.keys page | ✅ covered | A file missing some keys shows ✗ with `missing: <names>`, never key values, and Next stays enabled (Page 2) |
+| overflow | prod.keys page | 🧪 backstop | Many candidates scroll inside the list and the button row stays visible at 560 px height (held-out visual check) |
+| zero-one-many | prod.keys page | ✅ covered | 0: the empty-state copy; 1 or more: one row each; selecting an ok row saves it with `config keys` (Page 2) |
+| long-text | prod.keys page | 🧪 backstop | Long paths elide in the middle (`Qt.ElideMiddle`) with the full path in the tooltip; held-out visual check at 720 px width |
+| empty | tools page | ✅ covered | When nothing is downloadable, Download all missing is hidden and "Every tool is here." shows (Page 3, Copywriting) |
+| loading | tools page | ✅ covered | During a download, the progress line `[k/n] <name> · <step> · <done> / <total> · <speed>/s · <time left>`, the bar and Cancel download show; Use my own… reads `saving…` while it saves (Page 3) |
+| error | tools page | ✅ covered | A failed download or Prepare shows the cause in the problem colour plus Open log, word-wrapped; a hash mismatch keeps porter's text with both hashes in Mono (Page 3) |
+| populated | tools page | ✅ covered | Columns: glyph, Tool, Version, Source, Size or note, action, one row per `steps[tools].items` entry (Page 3) |
+| partial | tools page | ✅ covered | Cancelling mid-file shows `stopping…` until `finished`, then the Copywriting "Download cancelled" row; tools finished in that run show ✓ after the re-check (Page 3) |
+| overflow | tools page | 🧪 backstop | The table scrolls inside the page and the button row stays visible at 560 px height (held-out visual check) |
+| zero-one-many | tools page | — dismissed | Porter returns a fixed set of tool rows (NDK, .NET SDK, adb), and the `[k/n]` batch counter reads the same for any n |
+| long-text | tools page | 🧪 backstop | Fix and error lines (8-line stderr, both hashes, distro commands) word-wrap; held-out check that a 300-character hash-mismatch message does not widen the wizard past 760 px |
+| empty | device page | ✅ covered | With no device, the Copywriting "Device empty state" row shows, polling continues every 2.5 s, and Next reads Skip: install later (Page 4) |
+| loading | device page | ✅ covered | The first poll and each 2.5 s poll keep the current list; with no answer yet the empty row reads "Looking again every few seconds…" (Page 4) |
+| error | device page | ✅ covered | A failed `devices --json` shows its cause in the list's empty row and polling continues (Page 4) |
+| populated | device page | ✅ covered | Each row: glyph, model or serial, the raw adb state in Mono, porter's `fix` on a second line (Page 4) |
+| partial | device page | ✅ covered | `unauthorized`, `offline` and `no permissions` show ✗ with porter's one-line fix; `authorizing`/`connecting` show ▶ with "Wait a moment." (Page 4, Copywriting) |
+| overflow | device page | 🧪 backstop | Many devices scroll inside the list and the button row stays visible at 560 px height (held-out visual check) |
+| zero-one-many | device page | ✅ covered | 0: empty copy and Skip: install later; 1: no selection needed; many: selecting one saves `config device <serial>` (Page 4) |
+| long-text | device page | 🧪 backstop | The distro fix commands word-wrap and stay selectable in Mono; held-out visual check at 720 px width |
+| empty | done page | ✅ covered | When `profiles --json` lists no playable title, the "Games that play today" heading and list are hidden; the summary and Port a game still show (Page 5) |
+| loading | done page | ✅ covered | Add to app menu is disabled and reads `saving…` while its call runs; the playable list appears when `profiles --json` answers (Page 5) |
+| error | done page | ✅ covered | A failed `profiles --json` hides the playable section; a failed Add to app menu shows the cause on its result line (Page 5) |
+| populated | done page | ✅ covered | One summary row per step with its glyph and `detail`, each note with `!`, then playable names sorted (Page 5) |
+| partial | done page | ✅ covered | Not ready: the heading reads "Setup is not finished" and soft notes show, such as "No device yet: port now, install later." (Copywriting) |
+| overflow | done page | 🧪 backstop | 11+ playable titles scroll inside the page and the button row stays visible at 560 px height (held-out visual check) |
+| zero-one-many | done page | ✅ covered | 0 playable titles: the section is hidden; 1 or more: a plain sorted list (Page 5) |
+| long-text | done page | 🧪 backstop | Long notes and step details word-wrap; held-out visual check at 720 px width |
+| loading | wizard button row | ✅ covered | Next stays enabled while a page's call runs (never blocking); Skip setup closes the wizard during a download, which keeps running on `win.setup.fetch` (Wizard buttons) |
+| error | wizard button row | — dismissed | The buttons only move between pages or close the wizard; they call nothing that can fail |
+| overflow | wizard button row | — dismissed | Four fixed buttons fit in one row at the 720 px minimum width |
+| long-text | wizard button row | — dismissed | Fixed short labels; the longest is "Skip: install later" |
+| empty | Setup tab additions | ✅ covered | Run setup with every step ok opens the wizard at the done page (Setup tab additions) |
+| loading | Setup tab additions | ✅ covered | While `setup --json` runs, the Setup tab shows today's checking state (`SetupTab.check`) |
+| error | Setup tab additions | ✅ covered | A failed `setup --json` shows `failed(fail)` with Retry in `check_msg` (Launch 8) |
+| populated | Setup tab additions | ✅ covered | `doc['checks']` renders with today's code, and Run setup sits at the right of the Requirements group's first row (Setup tab additions) |
+| partial | Setup tab additions | ✅ covered | Soft notes (no adb, no authorized device) show as `!` rows and never trigger the banner (Setup tab additions) |
+| overflow | Setup tab additions | ✅ covered | `dl_step` has word wrap on, so the progress text wraps instead of widening the tab (Setup tab additions) |
+| zero-one-many | Setup tab additions | — dismissed | The checklist rows are porter's fixed set of checks |
+| long-text | Setup tab additions | ✅ covered | The download progress text uses the tools page's format, with the empty parts dropped, in a word-wrapped label (Setup tab additions) |
+| theme (outside the probe's taxonomy) | colours on Linux desktops with a custom palette | ⚠ unresolved | Light or dark is picked by Window lightness < 128, so a mid-grey theme may get the less readable pair. Planner assumption: accept this for the testers' hosts |
+
+<!-- Status vocabulary (locked by probe-core projectTruths):
+     ✅ covered   → a plain truth string lifted into must_haves.truths
+     🧪 backstop  → a flat scalar { statement, verification: backstop }; at verify time, no explicit
+                    evidence → insufficient_spec → human_needed (never a silent pass, #1154)
+     — dismissed  → not lifted; the reason is the audit trail
+     ⚠ unresolved → an explicit planner assumption (surfaced, never silently dropped)
+     Rows are REPLACED (not appended) on a probe re-run — idempotent. -->
 
 ---
 
@@ -270,12 +323,12 @@ No third-party UI code. The only new third-party artefact is the community NDK d
 
 ## Checker Sign-Off
 
-- [ ] Dimension 1 Copywriting: PASS
-- [ ] Dimension 2 Visuals: PASS
-- [ ] Dimension 3 Color: PASS
-- [ ] Dimension 4 Typography: PASS
-- [ ] Dimension 5 Spacing: PASS
-- [ ] Dimension 6 Registry Safety: PASS
-- [ ] Dimension 7 Inventory Provenance: PASS
+- [x] Dimension 1 Copywriting: FLAG (non-blocking: "Retry", "Next" and "Back" are single words; Next/Back are QWizard's own, Retry is shared with `gui/app.py` `failed()`)
+- [x] Dimension 2 Visuals: PASS
+- [x] Dimension 3 Color: PASS
+- [x] Dimension 4 Typography: PASS
+- [x] Dimension 5 Spacing: PASS
+- [x] Dimension 6 Registry Safety: PASS
+- [x] Dimension 7 Inventory Provenance: PASS
 
-**Approval:** pending
+**Approval:** approved 2026-10-31 (gsd-ui-checker, second run after one revision)
