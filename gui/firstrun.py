@@ -14,6 +14,7 @@ from gui.runner import call_json
 # (light, dark) per role, UI-SPEC Color: note #9a5b00 replaces #ef6c00 (3.08:1 on white); each pair measured at 4.99:1 or more on its background
 COLOUR = {'ok': ('#2e7d32', '#81c784'), 'bad': ('#c62828', '#ef9a9a'), 'note': ('#9a5b00', '#ffb74d'), 'banner': ('#fff4e5', '#3d2e12')}
 PAGES = ('legal', 'keys', 'tools', 'device', 'done')
+PREPARED = '.NET tools are ready.'   # UI-SPEC Copywriting "Prepare .NET tools done"; the Setup tab shows the same words (03-15)
 POLL_MS = 2500   # D-15: devices --json again this long after each answer, never on a fixed interval, so a stalled adb cannot stack calls
 STATE_GLYPH = {'device': ('✓', 'ok'), 'unauthorized': ('✗', 'bad'), 'offline': ('✗', 'bad'), 'no permissions': ('✗', 'bad'), 'authorizing': ('▶', 'note'), 'connecting': ('▶', 'note')}
 
@@ -60,6 +61,9 @@ def run_kind(fetch):   # what the window's fetch run does: 'prepare', 'download'
 
 def mono():   # commands, paths and hashes: the platform's fixed font at 9 pt, as the Port log
     f = QFontDatabase.systemFont(QFontDatabase.FixedFont); f.setPointSize(9); return f
+
+
+def quitting(win): return getattr(win, 'quitting', False)   # both host windows set it once the player chose Stop and quit
 
 
 def first_open(doc): return doc['legal']['accepted'] != doc['legal']['version']   # D-02: only an unaccepted notice opens the wizard by itself
@@ -364,7 +368,7 @@ class ToolsPage(StepPage):   # D-07, D-21, D-23..D-26: porter's tools rows; Down
 
     def start(self, args, kind):
         f = self.fetch()
-        if f.running(): return   # one run on the window's fetch at a time
+        if f.running() or quitting(self.wizard().win): return   # one run on the window's fetch at a time, and none on a window that is quitting
         self.mine, self.kn, self.errors, self.log, self.error = kind, '', [], None, None
         self.say(''); self.bar.setRange(0, 0); self.bar.show(); f.start(args); self.sync()
 
@@ -386,8 +390,10 @@ class ToolsPage(StepPage):   # D-07, D-21, D-23..D-26: porter's tools rows; Down
         kind, self.mine = self.mine, None; self.bar.hide(); self.sync()
         if code == 130: self.say('cancelled. Download all missing resumes where it stopped.')
         elif code == 0:
-            self.say('.NET tools are ready.' if kind == 'prepare' else '')
-            if kind == 'download': QTimer.singleShot(0, self, self.prepare)   # a turn later: finished's other listeners see the download end first
+            self.say(PREPARED if kind == 'prepare' else '')
+            # a turn later: finished's other listeners see the download end first. Not while quitting (03-REVIEW WR-05): a run that ends as Stop and quit
+            # is pressed still exits 0, run_ended then closes the window, and a Prepare started a turn later orphaned its dotnet children (own session)
+            if kind == 'download' and not quitting(self.wizard().win): QTimer.singleShot(0, self, self.prepare)
         else: self.failure(kind)
         self.wizard().win.recheck()   # porter's verdict on each tool: what finished in a cancelled run shows ✓
 
