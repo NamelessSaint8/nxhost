@@ -1,9 +1,12 @@
 # adb for installing a port: the device list, installing the APK, and pushing the data pack in short transfers. Big pushes over one adb connection wedge adbd on some
 # devices (a 6 GB RomFS), so small files go in batches and big files in 64 MB pieces that the device joins; a rerun resumes (files already at their size are skipped,
 # pieces already in place are kept). The port's own outputs are also compared by MD5: a rewriter cut changes a module without changing its size, and Unpacking's sdk cuts never
-# reached the device until they were. Pushes use -Z: compressing them took adbd down.
-import contextlib, hashlib, os, re, shlex, shutil, subprocess, tempfile, time
+# reached the device until they were. Pushes use -Z when the adb has push compression to turn off (platform-tools 30+, D-12): compressing them took adbd down,
+# and an older adb (a distribution's 29.0.6) never compresses and refuses the flag.
+import contextlib, functools, hashlib, os, re, shlex, shutil, subprocess, tempfile, time
 from pathlib import Path
+
+from porter import hosttools
 
 
 def md5(p):   # in pieces: a rewritten module can be hundreds of MB
@@ -41,6 +44,8 @@ class Adb:
     def __init__(self, exe, serial=None, timeout=120, log=print):
         self.exe, self.serial, self.timeout, self.log = str(exe), serial or None, timeout, log
         self.env = dict(os.environ, MSYS_NO_PATHCONV='1')   # Git Bash would rewrite /sdcard/... arguments into Windows paths
+
+    nz = functools.cached_property(lambda self: hosttools.push_flags(self.exe))   # push's -Z or nothing: one `adb version` per Adb, asked only when it pushes
 
     def cmd(self, *a):
         return [self.exe] + (['-s', self.serial] if self.serial else []) + [str(x) for x in a]
@@ -172,7 +177,7 @@ class Adb:
             for r, p, s in part: by.setdefault(os.path.dirname(r), []).append(p)
             for d, ps in by.items():
                 with short_paths(ps) as qs:
-                    self.run('push', '-Z', *qs, f'{remote}/{d}/' if d else f'{remote}/', timeout=max(self.timeout, 600))
+                    self.run('push', *self.nz, *qs, f'{remote}/{d}/' if d else f'{remote}/', timeout=max(self.timeout, 600))
             done += sum(s for _, _, s in part)
             if progress: progress(done, total, f'{len(part)} files')
         for rel, p, size in [(r, p, s) for r, p, s in todo if s > chunk]:
@@ -192,7 +197,7 @@ class Adb:
                 if pieces.get(name) != want:
                     tmp = Path(t) / 'piece.bin'
                     f.seek(k * chunk); tmp.write_bytes(f.read(want))
-                    self.run('push', '-Z', tmp, f'{pdir}/{name}', timeout=max(self.timeout, 600))
+                    self.run('push', *self.nz, tmp, f'{pdir}/{name}', timeout=max(self.timeout, 600))
                 if progress: progress(k * chunk + want, size, f'{local.name} piece {k + 1}/{n}')
         q, qp = shlex.quote(dst), shlex.quote(pdir)   # join the pieces in order, then check the size
         self.shell(f'rm -f {q} && for x in $(ls {qp} | sort); do cat {qp}/$x >> {q} || exit 1; done && rm -rf {qp}', timeout=1200)
