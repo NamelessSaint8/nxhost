@@ -1,6 +1,6 @@
 # porter/probe.py and the tool rows it feeds: the compile probe every found NDK gets (D-11) with subprocess.run answered from a table, its cache in <user dir>/probe.json,
 # the community arm64 NDK's note (D-09, D-10) and the source / version / note fields of the NDK row (D-13). Standard library only; one test runs a real garbage file.
-import errno, os, subprocess, sys, tempfile, types, unittest
+import errno, os, shlex, subprocess, sys, tempfile, types, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -83,6 +83,21 @@ class Probe(unittest.TestCase):
     def test_corrupt_cache(self):
         d = ndk(self.t / 'ndk'); (self.t / 'home').mkdir(parents=True, exist_ok=True); (self.t / 'home' / 'probe.json').write_text('{not json')
         r, calls = self.run_probe(d); self.assertTrue(r['ok']); self.assertTrue(calls)
+
+    def test_cache_write_fails(self):   # WR-03: a contended replace or a read-only home costs a re-probe, never the check
+        home = self.t / 'home'
+        with mock.patch.object(probe.os, 'replace', side_effect=PermissionError(errno.EACCES, 'Access is denied')):
+            r, _ = self.run_probe(ndk(self.t / 'ndk'))
+        self.assertTrue(r['ok']); self.assertEqual(r['version'], 'clang 18.0.3'); self.assertEqual([p.name for p in home.iterdir() if p.name.startswith('.probe-')], [])
+        with mock.patch.object(probe.tempfile, 'mkstemp', side_effect=OSError(errno.EROFS, 'Read-only file system')):
+            r, _ = self.run_probe(ndk(self.t / 'ndk2'))
+        self.assertTrue(r['ok'])
+
+    def test_quoted_fix(self):   # WR-06: porter's own NDK on a Mac lives under ~/Library/Application Support
+        with mock.patch.object(probe, 'sys', types.SimpleNamespace(platform='darwin')):
+            d = ndk(self.t / 'Application Support' / 'ndk'); r, _ = self.run_probe(d, link=PermissionError(errno.EACCES, 'Permission denied'))
+        chmod, xattr = r['fix'].split(';', 1)
+        self.assertEqual(shlex.split(chmod), ['chmod', '+x', f'{probe.clang(d).parent}/*']); self.assertIn(shlex.quote(str(d)), xattr)
 
     @unittest.skipIf(os.name == 'nt', 'POSIX exec format')
     def test_real_enoexec(self):   # a real file the kernel cannot run, as an NDK built for another CPU is
