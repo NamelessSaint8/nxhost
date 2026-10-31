@@ -22,8 +22,9 @@ for _m in () if OLD else ('PySide6.QtWidgets',):
 HOME = tempfile.mkdtemp()
 if not (OLD or MISSING):
     from PySide6.QtCore import QSize, Qt, QTimer
+    from PySide6.QtGui import QColor, QPalette
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QScrollArea, QWidget, QWizard
+    from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QScrollArea, QTableWidget, QWidget, QWizard
     from gui import app, firstrun, runner, shell
 APP = None
 
@@ -41,6 +42,10 @@ def until(pred, ms):   # spin the event loop until pred() holds
     end = time.time() + ms / 1000
     while not pred() and time.time() < end: QTest.qWait(20)
     return pred()
+
+
+def palette(window):   # the current palette with its Window colour replaced: light for '#f0f0f0', dark (lightness below 128) for '#202020'
+    pal = QPalette(APP.palette()); pal.setColor(QPalette.Window, QColor(window)); return pal
 
 
 def doc(name='setup_ready.json'): return json.loads((FIXTURES / name).read_text(encoding='utf-8'))
@@ -141,7 +146,32 @@ class Banner(unittest.TestCase):
         ready.assert_called_with(False)
 
 
+    def test_failed_colour(self):   # UI-REVIEW top fix 3: the problem colour of the application's palette, picked as failed() renders
+        keep = QPalette(APP.palette()); self.addCleanup(APP.setPalette, keep); fail = {'timeout': 0, 'error': 'x', 'stderr': ''}
+        for window, i in (('#f0f0f0', 0), ('#202020', 1)):
+            with self.subTest(window):
+                APP.setPalette(palette(window)); t = firstrun.failed(fail)
+                self.assertIn(firstrun.COLOUR['bad'][i], t); self.assertNotIn(firstrun.COLOUR['bad'][1 - i], t)
+                self.assertEqual(t.replace(firstrun.COLOUR['bad'][i], 'C'), '<span style="color:C">x</span> &nbsp;<a href="retry">Retry</a>')
+
+    def test_follows_palette(self):   # a light or dark switch while the app runs restyles the banner and its '!'
+        w, _ = launch(self, doc('setup_missing.json')); g = gate(self, w); self.assertIsNotNone(banner(self, w))
+        for window, i in (('#202020', 1), ('#f0f0f0', 0)):
+            with self.subTest(window):
+                w.setPalette(palette(window)); QTest.qWait(20)
+                self.assertIn(firstrun.COLOUR['banner'][i], g.banner.styleSheet())
+                mark = getattr(g, 'mark', None); self.assertIsNotNone(mark, "the gate keeps no '!' label"); self.assertIn(firstrun.COLOUR['note'][i], mark.styleSheet())
+
+
 class SetupTab(unittest.TestCase):
+    def test_check_colours(self):   # the checklist glyphs from the COLOUR table: ok, a required failure, an optional failure (the note colour, not #ef6c00)
+        t = QTableWidget(0, 3); self.addCleanup(t.deleteLater)
+        rows = [{'name': n, 'ok': ok, 'required': req, 'detail': 'd', 'fix': 'f'} for n, ok, req in (('a', True, True), ('b', False, True), ('c', False, False))]
+        firstrun.fill_checks(t, {'checks': rows})
+        for i, role in enumerate(('ok', 'bad', 'note')):
+            with self.subTest(role): self.assertEqual(t.item(i, 0).foreground().color(), QColor(firstrun.colour(t, role)))
+        self.assertNotEqual(t.item(2, 0).foreground().color(), QColor('#ef6c00'))
+
     def test_checks_and_notes(self):
         d = doc(); d['notes'] = ['No adb yet: port now, install later.']
         w, _ = launch(self, d); t = w.setup.table
