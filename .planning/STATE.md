@@ -2,17 +2,17 @@
 gsd_state_version: "1.0"
 current_phase: 03
 current_phase_name: Host Toolchains and Guided First Run
-status: executing
-stopped_at: Completed 03-14-PLAN.md
-last_updated: "2026-10-31T18:55:51.767Z"
+status: verifying
+stopped_at: Completed 03-15-PLAN.md
+last_updated: "2026-10-31T19:08:53.097Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 03 execution started
-state_head: 89bf547639e6aaa6c22b779bdebc270355f62abb
+state_head: ddc31a8fbec161010ac84b951068ad70f77b9fe3
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 38
-  completed_plans: 37
+  completed_plans: 38
   percent: 33
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-10-31)
 
 Phase: 03 (Host Toolchains and Guided First Run) — EXECUTING
 Plan: 15 of 15
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-10-31 — Phase 03 execution started
 
 Progress: [███░░░░░░░] 33%
@@ -94,6 +94,7 @@ Progress: [███░░░░░░░] 33%
 | Phase 03 P11 | 10min | 3 tasks | 5 files |
 | Phase 03 P13 | 3 min | 3 tasks | 5 files |
 | Phase 03 P14 | 10 min | 3 tasks | 2 files |
+| Phase 03 P15 | 8 min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -193,6 +194,8 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-14: the Prepare guard lives in ToolsPage.start and in the chain, so neither the automatic chain nor the Prepare .NET tools button starts a run on a quitting window
 - [Phase 03]: 03-14: colour(None, key) reads the application palette, so failed() keeps its one-argument signature
 - [Phase 03]: 03-14: the banner restyles on the host window's PaletteChange (Gate.paint via an event filter), not on a setup --json answer
+- [Phase 03]: 03-15: the Setup tab's Save and check writes only fields changed since the last load; every re-check reloads untouched fields from config.json (CR-01)
+- [Phase 03]: 03-15: Porter.start refuses a second run (returns False) and emits started before QProcess.start; the Setup tab asks setup --json one at a time (WR-03/WR-04)
 
 ### Pending Todos
 
@@ -217,6 +220,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-31T18:55:51.503Z
-Stopped at: Completed 03-14-PLAN.md
+Last session: 2026-10-31T19:08:52.842Z
+Stopped at: Completed 03-15-PLAN.md
 Resume file: None
