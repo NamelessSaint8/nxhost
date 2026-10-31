@@ -1,6 +1,6 @@
 # The run side of the GUI bridge (porter/runlog.py, porter/procs.py): the saved run log and its protocol events, one-shot JSON errors,
 # the stop channel, the cut-off marker and log retention. Each test runs porter with its own NX2A_HOME; no game files, toolchains or device.
-import argparse, contextlib, io, json, os, signal, subprocess, sys, tempfile, time, unittest
+import argparse, contextlib, errno, io, json, os, signal, subprocess, sys, tempfile, threading, time, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -157,6 +157,64 @@ class OneShot(unittest.TestCase):
         doc = json.loads(r.stdout)
         self.assertTrue(doc['error'].startswith('ModuleNotFoundError'), doc)
         self.assertIn('Traceback', r.stderr)
+
+
+class Stand:   # a stand-in Progress: _wrap replaces these per instance, and _json here collects what the wrapper passes on
+    k = n = 1; cur = None
+
+    def __init__(self): self.got, self.lock = [], threading.Lock()
+    def stage(self, name, poll=None, step='', **kw): pass
+    def end(self, summary='', ok=True): pass
+    def say(self, msg): pass
+    def _json(self, obj): self.got.append(obj)
+
+
+class Rate(unittest.TestCase):   # D-26: porter adds `rate` (bytes/s) to byte progress events, outside the engine subtree
+    def emit(self, **kw):
+        from porter import runlog
+        runlog.reset(); prog = Stand(); unwrap = runlog._wrap(prog, None); self.addCleanup(unwrap)
+        ev = {'ev': 'progress', 'k': 1, 'name': 'Android NDK r27c', 'step': 'downloading', 'unit': 'B', 'done': 100, 'total': 1100, 'eta': 10, **kw}
+        prog._json(dict(ev)); return ev, prog.got[-1]
+
+    def test_bytes_get_rate(self):
+        ev, got = self.emit()
+        self.assertEqual(got.pop('rate'), 100); self.assertEqual(got, ev)
+
+    def test_no_rate_without_eta(self):
+        for kw in ({'eta': None}, {'eta': 0}, {'total': None}, {'unit': 'files'}, {'done': None}):
+            with self.subTest(kw): ev, got = self.emit(**kw); self.assertEqual(got, ev)
+
+
+EPERM = PermissionError(errno.EPERM, 'Operation not permitted', '/Volumes/Games/x')
+
+
+class Privacy(InProcess):   # D-17: a macOS privacy denial (EPERM, not EACCES: RESEARCH Pitfall 10) says where to allow it
+    def one_shot(self, e, platform):
+        from porter import runlog
+        def fn(a): raise e
+        out = io.StringIO()
+        with mock.patch.object(runlog.sys, 'platform', platform), contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            code = runlog.run(argparse.Namespace(cmd='profiles', progress='', json=True), fn)
+        self.assertEqual(code, 1); return json.loads(out.getvalue())['error']
+
+    def test_one_shot(self):
+        err = self.one_shot(EPERM, 'darwin')
+        self.assertIn('/Volumes/Games/x', err); self.assertIn('Privacy & Security', err)
+
+    def test_long_run(self):
+        from porter import runlog
+        def fn(a): raise EPERM
+        out = io.StringIO()
+        with mock.patch.object(runlog.sys, 'platform', 'darwin'), self.assertRaises(PermissionError), contextlib.redirect_stdout(out):
+            runlog.run(argparse.Namespace(cmd='port', progress='json', json=False, install=False), fn)
+        (err,) = [e for e in events(out.getvalue()) if e['ev'] == 'error']
+        self.assertIn('Privacy & Security', err['msg']); self.assertIn('/Volumes/Games/x', err['msg'])
+        self.assertIn('Privacy & Security', self.log())
+
+    def test_other_errors_unchanged(self):
+        eacces = PermissionError(errno.EACCES, 'Permission denied', '/Volumes/Games/x')
+        for e, platform in ((EPERM, 'linux'), (eacces, 'darwin')):
+            with self.subTest(platform=platform): self.assertEqual(self.one_shot(e, platform), f'PermissionError: {e}')
 
 
 # A port that sits in one stage with a grandchild, as a GUI-started porter does (NX2A_GUI=1, its own session on POSIX as gui/runner.py starts it)
