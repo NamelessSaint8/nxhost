@@ -38,25 +38,28 @@ created: "2026-10-31"
 
 ## Per-Task Verification Map
 
-Filled in by the planner per task. Requirement → test map from 03-RESEARCH.md §Validation Architecture:
+Filled in by the planner (2026-10-31). Each test module marked "created by" is written by the TDD task that first needs it, so the Wave 0 gaps below are closed inside the plans, not by a separate wave:
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| TBD | TBD | TBD | TOOL-01 | — | linux-arm64 `plan()` picks the community NDK row; a hash mismatch names both hashes; no x86 platform-tools planned on arm64 | unit | `.venv/bin/python -m unittest tests.test_fetch -v` | ✅ extend | ⬜ pending |
-| TBD | TBD | TBD | TOOL-01 | — | Compile probe: ok / ENOEXEC / no exec bit / cached by clang path+mtime; runs with a timeout, no shell | unit | `.venv/bin/python -m unittest tests.test_hosttools -v` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | TOOL-01 | — | `build.py` picks `linux-arm64` on aarch64 | integration (Linux aarch64 only) | `python -m unittest tests.test_hosttools.BuildHost` on `ubuntu-24.04-arm` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | TOOL-02 | — | `_dotnet_rid()` → linux-arm64; DOTNET_ROOT from the `--list-sdks` path; dotnet children get `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` | unit | `.venv/bin/python -m unittest tests.test_toolchain tests.test_stages -v` | ✅ extend | ⬜ pending |
-| TBD | TBD | TBD | TOOL-03 | — | `adb version` parse (36.0.0, 29.0.6-debian, 1:10.0.0+r36, garbage); push argv with and without `-Z` | unit | `.venv/bin/python -m unittest tests.test_adb -v` | ✅ extend | ⬜ pending |
-| TBD | TBD | TBD | TOOL-03 | — | Distro family and fix commands from stub os-release dicts | unit | `.venv/bin/python -m unittest tests.test_hosttools -v` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | TOOL-04 | — | Bare-env `doctor/setup --json` finds stub tools in known places (POSIX) | unit (subprocess) | `.venv/bin/python -m unittest tests.test_hosttools.BarePath -v` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | TOOL-04 | — | Frozen bundle bare-env smoke | CI | `python packaging/smoke_bundle.py dist/nx2android` | ✅ extend | ⬜ pending |
-| TBD | TBD | TBD | FRUN-01 | — | Wizard pages in order; keys page lists candidates; tools Cancel calls `stop`; device page polls and stops on leave | GUI (fake_porter) | `QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest tests.test_firstrun -v` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | FRUN-01 | — | Range resume accepts 206 only with `Content-Range: bytes <have>-`; a server ignoring Range restarts; 416 on a whole `.part`; a final mismatch deletes the `.part` and names both hashes | unit | `.venv/bin/python -m unittest tests.test_fetch -v` | ✅ extend | ⬜ pending |
-| TBD | TBD | TBD | FRUN-01 | — | prod.keys check outputs key names and generation only, never a hex value; 1 MB cap | unit | `.venv/bin/python -m unittest tests.test_keys -v` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | FRUN-02 | — | Not-ready doc → banner naming what is missing; Continue setup opens the wizard at the first not-ok step | GUI | `QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest tests.test_firstrun -v` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | FRUN-03 | — | `gui/firstrun.py` imports only `gui.runner` and PySide6, no `porter.config`, no file writes | arch rule | `.venv/bin/python tests/arch_rules.py` | ✅ extend | ⬜ pending |
-| TBD | TBD | TBD | FRUN-03 | — | `setup --json` shape and `ready` per D-03 (legal, keys, NDK, .NET, signing key) | unit | `.venv/bin/python -m unittest tests.test_setup -v` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | DEV-01 | — | `devices()` parses every state, including `no permissions (…); see [...]` and `(no serial number)`; `devices --json` carries `fix` | unit | `.venv/bin/python -m unittest tests.test_adb tests.test_cli -v` | ✅ extend | ⬜ pending |
+| 03-03-T1 | 03-03 | 2 | TOOL-01 | T-03-09 | linux-arm64 `plan()` picks the community NDK row; a hash mismatch names both hashes; no x86 platform-tools planned on arm64 | unit | `.venv/bin/python -m unittest tests.test_fetch.Pins tests.test_tls -v` | ✅ extend | ⬜ pending |
+| 03-04-T1 | 03-04 | 2 | TOOL-01 | T-03-14, T-03-15 | Compile probe: ok / ENOEXEC / no exec bit / cached by clang path+mtime; runs with a timeout, no shell | unit | `.venv/bin/python -m unittest tests.test_probe tests.test_toolchain tests.test_hosttools -v` | ❌ created by the task | ⬜ pending |
+| 03-04-T3 | 03-04 | 2 | TOOL-01 | — | `build.py` picks `linux-arm64` on aarch64 (rule parity with probe.host_folder; the real arm64 host build is VER-02) | unit | `.venv/bin/python -m unittest tests.test_probe -v` | ❌ created by 03-04-T1 | ⬜ pending |
+| 03-08-T2 | 03-08 | 3 | TOOL-01 | T-03-25 | Real community NDK download + probe on the arm64 release runner | CI | `python packaging/smoke_bundle.py --community-ndk dist/nx2android` (fork-release.yml, linux-arm64) | ✅ extend | ⬜ pending |
+| 03-02-T2 | 03-02 | 1 | TOOL-02 | T-03-07 | DOTNET_ROOT from the `--list-sdks` path; dotnet children get `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` and a UTF-8 LANG; arm64 dotnet places | unit | `.venv/bin/python -m unittest tests.test_hosttools tests.test_porter.Env tests.test_stages -v` | ❌ created by 03-02-T1 | ⬜ pending |
+| 03-03-T1 | 03-03 | 2 | TOOL-02 | — | `.NET` on linux-arm64 planned from its pin | unit | `.venv/bin/python -m unittest tests.test_fetch.Pins -v` | ✅ extend | ⬜ pending |
+| 03-02-T3 | 03-02 | 1 | TOOL-03 | — | `adb version` parse (36.0.0, 29.0.6-debian, 1:10.0.0+r36, garbage) and push flags | unit | `.venv/bin/python -m unittest tests.test_hosttools -v` | ❌ created by 03-02-T1 | ⬜ pending |
+| 03-06-T2 | 03-06 | 3 | TOOL-03 | — | push argv with and without `-Z` by adb version | unit | `.venv/bin/python -m unittest tests.test_adb -v` | ✅ extend | ⬜ pending |
+| 03-04-T2, 03-06-T1 | 03-04, 03-06 | 2, 3 | TOOL-03 | T-03-16, T-03-21 | Distro family and fix commands from stub os-release dicts; nothing is run | unit | `.venv/bin/python -m unittest tests.test_distro -v` | ❌ created by 03-04-T2 | ⬜ pending |
+| 03-02-T1 | 03-02 | 1 | TOOL-04 | T-03-06 | Bare-env `doctor --json` finds stub tools in known places (POSIX) | unit (subprocess) | `.venv/bin/python -m unittest tests.test_hosttools.BarePath -v` | ❌ created by the task | ⬜ pending |
+| 03-08-T1 | 03-08 | 3 | TOOL-04 | — | Bare-env `doctor/setup --json` on the dev porter and the frozen bundle | unit + CI | `.venv/bin/python -m unittest tests.test_packaging -v`; `python packaging/smoke_bundle.py dist/nx2android` | ✅ extend | ⬜ pending |
+| 03-05-T2, 03-05-T3, 03-10-T1, 03-10-T2, 03-11-T1, 03-11-T2 | 03-05, 03-10, 03-11 | 2, 4, 5 | FRUN-01 | T-03-17, T-03-18, T-03-32, T-03-35 | Wizard pages in order; keys page lists candidates; tools Cancel calls `stop`; device page polls and stops on leave | GUI (stand-in call_json, fake_porter) | `QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest tests.test_firstrun -v` | ❌ created by 03-05-T1 | ⬜ pending |
+| 03-03-T2 | 03-03 | 2 | FRUN-01 | T-03-10, T-03-13 | Range resume accepts 206 only with `Content-Range: bytes <have>-`; a server ignoring Range restarts; 416 on a whole `.part`; a final mismatch deletes the `.part` and names both hashes | unit | `.venv/bin/python -m unittest tests.test_fetch -v` | ✅ extend | ⬜ pending |
+| 03-01-T2 | 03-01 | 1 | FRUN-01 | T-03-01, T-03-02 | prod.keys check outputs key names and generation only, never a hex value; 1 MB cap | unit | `.venv/bin/python -m unittest tests.test_keys -v` | ❌ created by the task | ⬜ pending |
+| 03-05-T1, 03-07-T1 | 03-05, 03-07 | 2, 3 | FRUN-02 | — | Not-ready doc → banner naming what is missing; Continue setup opens the wizard at the first not-ok step; both windows | GUI | `QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest tests.test_firstrun tests.test_shell -v` | ❌ created by 03-05-T1 / 03-07-T1 | ⬜ pending |
+| 03-05-T3, 03-07-T2 | 03-05, 03-07 | 2, 3 | FRUN-03 | — | `gui/firstrun.py` and `gui/shell.py` import only gui.runner (and gui.firstrun), PySide6 and the standard library; no file writes | arch rule | `.venv/bin/python tests/arch_rules.py` | ✅ extend | ⬜ pending |
+| 03-01-T1 | 03-01 | 1 | FRUN-03 | T-03-05 | `setup --json` shape and `ready` per D-03 (legal, keys, NDK, .NET, signing key) | unit | `.venv/bin/python -m unittest tests.test_setup -v` | ❌ created by the task | ⬜ pending |
+| 03-06-T1 | 03-06 | 3 | DEV-01 | T-03-20 | `devices()` parses every state, including `no permissions (…); see [...]` and `(no serial number)`; `devices --json` carries `detail` and `fix` | unit | `.venv/bin/python -m unittest tests.test_adb tests.test_distro tests.test_cli -v` | ✅ extend | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
