@@ -214,6 +214,20 @@ class SetupTab(unittest.TestCase):
         self.assertEqual((w.setup.edits['ndk'].text(), w.setup.edits['out'].text()), (ndk, out))
         w.setup.save(); c = app.config.load(); self.assertEqual((c['ndk'], c['out']), (ndk, out))
 
+    def test_one_check_at_a_time(self):   # WR-03: a check asked while one is out runs once after its answer, never beside it
+        w, calls = launch(self); n = len(calls.sent('setup'))
+        for _ in range(3): w.setup.check()
+        self.assertEqual(len(calls.sent('setup')), n + 1)
+        self.assertTrue(until(lambda: len(calls.sent('setup')) == n + 2, 3000)); QTest.qWait(100)
+        self.assertEqual(len(calls.sent('setup')), n + 2)
+
+    def test_fetch_end_checks_in_turn(self):   # WR-03: a download's end re-checks from the Setup tab and from the wizard's tools page, one setup --json at a time
+        w, calls = launch(self, tools_doc()); firstrun.open_setup(w, 'tools'); QTest.qWait(50); n = len(calls.sent('setup'))
+        w.fetch.finished.emit(0)
+        self.assertEqual(len(calls.sent('setup')), n + 1)
+        self.assertTrue(until(lambda: len(calls.sent('setup')) == n + 2, 3000)); QTest.qWait(100)
+        self.assertEqual(len(calls.sent('setup')), n + 2)
+
     def test_save_writes_changed_only(self):   # another writer's value (no re-check since) stays; a typed field and a field cleared on purpose are written
         w, calls = launch(self); self.written(); s = w.setup
         app.config.set_value('keys', str(Path(HOME) / 'prod.keys')); self.rechecked(w, calls)
@@ -693,6 +707,14 @@ class Tools(unittest.TestCase):   # the tools page (D-07, D-21, D-23..D-26): Dow
 
     def finish(self, w):   # a run a test left going
         if w.fetch.running(): w.fetch.stop(); until(lambda: not w.fetch.running(), 10000)
+
+    def test_label_from_start(self):   # a run started on the window's fetch from outside this page reads Cancel at once, before porter's first event
+        self.stand_in('--tree'); w, calls, z, p = self.open(); self.addCleanup(self.finish, w)
+        evs = []; w.fetch.event.connect(evs.append)
+        w.fetch.start(['tools', '--download', '--progress', 'json']); label = p.dl.text()
+        self.assertTrue(until(lambda: any(e.get('ev') == 'pids' for e in evs), 10000))
+        pids = next(e for e in evs if e.get('ev') == 'pids'); self.addCleanup(reap, pids['detached']); self.addCleanup(reap, pids['child'])
+        self.assertEqual(label, 'Cancel download')
 
     def test_download_starts_run(self):
         w, calls, z, p = self.open()

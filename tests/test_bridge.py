@@ -232,6 +232,15 @@ class Stop(Fake):
         self.assertIn({'ev': 'say', 'msg': '[RED] interrupted'}, seq[:-1])
         self.assertEqual(sum(isinstance(x, tuple) for x in seq), 1)
 
+    def test_second_start_refused(self):   # WR-04 / T-03-35: a second start replaced the run, and the first one's tree was left outside Cancel and the close guard
+        p = runner.Porter(); fin = QSignalSpy(p.finished)
+        pids = self.tree(p); first = p.p
+        self.assertIs(p.start(['tools', '--download', '--progress', 'json']), False)
+        self.assertIs(p.p, first); self.assertTrue(p.running())
+        p.stop(); self.assertTrue(fin.wait(10000)); QTest.qWait(300)
+        self.assertEqual([fin.at(i) for i in range(fin.count())], [[130]])
+        self.assertTrue(gone(pids['child']))
+
     def test_stop_when_idle_is_noop(self):
         p = runner.Porter(); fin, ev = QSignalSpy(p.finished), QSignalSpy(p.event)
         p.stop(); QTest.qWait(200)
@@ -335,6 +344,16 @@ class Close(Fake):
                 fin = QSignalSpy(s.fetch.finished); s.dl_btn.click(); self.assertEqual(s.dl_step.text(), 'stopping…')
                 self.assertTrue(fin.wait(10000)); self.assertEqual(fin.at(0), [130]); self.assertTrue(gone(pids['child']))
                 self.assertEqual(s.dl_btn.text(), 'Download missing tools'); self.assertEqual(s.dl_step.text(), 'cancelled')
+
+    def test_confirm_while_running(self):   # the wizard starts a run while the Setup tab's tools --json is out: Cancel from the start, and no dialog or second run
+        w = self.window(); s = w.setup; evs = []; s.fetch.event.connect(evs.append)
+        s.fetch.start(['tools', '--download', '--progress', 'json']); label = s.dl_btn.text(), s.dl_btn.isEnabled()
+        self.assertTrue(until(lambda: any(e.get('ev') == 'pids' for e in evs), 10000))
+        pids = next(e for e in evs if e.get('ev') == 'pids'); self.addCleanup(reap, pids['detached']); self.addCleanup(reap, pids['child'])
+        self.assertEqual(label, ('Cancel download', True))
+        first = s.fetch.p; it = {'name': 'x', 'version': '1', 'size': 1, 'url': 'https://h/a', 'license': 'https://h/l'}
+        with mock.patch.object(app, 'QMessageBox', side_effect=AssertionError('a dialog')): s.confirm_download([it], 0, None)
+        self.assertIs(s.fetch.p, first); self.assertTrue(s.fetch.running()); self.assertEqual(s.dl_btn.text(), 'Cancel download')
 
     def test_download_failure_inline(self):
         runner.PORTER = [FAKE, '--']   # the Window's own one-shots
