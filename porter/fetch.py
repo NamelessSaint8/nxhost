@@ -202,15 +202,21 @@ def _untar(arc, into, folder):   # the data filter, always: its bypasses fixed i
 
 def _install(it, arc):
     """Unpack arc into player_tools()/it.folder: the folder installed is the one _unzip / _untar name from the archive's members (its single top folder, the NDK
-    and platform-tools, or the whole archive for .NET). A refused or failed unpack removes its partial .unpack folder"""
-    root = player_tools(); tmp = root / f'.{it.folder}.unpack'
-    shutil.rmtree(tmp, ignore_errors=True); tmp.mkdir(parents=True)
+    and platform-tools, or the whole archive for .NET). A refused or failed unpack removes its partial .unpack folder; a toolchain already there is moved aside
+    and put back if the new one cannot be moved in"""
+    root = player_tools(); tmp, dest = root / f'.{it.folder}.unpack', root / it.folder
+    old = root / f'.{it.folder}.old'   # dot-named like .unpack, so toolchain.find_ndk's android-ndk-* glob never takes a half-swapped copy
+    if old.exists() and not dest.exists(): old.replace(dest)   # a move cut off between its two renames last time
+    shutil.rmtree(tmp, ignore_errors=True); shutil.rmtree(old, ignore_errors=True); tmp.mkdir(parents=True)
     try:
         src = (_unzip if arc.suffix == '.zip' else _untar)(arc, tmp, it.folder)
-        dest = root / it.folder
-        shutil.rmtree(dest, ignore_errors=True); src.replace(dest)
+        if dest.exists(): dest.replace(old)   # WR-05: a rename instead of a delete; a file in use on Windows fails the rename, and the old toolchain stays whole
+        try: src.replace(dest)
+        except BaseException:
+            if old.exists(): old.replace(dest)
+            raise
     except BaseException: shutil.rmtree(tmp, ignore_errors=True); raise
-    shutil.rmtree(tmp, ignore_errors=True)
+    shutil.rmtree(tmp, ignore_errors=True); shutil.rmtree(old, ignore_errors=True)
     return dest
 
 
