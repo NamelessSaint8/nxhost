@@ -46,7 +46,7 @@ The v0.1.2 release (2026-10-28): by the maintainer's choice no bundle was run th
 
 ## Host checks
 
-What a bundle must do on each host besides porting. CI fills the glibc floor rows (the `glibc floor` lines in a `fork-release.yml` run's summary); the others are run by hand on a machine of that host, from the bundle a run produced. A row left at "not run" is still to do.
+What a bundle must do on each host besides porting. CI fills the glibc floor rows (the `glibc floor` lines in a `fork-release.yml` run's summary) and the Linux arm64 community NDK row (its "Community NDK download and probe (linux-arm64)" step); every `fork-release.yml` run also checks, on macOS and both Linux bundles, that the frozen app finds every tool with only `PATH=/usr/bin:/bin` (`smoke_bundle.py`). The others are run by hand on a machine of that host, from the bundle a run produced. A row left at "not run" is still to do.
 
 | Host | Check | Result | Bundle | Date |
 |------|-------|--------|--------|------|
@@ -56,5 +56,13 @@ What a bundle must do on each host besides porting. CI fills the glibc floor row
 | Linux arm64 | Starts under X11 (`QT_QPA_PLATFORM=xcb`) and Wayland (`QT_QPA_PLATFORM=wayland`) with no Fontconfig errors (PKG-04) | not run | | |
 | macOS 14+ arm64 | Full port of a playable title from the mounted DMG, then `codesign --verify --deep --strict` on the app still passes (PKG-05) | not run | | |
 | Each host | Cancel mid-port leaves no dotnet, MSBuild, clang or shader tool process, and `adb devices` still answers (BRDG-01) | not run | | |
+| macOS 14+ arm64 | The app started from Finder (Applications, not a terminal) ports a playable title, and its Setup tab shows every tool (Android NDK, .NET SDK, adb) found by absolute path (TOOL-04, D-19) | not run | | |
+| Linux x64 | The app started from its app-menu entry (the wizard's **Add to app menu**), not a terminal, ports a playable title with every tool found by absolute path (TOOL-04, D-20) | not run | | |
+| Linux arm64 | The app started from its app-menu entry (the wizard's **Add to app menu**), not a terminal, ports a playable title with every tool found by absolute path (TOOL-04, D-20) | not run | | |
+| Linux arm64 | After **Download all missing**, the Android NDK row is green with the note "community r27c build (HomuHomu833) …: not the build the titles were tested with" (TOOL-01; the `fork-release.yml` step "Community NDK download and probe (linux-arm64)" fills this row from CI) | not run | | |
+| Each host | A device plugged in with USB debugging not yet allowed shows `unauthorized` with its fix in the wizard's device step, and turns to `device` after **Allow** on the device (DEV-01) | not run | | |
+| Linux x64 and arm64 | A device on a machine without Android udev rules shows `no permissions` with the distribution's package command in the wizard's device step, and turns to `device` once it is installed and the device replugged (DEV-01, TOOL-03) | not run | | |
+| Ubuntu 22.04 or Debian 12 x64 | With the distribution's adb 29.0.6 (`sudo apt install adb`) and no platform-tools download, a port installs on the device and the adb row's note says it pushes without `-Z` (TOOL-03) | not run | | |
+| Before a release | `python devtools/ndk_pin.py` passes: the community NDK asset on GitHub still has the size and sha256 in `porter/pins.py` | not run | | |
 | Linux x64 | glibc floor of the bundle, gate 2.35 (CI-04) | 2.35 (libpython3.14, libgcc_s, libcairo, libtcl, libtk) | 9e947b8 | 2026-10-29 |
 | Linux arm64 | glibc floor of the bundle, gate 2.39 (CI-04) | 2.38 (the PySide6 Qt libraries, libicu) | 9e947b8 | 2026-10-29 |
