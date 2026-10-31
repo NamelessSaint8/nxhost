@@ -1,10 +1,13 @@
 # packaging/build_bundle.py and packaging/glibc_floor.py: the asset names of the four bundles (D-10), the host-to-target mapping, which nxnative files
-# a bundle carries, the engine id porter/paths.py keys its copy by, and the glibc floor of a Linux bundle. Stdlib only: nothing here runs PyInstaller.
-import contextlib, io, sys, tempfile, unittest
+# a bundle carries, the engine id porter/paths.py keys its copy by, the glibc floor of a Linux bundle, and smoke_bundle.py's bare-PATH tool check (D-19),
+# run here on the dev porter so fork-ci catches a regression on every push. Stdlib only: nothing here runs PyInstaller.
+import contextlib, io, os, shutil, sys, tempfile, unittest
 from pathlib import Path
+from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'packaging'))
-import build_bundle, glibc_floor   # noqa: E402
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO / 'packaging'))
+import build_bundle, glibc_floor, smoke_bundle   # noqa: E402
 
 
 class Names(unittest.TestCase):
@@ -53,6 +56,42 @@ class Glibc(unittest.TestCase):
             self.assertEqual(glibc_floor.main(['glibc_floor.py', 'dist/nx2android', '2.34'], OBJDUMP), 0)
             self.assertEqual(glibc_floor.main(['glibc_floor.py', 'dist/nx2android', '2.33'], OBJDUMP), 1)
         self.assertIn('glibc floor 2.34: libQt6Gui.so.6', out.getvalue())
+
+
+class BareEnv(unittest.TestCase):   # a Finder or app-menu launch: PATH=/usr/bin:/bin, so every tool must come from a known place (D-19, TOOL-04)
+    def setUp(self): smoke_bundle.FAILS.clear(); self.tmp = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def run_check(self, porter=None):
+        with contextlib.redirect_stdout(io.StringIO()) as out, mock.patch.object(smoke_bundle, 'porter', porter or smoke_bundle.porter):
+            smoke_bundle.bare_env_check(sys.executable, self.tmp, extra_env={'PYTHONPATH': str(REPO)})
+        return out.getvalue()
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX only: Windows has no bare-PATH launch to stand in for')
+    def test_dev_porter(self):
+        out = self.run_check()
+        self.assertEqual(smoke_bundle.FAILS, [], out)
+        for w in ('doctor', 'setup'): self.assertIn(f'PASS bare PATH: every tool row found ({w})', out)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX only')
+    def test_missing_tool_fails(self):
+        # the .NET row stood in as not found: removing the stand-in alone is not enough where the host has its own dotnet in a known place
+        # (/usr/share/dotnet on the GitHub runners, /opt/homebrew/bin on a dev Mac)
+        real = smoke_bundle.porter
+        def porter(exe, env, *args):
+            doc, code, err = real(exe, env, *args)
+            rows = doc if isinstance(doc, list) else next(s for s in doc['steps'] if s['id'] == 'tools')['items']
+            for r in rows:
+                if r['name'] == '.NET SDK': r['path'] = ''
+            return doc, code, err
+        out = self.run_check(porter)
+        self.assertEqual(len(smoke_bundle.FAILS), 2, out)
+        self.assertIn('.NET SDK', out)
+
+    def test_windows_skipped(self):
+        ran = mock.Mock()
+        with mock.patch.object(smoke_bundle.os, 'name', 'nt'): out = self.run_check(ran)
+        ran.assert_not_called(); self.assertEqual(smoke_bundle.FAILS, [])
+        self.assertIn('SKIP bare PATH', out)
 
 
 if __name__ == '__main__':
