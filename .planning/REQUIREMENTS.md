@@ -32,7 +32,7 @@ Requirements for the cross-platform GUI milestone. Each maps to a roadmap phase.
 
 ### Device manager
 
-- [x] **DEV-01**: User sees connected devices with their adb state, and a one-line fix for `unauthorized`, `offline` and `no permissions`
+- [ ] **DEV-01**: User sees connected devices with their adb state, and a one-line fix for `unauthorized`, `offline` and `no permissions`
 - [ ] **DEV-02**: User sees each device's compatibility verdict (BC textures, Vulkan 1.3, Android 10+, arm64, free space), with unknowns shown as unknown, next to the raw GPU/driver string
 - [ ] **DEV-03**: User sees the device list update when a device is plugged in or removed
 - [ ] **DEV-04**: User sees which ports are installed on each device and their versions
@@ -50,9 +50,9 @@ Requirements for the cross-platform GUI milestone. Each maps to a roadmap phase.
 
 ### Guided first run
 
-- [x] **FRUN-01**: User on first launch is walked through the legal notice, prod.keys (validated, key generation shown), toolchain downloads (progress, cancel, resume, hash check) and connecting a first device
-- [x] **FRUN-02**: User can skip the wizard; a banner names what is missing until setup is complete, and setup can be reopened later
-- [x] **FRUN-03**: User's readiness state comes from porter (`setup --json`) on every launch; the GUI stores none of it
+- [ ] **FRUN-01**: User on first launch is walked through the legal notice, prod.keys (validated, key generation shown), toolchain downloads (progress, cancel, resume, hash check) and connecting a first device
+- [ ] **FRUN-02**: User can skip the wizard; a banner names what is missing until setup is complete, and setup can be reopened later
+- [ ] **FRUN-03**: User's readiness state comes from porter (`setup --json`) on every launch; the GUI stores none of it
 
 ### Diagnostics
 
@@ -77,10 +77,10 @@ Requirements for the cross-platform GUI milestone. Each maps to a roadmap phase.
 
 ### Host toolchains
 
-- [x] **TOOL-01**: User on Linux arm64 gets a community arm64 NDK r27c detected or downloaded, verified by hash and a compile probe, and the host build uses its `linux-arm64` folder
-- [x] **TOOL-02**: User on Linux arm64 gets .NET 10 detected or downloaded
-- [x] **TOOL-03**: User on Linux sees the distro adb version; versions without `push -Z` are handled or refused with fix text, and "no permissions" points to the udev rules package
-- [x] **TOOL-04**: User launching the app from Finder or a desktop menu has every tool found by absolute path, without relying on the shell PATH
+- [ ] **TOOL-01**: User on Linux arm64 gets a community arm64 NDK r27c detected or downloaded, verified by hash and a compile probe, and the host build uses its `linux-arm64` folder
+- [ ] **TOOL-02**: User on Linux arm64 gets .NET 10 detected or downloaded
+- [ ] **TOOL-03**: User on Linux sees the distro adb version; versions without `push -Z` are handled or refused with fix text, and "no permissions" points to the udev rules package
+- [ ] **TOOL-04**: User launching the app from Finder or a desktop menu has every tool found by absolute path, without relying on the shell PATH
 
 ### Hardening
 
@@ -181,7 +181,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LIB-04 | Phase 4 | Pending |
 | LIB-05 | Phase 4 | Pending |
 | LIB-06 | Phase 4 | Pending |
-| DEV-01 | Phase 3 | Complete |
+| DEV-01 | Phase 3 | Gaps Found |
 | DEV-02 | Phase 5 | Pending |
 | DEV-03 | Phase 5 | Pending |
 | DEV-04 | Phase 5 | Pending |
@@ -193,9 +193,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SET-03 | Phase 4 | Pending |
 | SET-04 | Phase 4 | Pending |
 | SET-05 | Phase 4 | Pending |
-| FRUN-01 | Phase 3 | Complete |
-| FRUN-02 | Phase 3 | Complete |
-| FRUN-03 | Phase 3 | Complete |
+| FRUN-01 | Phase 3 | Gaps Found |
+| FRUN-02 | Phase 3 | Gaps Found |
+| FRUN-03 | Phase 3 | Gaps Found |
 | DIAG-01 | Phase 5 | Pending |
 | PKG-01 | Phase 1 | Complete |
 | PKG-02 | Phase 1 | Complete |
@@ -208,10 +208,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CI-02 | Phase 1 | Complete |
 | CI-03 | Phase 1 | Complete |
 | CI-04 | Phase 1 | Complete |
-| TOOL-01 | Phase 3 | Complete |
-| TOOL-02 | Phase 3 | Complete |
-| TOOL-03 | Phase 3 | Complete |
-| TOOL-04 | Phase 3 | Complete |
+| TOOL-01 | Phase 3 | Gaps Found |
+| TOOL-02 | Phase 3 | Gaps Found |
+| TOOL-03 | Phase 3 | Gaps Found |
+| TOOL-04 | Phase 3 | Gaps Found |
 | HARD-01 | Phase 2 | Complete |
 | HARD-02 | Phase 2 | Complete |
 | HARD-03 | Phase 2 | Complete |
