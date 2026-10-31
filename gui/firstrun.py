@@ -4,7 +4,7 @@
 # on_ready) and optionally `port_a_game()` can host it: today's gui/app.py Window and the new shell (gui/shell.py).
 import html
 
-from PySide6.QtCore import QObject, Qt, QUrl
+from PySide6.QtCore import QObject, Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QFontDatabase
 from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QSizePolicy, QTableWidgetItem, QToolBar, QVBoxLayout,
                                QWidget, QWizard, QWizardPage)
@@ -14,6 +14,8 @@ from gui.runner import call_json
 # (light, dark) per role, UI-SPEC Color: note #9a5b00 replaces #ef6c00 (3.08:1 on white); each pair measured at 4.99:1 or more on its background
 COLOUR = {'ok': ('#2e7d32', '#81c784'), 'bad': ('#c62828', '#ef9a9a'), 'note': ('#9a5b00', '#ffb74d'), 'banner': ('#fff4e5', '#3d2e12')}
 PAGES = ('legal', 'keys', 'tools', 'device', 'done')
+POLL_MS = 2500   # D-15: devices --json again this long after each answer, never on a fixed interval, so a stalled adb cannot stack calls
+STATE_GLYPH = {'device': ('✓', 'ok'), 'unauthorized': ('✗', 'bad'), 'offline': ('✗', 'bad'), 'no permissions': ('✗', 'bad'), 'authorizing': ('▶', 'note'), 'connecting': ('▶', 'note')}
 
 
 def colour(widget, key): return COLOUR[key][widget.palette().window().color().lightness() < 128]
@@ -97,6 +99,7 @@ class Wizard(QWizard):   # non-modal, shown with show() and never exec(); Skip s
         self.setButtonText(QWizard.CustomButton1, 'Skip setup'); self.setButtonText(QWizard.FinishButton, 'Close setup')
         self.setButtonLayout([QWizard.CustomButton1, QWizard.Stretch, QWizard.BackButton, QWizard.NextButton, QWizard.FinishButton])
         self.customButtonClicked.connect(lambda _which: self.close())
+        self.currentIdChanged.connect(lambda i: self.pages['device'].moved(i == PAGES.index('device')))   # Back, Next or a jump: polling only while it shows
         self.setMinimumSize(720, 560); self.resize(760, 600)
         self.pages = {k: cls() for k, cls in zip(PAGES, (LegalPage, KeysPage, ToolsPage, DevicePage, DonePage))}
         for i, k in enumerate(PAGES): self.setPage(i, self.pages[k])
@@ -112,7 +115,7 @@ class Wizard(QWizard):   # non-modal, shown with show() and never exec(); Skip s
         for pg in self.pages.values(): pg.redraw(doc)
 
     def done(self, r):   # every way out (Skip setup, close box, Esc, Close setup) comes here
-        super().done(r)
+        self.pages['device'].stop(); super().done(r)
         if self.gate.wizard is self: self.gate.wizard = None
         self.deleteLater()
 
@@ -165,9 +168,10 @@ class LegalPage(Page):   # D-07: porter's notice and links; the GUI holds no not
 class StepPage(Page):   # porter's detail for its step, and the fix while it is not ok; 03-12, 03-11 and 03-10 add the controls
     SID = ''
 
-    def __init__(self, heading):
+    def __init__(self, heading, stretch=True):
         super().__init__(heading); self.detail = body(); self.fix = body()
-        self.v.addWidget(self.detail); self.v.addWidget(self.fix); self.v.addStretch(1)
+        self.v.addWidget(self.detail); self.v.addWidget(self.fix)
+        if stretch: self.v.addStretch(1)
 
     def redraw(self, doc):
         st = step(doc, self.SID); self.detail.setText(st.get('detail') or ''); self.fix.setText(st.get('fix') or ''); self.fix.setVisible(not st['ok'] and bool(st.get('fix')))
@@ -239,9 +243,59 @@ class ToolsPage(StepPage):
     def __init__(self): super().__init__('Tools for building the app')
 
 
-class DevicePage(StepPage):
+def model(r):   # adb's `model:Lenovo_TB320FC device:…` as `Lenovo TB320FC`, else the serial
+    m = next((kv[6:] for kv in (r.get('info') or '').split() if kv.startswith('model:')), '')
+    return m.replace('_', ' ') or r['serial']
+
+
+class DeviceRow(QWidget):   # glyph, model or serial, adb's own state text in the fixed font (testers quote it), porter's fix under it; all plain text (T-03-31)
+    def __init__(self, r):
+        super().__init__(); self.r = r; g = QHBoxLayout(self); g.setContentsMargins(8, 4, 8, 4); g.setSpacing(8)
+        mark, role = STATE_GLYPH.get(r['state'], ('–', 'note'))
+        self.glyph = QLabel(mark); self.glyph.setStyleSheet(f'color: {colour(self, role)}'); g.addWidget(self.glyph, 0, Qt.AlignTop)
+        col = QVBoxLayout(); col.setSpacing(4); top = QHBoxLayout(); top.setSpacing(8)
+        self.name = body(model(r)); self.detail = body(r.get('detail') or r['state']); self.detail.setFont(mono())
+        self.fix = body(r.get('fix') or ''); self.fix.setTextInteractionFlags(Qt.TextSelectableByMouse); self.fix.setVisible(bool(r.get('fix')))
+        top.addWidget(self.name); top.addWidget(self.detail, 1); col.addLayout(top); col.addWidget(self.fix); g.addLayout(col, 1)
+
+
+class DevicePage(StepPage):   # D-15, DEV-01: devices --json while this page shows, one call at a time; porter's adb step text above the steps
     SID = 'device'
-    def __init__(self): super().__init__('Connect your Android device')
+
+    def __init__(self):
+        super().__init__('Connect your Android device', stretch=False); self.gen, self.busy, self.rows = 0, False, None
+        self.v.addWidget(body('1. On the device, open Settings › About and tap Build number seven times. 2. Open Settings › System › Developer options and turn on '
+                              'USB debugging. 3. Connect it by USB and tap Allow on the "Allow USB debugging?" prompt.'))
+        self.list = QListWidget(); self.empty = body('Looking again every few seconds…')
+        self.v.addWidget(self.list, 1); self.v.addWidget(self.empty); self.list.hide()   # the list scrolls on its own, so the button row stays in view
+        self.setButtonText(QWizard.NextButton, 'Skip: install later')
+
+    def here(self): z = self.wizard(); return z is not None and z.isVisible() and z.currentPage() is self
+
+    def moved(self, here):   # a turn later, so go() walking past this page to a later one sends nothing
+        self.stop()
+        if here: QTimer.singleShot(0, self, self.poll)
+
+    def stop(self): self.gen += 1   # late answers and timers of an earlier visit do nothing
+
+    def poll(self):   # the next call is scheduled from this one's answer: at most one outstanding (T-03-32)
+        if self.busy or not self.here(): return
+        self.busy, gen = True, self.gen
+
+        def got(rows, _code, fail):
+            self.busy = False
+            if gen != self.gen: self.poll(); return   # left meanwhile (and maybe back): only the current visit's chain goes on
+            self.draw(rows, fail); QTimer.singleShot(POLL_MS, self, lambda: gen == self.gen and self.poll())
+        call_json(self, ['devices', '--json'], got)
+
+    def draw(self, rows, fail):   # a failure keeps the last list and shows its cause in the empty row; polling goes on
+        if fail: self.empty.setText(cause(fail)); self.empty.show(); return
+        if rows != self.rows:
+            self.rows = rows; self.list.clear()
+            for r in rows:
+                it = QListWidgetItem(self.list); w = DeviceRow(r); it.setSizeHint(w.sizeHint()); self.list.setItemWidget(it, w)
+        self.list.setVisible(bool(rows)); self.empty.setText('No device found yet. Looking again every few seconds…'); self.empty.setVisible(not rows)
+        self.setButtonText(QWizard.NextButton, 'Next' if any(r['state'] == 'device' for r in rows) else 'Skip: install later')
 
 
 class DonePage(Page):
