@@ -8,7 +8,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 os.environ['NX2A_HOME'] = tempfile.mkdtemp()
 
-from porter import hosttools, toolchain   # noqa: E402
+from porter import childenv, hosttools, paths, toolchain   # noqa: E402
 
 
 def exe(p, text=''):   # an "executable": the finders only check that the file is there
@@ -75,6 +75,45 @@ class BarePath(unittest.TestCase):   # a Finder or desktop-menu launch: PATH=/us
         rows = {c['name']: c for c in json.loads(r.stdout)}
         for name in ('.NET SDK', 'adb'):
             with self.subTest(name): self.assertTrue(rows[name]['path'], rows[name])
+
+
+def listed(out='', err=None):   # subprocess.run as `dotnet --list-sdks` answers, or raising err
+    def run(*a, **k):
+        if err: raise err
+        return subprocess.CompletedProcess(a[0], 0, out, '')
+    return mock.patch.object(hosttools.subprocess, 'run', run)
+
+
+class ChildEnv(unittest.TestCase):   # D-18: the real DOTNET_ROOT, invariant globalization and a UTF-8 LANG; HARD-06: os.environ is never written
+    def test_root_from_list_sdks(self):   # Homebrew's /opt/homebrew/bin/dotnet is a link: the SDK list names the real root
+        with listed('9.0.100 [/opt/x/dotnet/sdk]\n10.0.403 [/opt/x/dotnet/sdk]\n'): self.assertEqual(hosttools.dotnet_root('/opt/homebrew/bin/dotnet'), Path('/opt/x/dotnet'))
+
+    def test_root_fallback(self):
+        t = Path(tempfile.mkdtemp()); p = exe(t / 'real' / 'dotnet')
+        for err in (OSError('no such file'), subprocess.TimeoutExpired('dotnet', 60)):
+            with self.subTest(err=type(err).__name__), listed(err=err): self.assertEqual(hosttools.dotnet_root(p), p.resolve().parent)
+        with listed('garbage'): self.assertEqual(hosttools.dotnet_root(p), p.resolve().parent)
+
+    def test_vars(self):
+        with listed('10.0.403 [/opt/x/dotnet/sdk]'): e = childenv.dotnet('/opt/homebrew/bin/dotnet', 4, base={'PATH': '/usr/bin'})
+        want = dict(DOTNET_ROOT=str(Path('/opt/x/dotnet')), J='4', PYTHONIOENCODING='utf-8', PYTHONUTF8='1', DOTNET_CLI_TELEMETRY_OPTOUT='1',
+                    NUGET_PACKAGES=str(paths.user_dir() / 'nuget'), DOTNET_SYSTEM_GLOBALIZATION_INVARIANT='1', LANG='C.UTF-8')
+        self.assertEqual({k: e.get(k) for k in want}, want)
+        self.assertEqual(e['PATH'], os.pathsep.join([str(Path('/opt/x/dotnet')), '/usr/bin']))   # upstream's build_nx_extract finds dotnet through this PATH
+
+    def test_keeps_lang(self):
+        with listed('10.0.403 [/opt/x/dotnet/sdk]'): self.assertEqual(childenv.dotnet('/x/dotnet', 1, base={'LANG': 'de_DE.UTF-8'})['LANG'], 'de_DE.UTF-8')
+
+    def test_no_environ_write(self):
+        before = dict(os.environ)
+        with listed('10.0.403 [/opt/x/dotnet/sdk]'): e = childenv.dotnet('/x/dotnet', 2)
+        self.assertEqual(dict(os.environ), before); self.assertEqual(e['DOTNET_SYSTEM_GLOBALIZATION_INVARIANT'], '1')
+
+    def test_linux_arm64_dotnet_places(self):   # TOOL-02: a distro or user .NET 10 on Linux arm64
+        o, s = host('posix', 'linux')
+        with mock.patch.object(hosttools, 'os', o), mock.patch.object(hosttools, 'sys', s):
+            k = hosttools.known('dotnet')
+        for p in ('/usr/lib/dotnet/dotnet', '/usr/share/dotnet/dotnet', str(Path.home() / '.dotnet' / 'dotnet')): self.assertIn(p, k)
 
 
 if __name__ == '__main__': unittest.main()

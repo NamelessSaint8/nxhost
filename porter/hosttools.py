@@ -13,3 +13,7 @@ def known(name):
     dirs = ['/opt/homebrew/bin', '/usr/local/bin', home, '/usr/local/share/dotnet'] if sys.platform == 'darwin' else \
            ['/usr/bin', '/usr/local/bin', '/snap/bin', home, '/usr/lib/dotnet', '/usr/lib64/dotnet', '/usr/share/dotnet']   # Ubuntu's dotnet package, Fedora's, the tarball's
     return [f'{d}/{name}' for d in dirs]
+
+
+def dotnet_root(dotnet):   # stub (RED)
+    return Path(dotnet).parent
