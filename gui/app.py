@@ -276,10 +276,10 @@ class SetupTab(QWidget):
                       'Your <b>prod.keys</b> must come from your own Switch. Keys and game files never leave your computer except to your own device.')
         note.setWordWrap(True); note.setTextFormat(Qt.RichText); gl.addWidget(note)
         dl = QHBoxLayout(); self.dl_btn = QPushButton('Download missing tools'); self.dl_btn.clicked.connect(self.download)
-        self.dl_step = QLabel(''); self.dl_prog = QProgressBar(); self.dl_prog.setRange(0, 1000); self.dl_prog.setVisible(False)
+        self.dl_step = QLabel(''); self.dl_step.setWordWrap(True); self.dl_prog = QProgressBar(); self.dl_prog.setRange(0, 1000); self.dl_prog.setVisible(False)
         dl.addWidget(self.dl_btn); dl.addWidget(self.dl_step, 1); dl.addWidget(self.dl_prog, 1); gl.addLayout(dl)
         self.fetch = Porter(self); self.fetch.event.connect(self.on_fetch); self.fetch.finished.connect(self.fetched)
-        self.dl_errors, self.dl_log, self.dl_error = [], None, None; self.dl_step.linkActivated.connect(self.open_dl_log)
+        self.dl_errors, self.dl_log, self.dl_error, self.dl_kn = [], None, None, ''; self.dl_step.linkActivated.connect(self.open_dl_log)
         v.addWidget(g)
         s = QGroupBox('Settings'); f = QFormLayout(s); self.edits = {}
         for key, label, kind in self.FIELDS:
@@ -293,6 +293,7 @@ class SetupTab(QWidget):
 
     # ---- downloading the missing tools ----
     def download(self):
+        if self.fetch.running(): self.fetch.stop(); self.dl_step.setTextFormat(Qt.PlainText); self.dl_step.setText('stopping…'); return   # Cancel (D-21)
         self.dl_btn.setEnabled(False); self.dl_step.setText('reading the download lists…')
         call_json(self, ['tools', '--json'], self.confirm_download)
 
@@ -303,8 +304,8 @@ class SetupTab(QWidget):
         e = lambda x: html.escape(str(x), quote=True)   # index strings are text; quote=True for the href
         rows = ''.join(f'<li><b>{e(it["name"])}</b> {e(it["version"])}{" (untested)" if it.get("untested") else ""}, {size(it["size"])}, from {e(it["url"].split("/")[2])}'
                        f' (<a href="{e(it["license"])}">license</a>)</li>' for it in items)
-        box = QMessageBox(QMessageBox.Question, 'Download missing tools', f'<p>Download and unpack into your nx2android folder:</p><ul>{rows}</ul>'
-                          '<p>They come from their makers under their own licenses: downloading them means you accept those.</p>', QMessageBox.Yes | QMessageBox.No, self)
+        box = QMessageBox(QMessageBox.Question, 'Download missing tools', f'<p>Download and unpack into your nx2android folder:</p><ul>{rows}</ul>',   # D-07: the legal notice covers the licenses
+                          QMessageBox.Yes | QMessageBox.No, self)
         box.setTextFormat(Qt.RichText)
         if box.exec() != QMessageBox.Yes: return
         self.dl_btn.setEnabled(False); self.dl_prog.setVisible(True); self.dl_prog.setRange(0, 0); self.dl_errors, self.dl_log, self.dl_error = [], None, None
@@ -313,10 +314,12 @@ class SetupTab(QWidget):
 
     def on_fetch(self, ev):
         e = ev.get('ev')
-        if e == 'stage': self.dl_step.setText(f'[{ev["k"]}/{ev["n"]}] {ev["name"]}'); self.dl_prog.setRange(0, 0)
+        if self.fetch.running():   # a run the wizard's tools page started shows here too; its button cancels it (D-21)
+            self.dl_btn.setText('Cancel .NET preparation' if firstrun.run_kind(self.fetch) == 'prepare' else 'Cancel download'); self.dl_btn.setEnabled(True); self.dl_prog.setVisible(True)
+        if e in ('stage', 'progress') and self.fetch.stopping: return   # stopping… stays until finished
+        if e == 'stage': self.dl_kn = f'[{ev["k"]}/{ev["n"]}]'; self.dl_step.setTextFormat(Qt.PlainText); self.dl_step.setText(f'{self.dl_kn} {ev["name"]}'); self.dl_prog.setRange(0, 0)
         elif e == 'progress':
-            done, total = ev.get('done'), ev.get('total')
-            self.dl_step.setText(f'{ev["name"]} · {ev.get("step") or ""}' + (f' · {size(done)} / {size(total)}' if ev.get('unit') == 'B' and total and done is not None else ''))
+            self.dl_step.setTextFormat(Qt.PlainText); self.dl_step.setText(firstrun.progress_line(ev, self.dl_kn))
             if ev.get('frac') is not None: self.dl_prog.setRange(0, 1000); self.dl_prog.setValue(int(ev['frac'] * 1000))
             else: self.dl_prog.setRange(0, 0)
         elif e == 'say' and ev.get('msg', '').startswith('[RED] '): self.dl_errors.append(ev['msg'].removeprefix('[RED] '))
@@ -324,7 +327,7 @@ class SetupTab(QWidget):
         elif e == 'error': self.dl_error = ev
 
     def fetched(self, code):
-        self.dl_btn.setEnabled(True); self.dl_prog.setVisible(False)
+        self.dl_btn.setEnabled(True); self.dl_btn.setText('Download missing tools'); self.dl_prog.setVisible(False); self.dl_kn = ''
         if code in (0, 130): self.dl_step.setText('the tools are ready' if code == 0 else 'cancelled')
         else:   # the cause inline, escaped like the Port tab's log pane, with the saved log one click away (no dialog)
             msg = (self.dl_error or {}).get('msg') or '\n'.join(self.dl_errors) or 'the download failed'
