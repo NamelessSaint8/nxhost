@@ -32,7 +32,7 @@ Requirements for the cross-platform GUI milestone. Each maps to a roadmap phase.
 
 ### Device manager
 
-- [ ] **DEV-01**: User sees connected devices with their adb state, and a one-line fix for `unauthorized`, `offline` and `no permissions`
+- [x] **DEV-01**: User sees connected devices with their adb state, and a one-line fix for `unauthorized`, `offline` and `no permissions`
 - [ ] **DEV-02**: User sees each device's compatibility verdict (BC textures, Vulkan 1.3, Android 10+, arm64, free space), with unknowns shown as unknown, next to the raw GPU/driver string
 - [ ] **DEV-03**: User sees the device list update when a device is plugged in or removed
 - [ ] **DEV-04**: User sees which ports are installed on each device and their versions
@@ -80,7 +80,7 @@ Requirements for the cross-platform GUI milestone. Each maps to a roadmap phase.
 - [x] **TOOL-01**: User on Linux arm64 gets a community arm64 NDK r27c detected or downloaded, verified by hash and a compile probe, and the host build uses its `linux-arm64` folder
 - [x] **TOOL-02**: User on Linux arm64 gets .NET 10 detected or downloaded
 - [ ] **TOOL-03**: User on Linux sees the distro adb version; versions without `push -Z` are handled or refused with fix text, and "no permissions" points to the udev rules package
-- [ ] **TOOL-04**: User launching the app from Finder or a desktop menu has every tool found by absolute path, without relying on the shell PATH
+- [x] **TOOL-04**: User launching the app from Finder or a desktop menu has every tool found by absolute path, without relying on the shell PATH
 
 ### Hardening
 
@@ -181,7 +181,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LIB-04 | Phase 4 | Pending |
 | LIB-05 | Phase 4 | Pending |
 | LIB-06 | Phase 4 | Pending |
-| DEV-01 | Phase 3 | Pending |
+| DEV-01 | Phase 3 | Complete |
 | DEV-02 | Phase 5 | Pending |
 | DEV-03 | Phase 5 | Pending |
 | DEV-04 | Phase 5 | Pending |
@@ -211,7 +211,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TOOL-01 | Phase 3 | Complete |
 | TOOL-02 | Phase 3 | Complete |
 | TOOL-03 | Phase 3 | Pending |
-| TOOL-04 | Phase 3 | Pending |
+| TOOL-04 | Phase 3 | Complete |
 | HARD-01 | Phase 2 | Complete |
 | HARD-02 | Phase 2 | Complete |
 | HARD-03 | Phase 2 | Complete |

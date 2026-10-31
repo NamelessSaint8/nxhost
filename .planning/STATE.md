@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 03
 current_phase_name: Host Toolchains and Guided First Run
 status: executing
-stopped_at: Completed 03-09-PLAN.md
-last_updated: "2026-10-31T16:52:21.257Z"
+stopped_at: Completed 03-10-PLAN.md
+last_updated: "2026-10-31T17:03:31.938Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 03 execution started
-state_head: eed11e1f6d2dfd6859f8588cadb5e3987d03357c
+state_head: 6e6d17d937bdd1ba1acf5eaca28f0759a8492dee
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 35
-  completed_plans: 33
+  completed_plans: 34
   percent: 33
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-10-31)
 ## Current Position
 
 Phase: 03 (Host Toolchains and Guided First Run) — EXECUTING
-Plan: 11 of 12
+Plan: 12 of 12
 Status: Ready to execute
 Last activity: 2026-10-31 — Phase 03 execution started
 
@@ -90,6 +90,7 @@ Progress: [███░░░░░░░] 33%
 | Phase 03 P08 | 25min | 3 tasks | 7 files |
 | Phase 03 P12 | 6min | 2 tasks | 2 files |
 | Phase 03 P09 | 15min | 2 tasks | 7 files |
+| Phase 03 P10 | 8 min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -178,6 +179,9 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-12: the keys page saves on itemSelectionChanged, not currentItemChanged, so focusing the list never saves its first row
 - [Phase 03]: Setup tools items get download {version,size} from pins only for names in downloadable, so arm64 adb never shows Google's x86-64 size
 - [Phase 03]: porter tools --prepare calls pipeline.Port.translator unbound with a SimpleNamespace(tools, env, logs) so the translator key and folder are the port's own; nx_extract is built once in a temp folder
+- [Phase 03]: 03-10: device polling follows the wizard's currentIdChanged (QWizard skips initializePage on Back); the next devices --json is scheduled 2.5 s after each answer, one call outstanding
+- [Phase 03]: 03-10: the done page's No device yet note comes from the device page's last answer in this wizard (in memory, None when it never asked)
+- [Phase 03]: 03-10: QWizard.NoDefaultButton only on the done page keeps Port a game the default
 
 ### Pending Todos
 
@@ -202,6 +206,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-31T16:52:21.022Z
-Stopped at: Completed 03-09-PLAN.md
+Last session: 2026-10-31T17:03:31.690Z
+Stopped at: Completed 03-10-PLAN.md
 Resume file: None
