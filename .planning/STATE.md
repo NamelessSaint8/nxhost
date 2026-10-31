@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 03
 current_phase_name: Host Toolchains and Guided First Run
 status: executing
-stopped_at: Phase 3 UI-SPEC approved
-last_updated: "2026-10-31T09:00:20.351Z"
+stopped_at: Completed 03-01-PLAN.md
+last_updated: "2026-10-31T15:32:53.674Z"
 last_activity: 2026-10-31
-last_activity_desc: Phase 02 complete, transitioned to Phase 3
-state_head: 43e4970f333db25a901a2d6386247672708aae08
+last_activity_desc: Phase 03 execution started
+state_head: dd3b4dc70e128b7217c9c23f832bcea296b9979e
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 35
-  completed_plans: 23
+  completed_plans: 24
   percent: 33
 ---
 
@@ -23,14 +23,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-31)
 
 **Core value:** A tester on any supported host (Windows x64, macOS Apple Silicon, Linux x64, Linux arm64) can take their own Switch dump and get a working port onto their Android device through the GUI, without help.
-**Current focus:** Phase 3 — Host Toolchains and Guided First Run
+**Current focus:** Phase 03 — Host Toolchains and Guided First Run
 
 ## Current Position
 
-Phase: 03 (Host Toolchains and Guided First Run) — READY TO EXECUTE
-Plan: Not started
+Phase: 03 (Host Toolchains and Guided First Run) — EXECUTING
+Plan: 2 of 12
 Status: Ready to execute
-Last activity: 2026-10-31 — Phase 02 complete, transitioned to Phase 3
+Last activity: 2026-10-31 — Phase 03 execution started
 
 Progress: [███░░░░░░░] 33%
 
@@ -80,6 +80,7 @@ Progress: [███░░░░░░░] 33%
 | Phase 02 P11 | 2 min | 2 tasks | 3 files |
 | Phase 02 P12 | 4 min | 3 tasks | 4 files |
 | Phase 02 P13 | 7 min | 3 tasks | 6 files |
+| Phase 03 P01 | 8 min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -143,6 +144,9 @@ Recent decisions affecting current work:
 - [Phase 02]: 02-13: link resolution capped at 40 substitutions so loops are a BuildError on every Python (IN-06)
 - [Phase 02]: 02-13: link names/targets must be printable ASCII; case-variant, duplicate and member-under-link refused (APFS)
 - [Phase 02]: 02-13: installed toolchain renamed to .<folder>.old and restored on failure or cut-off swap (WR-05)
+- [Phase 03]: setup --json is the readiness document; legal notice VERSION=1 accepted only via config legal <VERSION> --json
+- [Phase 03]: prod.keys judged by key names and highest generation (master_key_XX or titlekek+key_area_key_application pair); values never leave porter
+- [Phase 03]: desktop Exec quoting follows the spec exactly (literal backslash = four); paths with line breaks refused
 
 ### Pending Todos
 
@@ -167,6 +171,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-31T07:59:15.420Z
-Stopped at: Phase 3 UI-SPEC approved
-Resume file: .planning/phases/03-host-toolchains-and-guided-first-run/03-UI-SPEC.md
+Last session: 2026-10-31T15:32:53.495Z
+Stopped at: Completed 03-01-PLAN.md
+Resume file: None
