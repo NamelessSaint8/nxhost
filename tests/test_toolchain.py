@@ -75,6 +75,7 @@ class Detection(unittest.TestCase):   # the finders' order and the per-OS folder
         self.player = self.t / 'player'
         for name, v in (('LOCAL_TOOLS', self.t / 'local'), ('player_tools', lambda: self.player)):
             p = mock.patch.object(toolchain, name, v); p.start(); self.addCleanup(p.stop)
+        p = mock.patch.object(toolchain.hosttools, 'known', lambda name: []); p.start(); self.addCleanup(p.stop)   # else the developer's Homebrew adb and dotnet are found
 
     def test_ndk_config_wins(self):
         os.environ['ANDROID_NDK_HOME'] = str(ndk(self.t / 'r27c', toolchain.NDK_REVISION))

@@ -1,11 +1,12 @@
 # The tools a port needs on the player's machine, found and checked (`porter doctor`, the GUI's setup screen). Nothing here is shipped with the tool:
 # the player installs the Android NDK (r27c), the .NET SDK (10) and, to install from the tool, platform-tools (adb), or has `porter tools --download` (porter.fetch)
-# fetch them from Google and Microsoft into their nx2android folder (paths.player_tools()), which the finders here also search.
+# fetch them from Google and Microsoft into their nx2android folder (paths.player_tools()), which the finders here also search, and the known places a bare PATH hides
+# (porter/hosttools.py).
 import glob, importlib.util, json, os, re, shutil, subprocess, sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from porter import config
+from porter import config, hosttools
 from porter.paths import LOCAL_TOOLS, player_tools, signing_key
 
 NDK_REVISION = '27.2.12479018'   # r27c: the NDK the Android host is built and tested with
@@ -65,9 +66,12 @@ def find_dotnet(cfg=None):
     cfg = cfg if cfg is not None else config.load()
     if cfg.get('dotnet') and Path(cfg['dotnet']).is_file(): return Path(cfg['dotnet'])
     progs = [os.environ.get(k) for k in ('ProgramFiles', 'ProgramW6432')] if os.name == 'nt' else []
-    cands = [os.environ.get('DOTNET_ROOT') and str(Path(os.environ['DOTNET_ROOT']) / f'dotnet{EXE}'), shutil.which('dotnet'), str(LOCAL_TOOLS / 'dotnet' / f'dotnet{EXE}'), str(player_tools() / 'dotnet' / f'dotnet{EXE}'),
+    cands = [os.environ.get('DOTNET_ROOT') and str(Path(os.environ['DOTNET_ROOT']) / f'dotnet{EXE}'), shutil.which('dotnet'), *hosttools.known('dotnet'), str(LOCAL_TOOLS / 'dotnet' / f'dotnet{EXE}'), str(player_tools() / 'dotnet' / f'dotnet{EXE}'),
              str(Path.home() / '.dotnet' / f'dotnet{EXE}'), *[str(Path(p) / 'dotnet' / f'dotnet{EXE}') for p in progs if p], '/usr/local/share/dotnet/dotnet']
-    found = list(dict.fromkeys(Path(c) for c in cands if c and Path(c).is_file()))
+    found = {}   # by the real file: Homebrew's /opt/homebrew/bin/dotnet links to /usr/local/share/dotnet/dotnet, asked once under its earliest spelling
+    for c in cands:
+        if c and Path(c).is_file(): found.setdefault(Path(c).resolve(), Path(c))
+    found = list(found.values())
     return next((d for d in found if any(int(s.split('.')[0]) >= DOTNET_MAJOR for s in dotnet_sdks(d))), found[0] if found else None)
 
 
@@ -79,7 +83,7 @@ def dotnet_sdks(dotnet):   # ['10.0.402', ...]
 
 def find_adb(cfg=None):
     cfg = cfg if cfg is not None else config.load()
-    for c in [cfg.get('adb'), shutil.which('adb'), *[str(r / 'platform-tools' / f'adb{EXE}') for r in _sdk_roots()], str(LOCAL_TOOLS / 'platform-tools' / f'adb{EXE}'), str(player_tools() / 'platform-tools' / f'adb{EXE}')]:
+    for c in dict.fromkeys([cfg.get('adb'), shutil.which('adb'), *hosttools.known('adb'), *[str(r / 'platform-tools' / f'adb{EXE}') for r in _sdk_roots()], str(LOCAL_TOOLS / 'platform-tools' / f'adb{EXE}'), str(player_tools() / 'platform-tools' / f'adb{EXE}')]):   # D-13 order; each path tried once
         if c and Path(c).is_file(): return Path(c)
     return None
 

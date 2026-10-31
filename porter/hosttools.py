@@ -6,5 +6,10 @@ from pathlib import Path
 from porter.paths import LOCAL_TOOLS, player_tools   # not toolchain: toolchain imports this module
 
 
-def known(name):   # stub (RED)
-    return []
+def known(name):
+    """The absolute paths a tool may have outside a bare PATH, existing or not, in their fixed order (RESEARCH Pattern 3). None on Windows: an Explorer launch keeps the user's PATH"""
+    if os.name == 'nt': return []
+    home = str(Path.home() / '.dotnet')
+    dirs = ['/opt/homebrew/bin', '/usr/local/bin', home, '/usr/local/share/dotnet'] if sys.platform == 'darwin' else \
+           ['/usr/bin', '/usr/local/bin', '/snap/bin', home, '/usr/lib/dotnet', '/usr/lib64/dotnet', '/usr/share/dotnet']   # Ubuntu's dotnet package, Fedora's, the tarball's
+    return [f'{d}/{name}' for d in dirs]
