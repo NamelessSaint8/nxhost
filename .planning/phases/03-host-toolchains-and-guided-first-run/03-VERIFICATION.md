@@ -1,35 +1,20 @@
 ---
 phase: 03-host-toolchains-and-guided-first-run
-verified: 2026-10-31T18:05:00Z
-status: gaps_found
-score: 2/5 must-haves verified
-covered_files: [".github/workflows/fork-release.yml",".planning/phases/03-host-toolchains-and-guided-first-run/03-01-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-01-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-02-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-02-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-03-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-03-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-04-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-04-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-05-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-05-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-06-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-06-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-07-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-07-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-08-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-08-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-09-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-09-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-10-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-10-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-11-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-11-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-12-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-12-SUMMARY.md","devtools/ndk_pin.py","docs/ARCHITECTURE.md","docs/RELEASE_CHECK.md","gui/app.py","gui/firstrun.py","gui/runner.py","gui/shell.py","nxnative/dm/android/build.py","packaging/INSTALL.md","packaging/smoke_bundle.py","porter/adb.py","porter/childenv.py","porter/cli.py","porter/config.py","porter/desktop.py","porter/distro.py","porter/fetch.py","porter/hosttools.py","porter/keys.py","porter/pins.py","porter/pipeline.py","porter/prepare.py","porter/probe.py","porter/runlog.py","porter/setup.py","porter/toolchain.py","tests/arch_rules.py","tests/fixtures/bridge/fake_porter.py","tests/fixtures/bridge/setup_first.json","tests/fixtures/bridge/setup_missing.json","tests/fixtures/bridge/setup_ready.json","tests/test_adb.py","tests/test_bridge.py","tests/test_desktop.py","tests/test_distro.py","tests/test_fetch.py","tests/test_firstrun.py","tests/test_hosttools.py","tests/test_keys.py","tests/test_packaging.py","tests/test_prepare.py","tests/test_probe.py","tests/test_runlog.py","tests/test_setup.py","tests/test_shell.py","tests/test_toolchain.py","tests/test_workflows.py"]
-covered_digest: "v4:sha256:8ff95b50f5e80ae4096fffa6054a02c1b34d545a351ce8928d41a66094c53876"
+verified: 2026-10-31T20:10:00Z
+status: human_needed
+score: 3/5 must-haves verified
+covered_files: [".github/workflows/fork-release.yml",".planning/phases/03-host-toolchains-and-guided-first-run/03-01-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-01-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-02-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-02-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-03-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-03-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-04-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-04-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-05-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-05-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-06-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-06-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-07-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-07-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-08-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-08-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-09-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-09-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-10-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-10-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-11-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-11-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-12-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-12-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-13-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-13-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-14-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-14-SUMMARY.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-15-PLAN.md",".planning/phases/03-host-toolchains-and-guided-first-run/03-15-SUMMARY.md","devtools/ndk_pin.py","docs/ARCHITECTURE.md","docs/RELEASE_CHECK.md","gui/app.py","gui/firstrun.py","gui/runner.py","gui/shell.py","nxnative/dm/android/build.py","packaging/INSTALL.md","packaging/smoke_bundle.py","porter/adb.py","porter/childenv.py","porter/cli.py","porter/config.py","porter/desktop.py","porter/distro.py","porter/fetch.py","porter/hosttools.py","porter/keys.py","porter/pins.py","porter/pipeline.py","porter/prepare.py","porter/probe.py","porter/runlog.py","porter/setup.py","porter/toolchain.py","tests/arch_rules.py","tests/fixtures/bridge/fake_porter.py","tests/fixtures/bridge/setup_first.json","tests/fixtures/bridge/setup_missing.json","tests/fixtures/bridge/setup_ready.json","tests/test_adb.py","tests/test_bridge.py","tests/test_desktop.py","tests/test_distro.py","tests/test_fetch.py","tests/test_firstrun.py","tests/test_hosttools.py","tests/test_keys.py","tests/test_packaging.py","tests/test_prepare.py","tests/test_probe.py","tests/test_runlog.py","tests/test_setup.py","tests/test_shell.py","tests/test_toolchain.py","tests/test_workflows.py"]
+covered_digest: "v4:sha256:94bc0a39f3bcbbeb9c571027657808e91177a053ffc43d081f51c2da280e1bb3"
 behavior_unverified: 0
 overrides_applied: 0
-gaps:
-  - truth: "SC1 / FRUN-01: what the wizard saves through porter (prod.keys, NDK, .NET, adb, device) stays saved, so the ready setup the wizard reached holds"
-    status: failed
-    reason: "CR-01, reproduced. The Setup tab copies config.json into its line edits only at startup and after a fetch run ends. Window.recheck() (called by every wizard save) runs SetupTab.check() but never SetupTab.load(). SetupTab.save() ('Save and check') then writes every stale edit back over config.json. Reproduction (scratch script, offscreen Window, real `porter config keys <path> --json`, then win.recheck(), then win.setup.save()): config keys went from the saved path to ''. A tester who sets prod.keys in the wizard and then changes the output folder on the Setup tab loses prod.keys, and the next port fails with 'prod.keys: not set'."
-    artifacts:
-      - path: "gui/app.py"
-        issue: "Window.recheck (line 430) calls self.setup.check() only; SetupTab.save (lines 353-356) writes every edit, including keys/ndk/dotnet/adb/device the wizard saved after launch"
-      - path: "gui/firstrun.py"
-        issue: "KeysPage (line 265), ToolsPage Use my own…, DevicePage.pick (line 467) save through porter config, then win.recheck(), which does not refresh the Setup tab's edits"
-    missing:
-      - "Window.recheck refreshes the Setup tab's edits from config.json before checking (e.g. call SetupTab.load())"
-      - "Optionally: SetupTab.save writes only the fields the player changed since the last load"
-      - "A GUI test: wizard saves keys through config, Setup tab Save and check keeps them"
-  - truth: "SC1 / 03-03: a download resumes its .part with an HTTP Range request after a dropped connection (up to 3 attempts, each retry logged)"
-    status: partial
-    reason: "WR-01, reproduced. When the server closes the connection cleanly before Content-Length is reached, HTTPResponse.read() returns b'' without raising, the loop ends as if complete, the hash fails, the .part is deleted and a BuildError says the hash differs (for the NDK: 'wait for a pin bump'). Reproduction (local socket server announcing 1000 bytes, sending 300): one request only, no retry, no Range request, .part gone. Resume works for Cancel, restart, connection resets and timeouts (tests/test_fetch.py Resume), not for a clean early close. A chunked response cut short raises http.client.IncompleteRead, which the retry except does not catch either."
-    artifacts:
-      - path: "porter/fetch.py"
-        issue: "_download (lines 117-150): no check that the bytes received match Content-Length before hashing; http.client.HTTPException not in the retried exceptions"
-    missing:
-      - "Treat received < announced length as a dropped link (raise a retried error, keep the .part) before hashing"
-      - "Add http.client.HTTPException to the retried exceptions"
-      - "A Resume test with a server that closes cleanly mid-body"
+re_verification:
+  previous_status: gaps_found
+  previous_score: 2/5
+  gaps_closed:
+    - "SC1 / FRUN-01: what the wizard saves through porter (prod.keys, NDK, .NET, adb, device) stays saved (CR-01)"
+    - "SC1 / 03-03: a download resumes its .part with an HTTP Range request after a dropped connection, including a clean early close and a cut chunked body (WR-01)"
+  gaps_remaining: []
+  regressions: []
 human_verification:
   - test: "Run fork-release.yml: the bare-PATH smoke step on macOS and both Linux bundles, and 'Community NDK download and probe (linux-arm64)' on ubuntu-24.04-arm"
     expected: "Every tool row (Android NDK, .NET SDK, adb) found by absolute path; the arm64 NDK row ok with the community note"
@@ -39,105 +24,92 @@ human_verification:
     why_human: "Only mocked platform.machine() in tests; no arm64 machine was used (SC3, TOOL-01, TOOL-02)"
   - test: "Launch the bundle from Finder (macOS) and from the Add to app menu entry (Linux x64 and arm64), then port a playable title"
     expected: "Every tool found by absolute path and the port completes"
-    why_human: "Bare-PATH lookup was checked here (env -i PATH=/usr/bin:/bin finds dotnet and adb as 'known place'), but a full port from a Finder or menu launch needs the bundle, game files and the desktop (SC5, TOOL-04)"
+    why_human: "Bare-PATH lookup re-checked here (env -i PATH=/usr/bin:/bin finds dotnet and adb as 'known place'), but a full port from a Finder or menu launch needs the bundle, game files and the desktop (SC5, TOOL-04)"
   - test: "Plug a device with USB debugging not yet allowed into the wizard's device page; on Linux without udev rules, plug one in"
     expected: "unauthorized with its one-line fix, turning live to device after Allow; no permissions with the distro udev package command"
     why_human: "Needs a real device and USB; parsing and fix text are unit-tested from captured adb output only (SC4, DEV-01)"
   - test: "On Ubuntu 22.04 / Debian 12 with distro adb 29.0.6, install a port"
     expected: "The adb row shows 29.0.6 and the no -Z note; the install succeeds"
     why_human: "Needs a distro adb and a device (SC4, TOOL-03)"
-  - test: "On a slow host (SD-card arm64 board), first launch after an NDK download"
-    expected: "setup --json answers within the GUI's 45 s limit (WR-02: the probe's own limits are 60 s per step, so a slow first probe can be killed and never cached)"
-    why_human: "Timing depends on real hardware"
+  - test: "On a slow host (SD-card arm64 board), first launch right after downloading both the NDK and .NET"
+    expected: "setup --json answers within the GUI's 150 s limit; if not, Retry answers (the probe pass was cached before the dotnet checks)"
+    why_human: "Timing depends on real hardware; the 150 s bound covers the probe's two 60 s steps but not find_dotnet's and checks()'s dotnet --list-sdks 60 s limits (03-REVIEW WR-02, open)"
   - test: "Judgment-tier prohibition (03-05): the wizard links to no keys or firmware source, offers no firmware step, shows no key value"
     expected: "Confirmed by reading the pages"
-    why_human: "unverified-prohibition — human review recommended. Non-authoritative LLM-judge verdict: holds (gui/firstrun.py has no firmware/key links; legal links are the three vendor license pages from porter/setup.py LINKS)"
+    why_human: "unverified-prohibition — human review recommended. Non-authoritative LLM-judge verdict: holds (gui/firstrun.py has no firmware/key links; legal links are the vendor license pages from porter/setup.py LINKS)"
 ---
 
 # Phase 3: Host Toolchains and Guided First Run Verification Report
 
 **Phase Goal:** A tester on any of the four hosts goes from a fresh download to a ready setup (keys, toolchains, a connected device) by following the GUI
-**Verified:** 2026-10-31T18:05:00Z
-**Status:** gaps_found
-**Re-verification:** No, initial verification
+**Verified:** 2026-10-31T20:10:00Z
+**Status:** human_needed
+**Re-verification:** Yes, after gap closure (plans 03-13, 03-14, 03-15)
 
 ## Goal Achievement
 
-The porter side and the wizard are real, wired and well tested: `setup --json`, the prod.keys check, bare-PATH discovery, the community NDK pin, the probe, adb state parsing and the five wizard pages all exist and do what the plans say. Two defects stand in the way of the goal, and both were reproduced here: settings the wizard saves can be wiped by the Setup tab, and a download cut off cleanly by the server loses its progress instead of resuming.
+Both gaps from the previous report are closed, and both were checked by re-running the reproductions that found them, not by reading the summaries. What is left can only be proven on hardware this run did not have: a Linux arm64 host, a Finder or app-menu launch with a full port, a real device, and the CI workflow.
+
+### Gap re-checks
+
+| Gap | Previous result | Now | Evidence |
+|-----|-----------------|-----|----------|
+| CR-01: wizard saves undone by the Setup tab | keys `<path>` → `''` | ✓ CLOSED | Independent end-to-end run (scratch script, offscreen `Window`, the real wizard `KeysPage.save` → real `porter config keys <path> --json` subprocess → `win.recheck()`, then the output folder typed on the Setup tab and `win.setup.save()`): config.json kept `keys=<path>` and gained `out=<path>`, PASS. Code: `Window.recheck` now calls `SetupTab.load()` (gui/app.py:444); `load()` refreshes fields still equal to the loaded snapshot (357-361); `save()` writes only fields that differ from it (363-367). A save with no reload in between (DevicePage.pick saves without a recheck) is also safe, because untouched fields are not written: tests SetupTab.test_save_writes_changed_only, test_wizard_save_kept, test_unsaved_edit_kept |
+| WR-01: clean early close loses the download | 1 request, hash BuildError, .part deleted | ✓ CLOSED | Independent loopback socket server (announces 1000 bytes, sends 300, closes): requests `[None, 'bytes=300-']`, file whole, `.part` gone, say line `x.zip: the server closed the link at 300 of 1000 bytes, retry 1`. Three short answers: `ConnectionResetError`, `.part` kept (300 bytes), no hash message. Code: porter/fetch.py:140 raises `ConnectionResetError` when `have < end`; :145 catches `http.client.HTTPException`. Tests EarlyClose.test_clean_close_resumed, test_chunked_cut_resumed, test_short_answers_keep_part |
 
 ### Observable Truths (roadmap success criteria)
 
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
-| 1 | First launch walks through the legal notice, prod.keys (validated, generation shown), toolchain downloads (progress, cancel, resume, hash check) and connecting a device | ✗ FAILED (partial) | Walk-through present and wired: PAGES legal/keys/tools/device/done in gui/firstrun.py, opened by firstrun.on_ready from both windows; tests Launch/Legal/Keys/Tools/Device/Done pass. Fails on: CR-01 (wizard-saved settings reverted by the Setup tab's Save and check, reproduced) and WR-01 (clean early close is not resumed, .part deleted, reproduced) |
-| 2 | Skipping shows a banner naming what is missing; setup can be reopened; readiness comes from `porter setup --json` on every launch and the GUI stores none of it | ✓ VERIFIED | Banner/Run setup/Continue setup in firstrun.py; arch_rules: firstrun.py and shell.py import only gui.runner/PySide6/stdlib and write no file; `env -i PATH=/usr/bin:/bin porter setup --json` returned the documented shape with fixed step order and wrote no config.json; tests Banner, Wizard.test_skip_closes_no_write, Launch.test_second_doc_never_opens pass |
-| 3 | Linux arm64: community NDK r27c detected or downloaded, hash- and probe-checked; .NET 10; host build uses `linux-arm64` | ? UNCERTAIN | Code present: pins.NDK linux-arm64 row, fetch._ndk_host, probe.host_folder, build.py lines 28-29, hosttools.known adds /usr/lib/dotnet etc.; `devtools/ndk_pin.py` printed PASS against the live GitHub asset. Proven only with mocked platform.machine(); the CI arm64 step has not run |
-| 4 | Linux: distro adb version shown, no-`-Z` adb handled or refused with fix text; device states with one-line fixes (udev package for `no permissions`) | ✓ VERIFIED (code level) | toolchain.py adb row (version, -Z note, protocol 1.0.39 floor), hosttools.push_flags, adb.py ROW and `*self.nz` at both push sites, cli.py cmd_devices adds detail/fix via distro.device_fix; tests test_adb/test_distro/test_hosttools pass. Live device transition is a human item |
-| 5 | Launched from Finder or a desktop menu with a minimal PATH, every tool found by absolute path and a port runs | ? UNCERTAIN | Lookup proven here: bare-PATH `setup --json` found `/opt/homebrew/bin/dotnet` and `/opt/homebrew/bin/adb` with source `known place`; tests BarePath and test_packaging pass; childenv.dotnet wired in pipeline.py:98 and prepare.py:19. "A port runs" from Finder/menu not proven |
+| 1 | First launch walks through the legal notice, prod.keys (validated, generation shown), toolchain downloads (progress, cancel, resume, hash check) and connecting a device | ✓ VERIFIED | Walk-through present and wired (PAGES legal/keys/tools/device/done, opened by firstrun.on_ready from both windows). CR-01 and WR-01 closed (above). Cancel and quit are tighter too: a second start on a running fetch is refused (runner.py:58, Stop.test_second_start_refused), no Prepare starts on a quitting window (firstrun.py:379, :404, Tools.test_no_prepare_while_quitting) |
+| 2 | Skipping shows a banner naming what is missing; setup can be reopened; readiness comes from `porter setup --json` on every launch and the GUI stores none of it | ✓ VERIFIED | Regression check: arch_rules pass (firstrun.py/shell.py purity); bare-PATH `setup --json` re-run returned steps `['legal','keys','tools','device']`, ready false, wrote no config.json. Banner now follows the palette (Banner.test_follows_palette) |
+| 3 | Linux arm64: community NDK r27c detected or downloaded, hash- and probe-checked; .NET 10; host build uses `linux-arm64` | ? UNCERTAIN | Code unchanged since the last run except probe.py (best-effort cache through mkstemp, quoted fix paths; Probe.test_cache_write_fails, test_quoted_fix). Still proven only with mocked `platform.machine()`; the CI arm64 step has not run |
+| 4 | Linux: distro adb version shown, no-`-Z` adb handled or refused with fix text; device states with one-line fixes | ✓ VERIFIED (code level) | adb.py, hosttools.py, distro.py, cli.py unchanged in gap closure; their tests pass. Live device transition is a human item |
+| 5 | Launched from Finder or a desktop menu with a minimal PATH, every tool found by absolute path and a port runs | ? UNCERTAIN | Bare-PATH lookup re-checked: `.NET SDK` and `adb` both `known place`. "A port runs" from Finder or a menu is not proven |
 
-**Score:** 2/5 roadmap truths verified (1 failed, 2 need a real host; 0 present-but-behavior-unverified)
+**Score:** 3/5 roadmap truths verified (2 need a real host or CI; 0 present-but-behavior-unverified)
 
-Plan-level truths (about 140 across 12 plans) were checked through their named tests in the full suite (419 tests, all pass) and by reading the code for the key ones. Only the 03-03 dropped-connection resume truth fails (gap 2). CR-01 is an integration gap no single plan truth covered: the wizard plans save through porter, and the old Setup tab was not taught to reload.
+Plan-level truths of 03-13..03-15 were checked through their named tests (all present in tests/, all in the green suite) and by reading the changed code. Regression check on 03-01..03-12: nothing in porter/ other than fetch.py and probe.py changed, and the full suite passes.
 
-### Required Artifacts
-
-`gsd-tools verify.artifacts` on all 12 plans: 43/44 passed. The one miss (03-10 `contains: singleShot(2500`) is a literal-pattern miss only: the code uses `POLL_MS = 2500` (firstrun.py:17) in `QTimer.singleShot(POLL_MS, ...)` (line 448). All artifacts are substantive (porter modules 15-276 lines with real logic, firstrun.py 538 lines).
+### Required Artifacts (gap-closure plans)
 
 | Artifact | Status | Details |
 |----------|--------|---------|
-| porter/setup.py | ✓ VERIFIED | report(): one toolchain.checks() call, legal/keys/tools/device steps, missing, notes, desktop |
-| porter/keys.py | ✓ VERIFIED | 1 MB cap, header_key and generation checks, candidates() |
-| porter/desktop.py | ✓ VERIFIED | Exec quoting, symlink refusal (TryExec/Icon unescaped, IN-03) |
-| porter/hosttools.py, porter/childenv.py | ✓ VERIFIED | known places per OS, dotnet_root, adb_version, push_flags; env dict with DOTNET_ROOT, invariant globalization, LANG |
-| porter/pins.py, porter/fetch.py | ⚠️ PARTIAL | pin and Range resume present; short-body handling missing (gap 2) |
-| porter/probe.py, porter/distro.py | ✓ VERIFIED | compile probe with cache; distro commands (fix text unquoted paths, WR-06) |
-| porter/prepare.py | ✓ VERIFIED | calls pipeline.Port.translator unbound, childenv env |
-| nxnative/dm/android/build.py | ✓ VERIFIED | linux-arm64/linux-aarch64 on aarch64; glslc fallback unguarded (IN-08) |
-| gui/firstrun.py, gui/shell.py | ✓ VERIFIED | five pages, banner, gate shared by both windows |
-| gui/app.py | ✗ (integration) | hook lines present; recheck does not reload SetupTab edits (gap 1) |
-| packaging/smoke_bundle.py, .github/workflows/fork-release.yml, devtools/ndk_pin.py | ✓ VERIFIED (CI pending) | bare_env_check, `--community-ndk` step gated to `matrix.target == 'linux-arm64'` |
+| porter/fetch.py | ✓ VERIFIED | short-body check before hashing; `http.client.HTTPException` retried; T-03-10 206/Content-Range rule unchanged (line 132) |
+| porter/probe.py | ✓ VERIFIED | `tempfile.mkstemp` + `os.replace`, `except OSError` swallowed; `shlex.quote` on both fix paths, glob outside the quotes |
+| gui/app.py | ✓ VERIFIED | `loaded` snapshot, `load()`/`save()`, `check()` one at a time, `show_run()`, `confirm_download` guards, `recheck` reloads; diff limited to the Setup tab, `recheck` and the device-list failure line (hook-line prohibition holds) |
+| gui/runner.py | ✓ VERIFIED | `started = Signal()`, `start()` returns False on a second run, `TIMEOUTS['setup'] = 150` |
+| gui/firstrun.py | ✓ VERIFIED | `PREPARED`, `quitting()`, `started.connect(self.sync)`, `PaletteChange` event filter, device page stretch |
+| tests (test_fetch, test_probe, test_firstrun, test_bridge) | ✓ VERIFIED | EarlyClose/Loopback, Probe, SetupTab, Tools, Device, Banner, Stop, Close cases present and passing |
 
 ### Key Link Verification
 
-The gsd-tools key-link verb could not parse these plans' `from:` fields (symbol names after the path), so every link was checked by grep:
-
 | From | To | Status |
 |------|----|--------|
-| cli.py dispatch | `'setup': cmd_setup`, `'desktop-entry': cmd_desktop` | ✓ WIRED (cli.py:197) |
-| setup.report | toolchain.checks( | ✓ WIRED (setup.py:38) |
-| cli.cmd_config | setup.VERSION | ✓ WIRED (cli.py:189) |
-| toolchain find_adb/find_dotnet | hosttools.known( | ✓ WIRED (toolchain.py:72, :89) |
-| pipeline Port.run | childenv.dotnet(, tools['notes'] | ✓ WIRED (pipeline.py:90, :98) |
-| fetch._pinned | _ndk_host() | ✓ WIRED (fetch.py:51, :85) |
-| runlog | 'rate', _explain | ✓ WIRED (runlog.py:118, :125) |
-| toolchain NDK row | probe.probe(, probe.note( | ✓ WIRED (toolchain.py:132-135) |
-| cli.cmd_devices | distro.device_fix / state_kind | ✓ WIRED (cli.py:143) |
-| adb push sites | *self.nz | ✓ WIRED (adb.py:180, :200) |
-| prepare.run | Port.translator( | ✓ WIRED (prepare.py:23); cli.py:158 prepare.run |
-| app SetupTab.check / shell.recheck | 'setup', '--json' | ✓ WIRED |
-| app/shell | firstrun.attach(self), firstrun.on_ready( | ✓ WIRED (app.py:404, :436; shell.py:38, :51) |
-| firstrun pages | config legal/keys/device, devices --json, desktop-entry --install, tools --download/--prepare | ✓ WIRED (firstrun.py:187, 265, 467, 449, 523, 361, 363) |
-| app SetupTab.on_fetch | firstrun.progress_line( | ✓ WIRED (app.py:322) |
-| fork-release.yml | smoke_bundle.py --community-ndk | ✓ WIRED (line 62) |
+| wizard KeysPage/ToolsPage/LegalPage saves | `win.recheck()` → `SetupTab.load()` | ✓ WIRED (firstrun.py:203, 275, 350; app.py:444); proven end to end above |
+| fetch._download short body | retry branch | ✓ WIRED (fetch.py:140 → :145); proven over a real socket |
+| toolchain.checks | probe.probe() never raising on cache write | ✓ WIRED (test_cache_write_fails) |
+| SetupTab / ToolsPage | `Porter.started` | ✓ WIRED (app.py:281 `started.connect(self.show_run)`; firstrun `started.connect(self.sync)`, Tools.test_label_from_start) |
+| runner TIMEOUTS['setup'] | probe.TIMEOUT | ✓ WIRED (150 > 2×60+15, Timeout.test_default_limits); bound incomplete, see WR-02 below |
 
 ### Data-Flow Trace (Level 4)
 
 | Artifact | Data | Source | Real data | Status |
 |----------|------|--------|-----------|--------|
-| Banner / wizard pages | setup --json doc | porter subprocess via call_json | yes (live run returned real rows) | ✓ FLOWING |
-| Device page | devices --json rows | Adb.devices() parsing `adb devices -l` | yes | ✓ FLOWING |
-| Setup tab line edits | config.json | config.load() at startup and after fetch only | stale after wizard saves | ✗ STALE (gap 1) |
+| Banner / wizard pages | setup --json doc | porter subprocess via call_json | yes | ✓ FLOWING |
+| Device page | devices --json rows | `adb devices -l` parsing | yes | ✓ FLOWING |
+| Setup tab line edits | config.json | `config.load()` on every recheck, after a fetch and after Save | yes | ✓ FLOWING (was STALE) |
 
 ### Behavioral Spot-Checks
 
 | Behavior | Command | Result | Status |
 |----------|---------|--------|--------|
-| Full suite | `QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest discover tests` | 419 tests OK | ✓ PASS |
-| Arch rules | `.venv/bin/python tests/arch_rules.py` | all checks passed (firstrun/shell purity, hyphenated subcommands) | ✓ PASS |
-| Bare-PATH setup | `env -i PATH=/usr/bin:/bin HOME=<tmp> NX2A_HOME=<tmp> porter setup --json` | exit 1 (not ready), shape correct, dotnet and adb from `known place`, steps in order, no config.json written | ✓ PASS |
-| Pin vs live asset | `.venv/bin/python devtools/ndk_pin.py` | PASS android-ndk-r27c-aarch64-linux-gnu.tar.xz matches porter/pins.py | ✓ PASS |
-| CR-01 reproduction | scratch script: porter config keys, win.recheck(), win.setup.save() | keys `<path>` → `''` | ✗ FAIL |
-| WR-01 reproduction | scratch script: server sends 300 of 1000 bytes and closes | 1 request, BuildError hash mismatch, .part deleted | ✗ FAIL |
+| Full suite (run once) | `QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest discover tests` | 439 tests OK, 0 skipped | ✓ PASS |
+| Arch rules | `.venv/bin/python tests/arch_rules.py` | all checks passed | ✓ PASS |
+| CR-01 end to end | scratch script: real KeysPage.save → porter config → recheck → Setup tab edit → Save and check | keys kept, out written | ✓ PASS |
+| WR-01 clean close | scratch loopback server, 300 of 1000 bytes then a 206 | 2 requests, second `bytes=300-`, file whole | ✓ PASS |
+| WR-01 three short answers | same server, short ×3 | ConnectionResetError, .part kept, no hash message | ✓ PASS |
+| Bare-PATH setup | `env -i PATH=/usr/bin:/bin HOME=<tmp> NX2A_HOME=<tmp> porter setup --json` | exit 1 (not ready), steps in order, dotnet/adb `known place`, no config.json | ✓ PASS |
 
 ### Probe Execution
 
@@ -145,64 +117,56 @@ No `scripts/*/tests/probe-*.sh` exist and no plan declares one. The release-work
 
 ### Requirements Coverage
 
-| Requirement | Source Plan | Status | Evidence |
-|-------------|-------------|--------|----------|
-| TOOL-01 | 03-03, 03-04, 03-08, 03-09, 03-11 | ? NEEDS HUMAN | pin, probe, host folder, community note all present and unit-tested; real arm64 run pending |
-| TOOL-02 | 03-02, 03-03, 03-09 | ✓ SATISFIED (arm64 run pending) | known .NET places on Linux, linux-arm64 .NET pin, Prepare |
+| Requirement | Source Plans | Status | Evidence |
+|-------------|--------------|--------|----------|
+| TOOL-01 | 03-03, 03-04, 03-08, 03-09, 03-11, 03-13, 03-15 | ? NEEDS HUMAN | pin, probe, host folder present and unit-tested; real arm64 run pending |
+| TOOL-02 | 03-02, 03-03, 03-09, 03-14 | ✓ SATISFIED (arm64 run pending) | known .NET places, linux-arm64 .NET pin, Prepare (now quit-guarded) |
 | TOOL-03 | 03-02, 03-04, 03-06, 03-09, 03-11 | ✓ SATISFIED | adb version, -Z by major, protocol floor, distro commands, udev fix |
-| TOOL-04 | 03-01, 03-02, 03-08, 03-10 | ✓ SATISFIED (Finder/menu port pending) | bare-PATH lookup proven locally |
-| FRUN-01 | 03-01, 03-03, 03-05, 03-09..03-12 | ✗ BLOCKED | gaps 1 and 2 |
-| FRUN-02 | 03-01, 03-05, 03-07 | ✓ SATISFIED | banner, Continue setup, Run setup, Skip |
-| FRUN-03 | 03-01, 03-05, 03-07 | ✓ SATISFIED | setup --json on every launch; arch rules enforce no storage |
-| DEV-01 | 03-06, 03-10 | ✓ SATISFIED (live device pending) | detail/fix rows, live polling page |
+| TOOL-04 | 03-01, 03-02, 03-08, 03-10 | ✓ SATISFIED (Finder/menu port pending) | bare-PATH lookup re-proven locally |
+| FRUN-01 | 03-01, 03-03, 03-05, 03-09..03-15 | ✓ SATISFIED | both gaps closed and reproduced as fixed |
+| FRUN-02 | 03-01, 03-05, 03-07, 03-14 | ✓ SATISFIED | banner, Continue setup, Run setup, Skip |
+| FRUN-03 | 03-01, 03-05, 03-07, 03-15 | ✓ SATISFIED | setup --json on every launch; arch rules enforce no storage |
+| DEV-01 | 03-06, 03-10, 03-14 | ✓ SATISFIED (live device pending) | detail/fix rows, live polling page |
 
-All 8 IDs appear in plan frontmatter; REQUIREMENTS.md maps exactly these 8 to Phase 3, so none is orphaned. REQUIREMENTS.md already marks all 8 `[x]` Complete; FRUN-01 should not be complete yet.
+All 8 IDs appear in plan frontmatter, and REQUIREMENTS.md maps exactly these 8 to Phase 3, so none is orphaned. REQUIREMENTS.md currently shows all 8 as `[ ]` / "Gaps Found" (reverted in 0d4982e). The orchestrator should update them once the human items are settled. 03-15's judgment prohibition held: no gap-closure commit touched REQUIREMENTS.md or 03-SECURITY.md.
 
 ### Prohibitions
 
 | Prohibition | Tier | Disposition |
 |-------------|------|-------------|
-| No prod.keys value printed, logged, returned or copied | test | ✓ tests test_keys.test_no_values_out, test_firstrun Keys.test_no_values |
-| Legal accepted only through `config legal <VERSION>`; setup never writes config.json | test | ✓ test_setup.test_legal_round_trip; observed: bare run wrote no config.json (the plain non-JSON `config legal` skips the guard, IN-05) |
-| No .desktop write unless `desktop-entry --install` | test | ✓ test_desktop.test_setup_writes_nothing |
-| No login-shell PATH or startup files | test | ✓ no such read in porter/ (grep), BarePath tests |
-| No install of a mismatched hash, no fallback NDK, no silent re-download | test | ✓ test_mismatch_deletes_part, Pins tests |
-| Community NDK always labelled | test | ✓ probe.note, test_probe Rows |
-| Never restart adb or run commands for the player | test | ✓ test_adb.test_never_restarts_server |
-| Wizard never traps the player | test | ✓ test_non_modal_classic, test_skip_closes_no_write |
-| No keys/firmware links, no firmware step, no key values in the wizard | judgment | flagged: non-authoritative pass, human review recommended |
+| 03-13: never hash, delete or rename a `.part` whose body ended early | test | ✓ EarlyClose.test_short_answers_keep_part; reproduced here |
+| 03-13: T-03-10 kept (append only on a 206 starting at the part's size; final hash decides) | test | ✓ fetch.py:132-134 unchanged; Resume tests pass |
+| 03-14: `failed()`/`cause()` signatures unchanged; firstrun.py imports only PySide6/stdlib, no file write | test | ✓ arch_rules pass; shell.py and app.py one-argument calls unchanged |
+| 03-15: never write a Setup tab field the player did not change | test | ✓ test_save_writes_changed_only; reproduced here |
+| 03-15: app.py edits limited to the Setup tab, recheck and the device-list failure line | test | ✓ git diff 85ca723..HEAD -- gui/app.py |
+| 03-15: no edit to REQUIREMENTS.md or 03-SECURITY.md | judgment | ✓ git log over the gap-closure range: none |
+| Earlier prohibitions (keys values, legal version, .desktop writes, login-shell PATH, mismatched hash, community label, adb restart, wizard never traps) | test | ✓ unchanged; their tests pass |
+| 03-05: no keys/firmware links, no firmware step, no key values in the wizard | judgment | flagged: non-authoritative pass, human review recommended |
 
 ### Anti-Patterns Found
 
-No TBD/FIXME/XXX/TODO/HACK markers in the 48 phase-modified files. Open code-review findings (03-REVIEW-DISPOSITION.md, all 15 still `open`):
+No TBD/FIXME/XXX markers in the 10 files the gap closure touched. Open findings from the incremental review (03-REVIEW.md, 03-REVIEW-DISPOSITION.md: 5 open):
 
 | File | Line | Finding | Severity | Impact |
 |------|------|---------|----------|--------|
-| gui/app.py | 353-356, 430 | CR-01 stale Setup tab edits overwrite wizard saves | 🛑 Blocker | gap 1 |
-| porter/fetch.py | 138-150 | WR-01 clean early close not retried; .part deleted | 🛑 Blocker (partial) | gap 2 |
-| gui/runner.py / porter/probe.py | 18 / 12 | WR-02 45 s GUI limit under the probe's 60 s limits | ⚠️ Warning | slow hosts may never get a setup answer (human item) |
-| porter/probe.py | 57-58 | WR-03 fixed temp name, unhandled OSError, two concurrent setup runs after a fetch | ⚠️ Warning | a failed cache write crashes doctor/setup/port |
-| gui/app.py / gui/runner.py | 300-313 / 53 | WR-04 second start on the shared fetch orphans the first run (also T-03-35, open) | ⚠️ Warning | two downloads on the same .part; Cancel misses one |
-| gui/firstrun.py | 390 | WR-05 auto Prepare ignores a quit in progress | ⚠️ Warning | orphaned dotnet builds after Stop and quit |
-| porter/probe.py | 49 | WR-06 unquoted paths in the chmod/xattr fix | ⚠️ Warning | the pasted fix fails under "Application Support" |
-| various | - | IN-01..IN-08 | ℹ️ Info | see 03-REVIEW.md |
+| gui/firstrun.py | 449-451 | new WR-01: `DevicePage.redraw` (added by 03-14) resets the Next button to "Skip: install later" on every setup --json answer, even with a ready device; `draw()` fixes it at the next 2.5 s poll, and not at all while `devices --json` keeps failing. Confirmed by reading the code | ⚠️ Warning | Button text only: Next still advances, and the done page uses `seen_device`. Does not block reaching a ready setup. One-line fix: move the `setButtonText` line back into `__init__` |
+| gui/runner.py, tests/test_bridge.py, docs/ARCHITECTURE.md | 19 | WR-02: the 150 s `setup` limit leaves out the dotnet `--list-sdks` 60 s limits (find_dotnet and checks()), so the worst case is about 255 s | ⚠️ Warning | One spurious "didn't answer in 150 s" on a cold slow host; Retry succeeds because the probe pass was cached first. Kept as a human timing item |
+| gui/app.py | 360, 366 | IN-03: a config value with leading/trailing whitespace counts as typed forever and is saved stripped | ℹ️ Info | a narrow CR-01 variant for such paths |
+| gui/app.py | Port tab tooltip | IN-01: the device combo tooltip still says porter | ℹ️ Info | copy |
+| gui/app.py | 343 | IN-02: hard-coded `#c62828` on the download-failure line | ℹ️ Info | theme |
+| gui/firstrun.py | 487 | `DevicePage.pick` saves the device without a recheck, so the Setup tab's device field shows the old value until the next load | ℹ️ Info | display only: `save()` no longer writes an untouched field, so the saved device is never overwritten |
 
-UI review (03-UI-REVIEW.md, 15/24): the word "porter" still shows on the Setup tab's failure path, hard-coded colours bypass the theme table, and the device page layout spreads out when empty. None blocks the goal; all are warnings.
+03-REVIEW-DISPOSITION.md reused the id WR-01 for the new device-page finding, so the row recording the old fetch.py WR-01 as fixed was dropped. The old finding is closed (reproduced above); this is a bookkeeping note only.
 
 ### Human Verification Required
 
-See the `human_verification` frontmatter: the fork-release.yml run (bare-PATH smoke, arm64 community NDK step), a real Linux arm64 host, a Finder and app-menu launch with a full port, a live `unauthorized` → `device` and `no permissions` device, distro adb 29.x, setup timing on a slow host, and the judgment-tier wizard prohibition.
+See the `human_verification` frontmatter. These are the same items as last time, with the timing item updated to the 150 s limit: the fork-release.yml run (bare-PATH smoke, arm64 community NDK step), a real Linux arm64 host, a Finder and app-menu launch with a full port, a live `unauthorized` → `device` and `no permissions` device, distro adb 29.x, setup timing on a slow host, and the judgment-tier wizard prohibition.
 
 ### Gaps Summary
 
-Both gaps sit under SC1 (FRUN-01), the part of the goal that says the tester reaches a ready setup and it holds:
-
-1. **Wizard saves are undone by the Setup tab (CR-01).** The fix is one line in `Window.recheck` (reload the Setup tab's edits) plus a test. Without it, a tester who uses both views can lose prod.keys or a chosen NDK/dotnet/adb/device with no warning.
-2. **A clean early close loses the download (WR-01).** Resume works for Cancel, restarts, resets and timeouts, but a server or proxy that closes cleanly mid-body makes porter hash a short file, delete the `.part` and show a misleading hash error. The fix is a length check before hashing and catching `http.client.HTTPException`.
-
-Neither gap is covered by a later phase. The warnings (WR-02..WR-06) are worth fixing in the same gap-closure plan, WR-04 and WR-05 especially, since they leave runs the close guard cannot see.
+No gaps remain. CR-01 and WR-01 are fixed and their reproductions now pass. WR-03..WR-06 and T-03-35 are fixed too. The new device-page label regression (review WR-01) and the incomplete 150 s bound (WR-02) are warnings that do not stop a tester reaching a ready setup. They are worth a quick task before Phase 4. SC3 and SC5, and the live-device parts of SC4, can only be closed by the human items above.
 
 ---
 
-_Verified: 2026-10-31T18:05:00Z_
+_Verified: 2026-10-31T20:10:00Z_
 _Verifier: Claude (gsd-verifier)_
