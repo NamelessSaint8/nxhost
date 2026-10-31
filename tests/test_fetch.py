@@ -160,6 +160,106 @@ class Pins(unittest.TestCase):
         self.assertEqual(list(d.iterdir()), [])
 
 
+class Part(Resp):   # a response with a status whose read() drops the link (exc) once `cut` bytes are out
+    def __init__(self, body, headers, status=200, cut=None, exc=ConnectionResetError):
+        super().__init__(body, headers); self.status, self.cut, self.exc = status, cut, exc
+
+    def read(self, n=-1):
+        if self.cut is None: return super().read(n)
+        if self.tell() >= self.cut: raise self.exc('dropped')
+        return super().read(min(n if n >= 0 else self.cut, self.cut - self.tell()))
+
+
+BODY = bytes(range(256)) * 40   # 10240 bytes
+
+
+class Server:   # urlopen answering one planned answer per request and recording each request's Range header
+    def __init__(self, *answers): self.answers, self.ranges = list(answers), []
+
+    def __call__(self, req, timeout=None, context=None):
+        rng = req.get_header('Range'); self.ranges.append(rng); a = self.answers.pop(0)
+        start = int(rng[len('bytes='):-1]) if rng else 0
+        if a == 416: raise urllib.error.HTTPError(req.full_url, 416, 'range', {'Content-Range': f'bytes */{len(BODY)}'}, None)
+        if a == 'ignore': start = 0                     # a server that ignores Range: 200 and the whole file
+        if a == 'wrong': start = 1000                   # a 206 for another range than asked
+        data = BODY[start:]; hd = {'Content-Length': str(len(data))}
+        if start: hd['Content-Range'] = f'bytes {start}-{len(BODY) - 1}/{len(BODY)}'
+        cut = {'drop': len(data) // 2, 'cancel': len(data) // 2}.get(a)
+        return Part(data, hd, 206 if start else 200, cut, KeyboardInterrupt if a == 'cancel' else ConnectionResetError)
+
+
+class Resume(unittest.TestCase):   # D-21, D-22: fetch._download resumes <file>.part with Range; download() clears other archives' parts
+    def setUp(self):
+        from porter import fetch, paths
+        self.fetch, self.root = fetch, paths.player_tools()
+        self.d = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, self.d, True)
+        self.dest, self.part = self.d / 'tool.zip', self.d / 'tool.zip.part'
+        self.item = fetch.Item('adb', '1', 'https://h/x/tool.zip', len(BODY), hashlib.sha256(BODY).hexdigest(), 'sha256', 'platform-tools', '')
+        self.said = []; p = mock.patch.object(fetch.PROG, 'say', self.said.append); p.start(); self.addCleanup(p.stop)
+
+    def get(self, *answers):
+        srv = Server(*answers)
+        with mock.patch.object(self.fetch.urllib.request, 'urlopen', srv): self.fetch._download(self.item, self.dest)
+        return srv
+
+    def whole(self):
+        self.assertEqual(self.dest.read_bytes(), BODY); self.assertFalse(self.part.exists())
+
+    def test_dropped_then_resumed(self):
+        srv = self.get('drop', 'ok')
+        self.assertEqual(srv.ranges, [None, f'bytes={len(BODY) // 2}-']); self.whole()
+        self.assertTrue(any('tool.zip' in m and 'retry 1' in m for m in self.said), self.said)
+
+    def test_across_runs(self):   # a .part a Cancel or a restart left: its bytes are hashed, only the rest is asked for
+        self.part.write_bytes(BODY[:3000])
+        self.assertEqual(self.get('ok').ranges, ['bytes=3000-']); self.whole()
+
+    def test_range_ignored(self):   # 200 to a Range request: the part is rewritten from zero, never appended to
+        self.part.write_bytes(b'x' * 3000)
+        self.assertEqual(self.get('ignore').ranges, ['bytes=3000-']); self.whole()
+
+    def test_wrong_content_range(self):   # a 206 for another offset is never spliced in: the file is asked for again whole
+        self.part.write_bytes(b'x' * 3000)
+        self.assertEqual(self.get('wrong', 'ok').ranges, ['bytes=3000-', None]); self.whole()
+
+    def test_416_whole_part(self):   # the .part is already whole: nothing is fetched, the hash decides
+        self.part.write_bytes(BODY)
+        self.assertEqual(self.get(416).ranges, [f'bytes={len(BODY)}-']); self.whole()
+
+    def test_mismatch_deletes_part(self):   # bad bytes on disk, resumed: both hashes named, the part gone, no silent second download
+        from porter.upstream import BuildError
+        self.part.write_bytes(b'x' * 3000); srv = Server('ok', 'ok')
+        with mock.patch.object(self.fetch.urllib.request, 'urlopen', srv), self.assertRaises(BuildError) as cm: self.fetch._download(self.item, self.dest)
+        msg = str(cm.exception)
+        for s in (self.item.hash, hashlib.sha256(b'x' * 3000 + BODY[3000:]).hexdigest()): self.assertIn(s, msg)
+        self.assertFalse(self.part.exists()); self.assertFalse(self.dest.exists()); self.assertEqual(len(srv.ranges), 1)
+
+    def test_retries_exhausted(self):   # three drops in a row: the last error, and the part stays for the next run
+        srv = Server('drop', 'drop', 'drop')
+        with mock.patch.object(self.fetch.urllib.request, 'urlopen', srv), self.assertRaises(ConnectionResetError): self.fetch._download(self.item, self.dest)
+        self.assertEqual(len(srv.ranges), 3); self.assertTrue(self.part.stat().st_size); self.assertFalse(self.dest.exists())
+
+    def test_cancel_keeps_part(self):   # SIGTERM or the stop line raise KeyboardInterrupt (procs._term) mid-read
+        srv = Server('cancel')
+        with mock.patch.object(self.fetch.urllib.request, 'urlopen', srv), self.assertRaises(KeyboardInterrupt): self.fetch._download(self.item, self.dest)
+        self.assertEqual(self.part.read_bytes(), BODY[:len(BODY) // 2]); self.assertEqual(len(srv.ranges), 1)
+
+    def test_stale_parts_removed(self):   # a pin bump's leftovers go; this archive's part stays for its resume
+        self.root.mkdir(parents=True, exist_ok=True)
+        old, mine = self.root / 'old-ndk.zip.part', self.root / 'tool.zip.part'
+        for f in (old, mine): f.write_bytes(b'x'); self.addCleanup(f.unlink, missing_ok=True)
+        seen = []
+        with mock.patch.object(self.fetch, '_download', lambda it, arc: seen.append((old.exists(), mine.exists())) or 1 / 0), self.assertRaises(ZeroDivisionError):
+            self.fetch.download([self.item])
+        self.assertEqual(seen, [(False, True)])
+
+    def test_disk_message(self):   # D-27: the refusal names the toolchains folder and its drive
+        from porter.upstream import BuildError
+        usage = mock.Mock(free=0)
+        with mock.patch.object(self.fetch.shutil, 'disk_usage', lambda p: usage), self.assertRaises(BuildError) as cm: self.fetch.download([self.item])
+        self.assertIn(str(self.root), str(cm.exception)); self.assertIn('NX2A_HOME', str(cm.exception))
+
+
 def evil_zip(path, members):   # (name, link target or None, mode): a link is a member with S_IFLNK and its target as data
     with zipfile.ZipFile(path, 'w') as z:
         for name, target, mode in members:
