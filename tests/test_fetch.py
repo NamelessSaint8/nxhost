@@ -1,6 +1,6 @@
 # porter/fetch.py and porter/pins.py: the toolchain downloads are the pinned files or a visibly untested fallback, a wrong hash stops naming both hashes,
 # and hostile zip and tar archives are refused whole and leave nothing behind. urlopen and the vendor indexes are faked: no network, no real toolchain.
-import hashlib, io, json, os, shutil, stat, sys, tarfile, tempfile, unittest, urllib.error, zipfile
+import hashlib, io, json, os, shutil, socket, stat, sys, tarfile, tempfile, threading, unittest, urllib.error, zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -258,6 +258,54 @@ class Resume(unittest.TestCase):   # D-21, D-22: fetch._download resumes <file>.
         usage = mock.Mock(free=0)
         with mock.patch.object(self.fetch.shutil, 'disk_usage', lambda p: usage), self.assertRaises(BuildError) as cm: self.fetch.download([self.item])
         self.assertIn(str(self.root), str(cm.exception)); self.assertIn('NX2A_HOME', str(cm.exception))
+
+
+def short(start=0):   # a 200 that announces the whole file, sends 3000 bytes and closes cleanly (03-VERIFICATION gap 2)
+    return b'HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n' % len(BODY) + BODY[:3000]
+
+
+def full(start=0):   # the rest from the asked offset (a 206), or the whole file (a 200) when no Range was asked
+    if not start: return b'HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n' % len(BODY) + BODY
+    return b'HTTP/1.1 206 Partial Content\r\nContent-Range: bytes %d-%d/%d\r\nContent-Length: %d\r\nConnection: close\r\n\r\n' % (start, len(BODY) - 1, len(BODY), len(BODY) - start) + BODY[start:]
+
+
+class Loopback:   # a real 127.0.0.1 server: one planned answer (a function of the asked offset) per connection, each request's Range header recorded
+    def __init__(self, *answers):
+        self.answers, self.ranges = list(answers), []
+        self.sock = socket.create_server(('127.0.0.1', 0)); self.url = f'http://127.0.0.1:{self.sock.getsockname()[1]}/x/tool.zip'
+        threading.Thread(target=self.serve, daemon=True).start()
+
+    def serve(self):
+        for a in self.answers:
+            try: conn, _ = self.sock.accept()
+            except OSError: return   # closed by the test
+            with conn:
+                head = b''
+                while b'\r\n\r\n' not in head and (b := conn.recv(4096)): head += b
+                rng = next((ln.split(b':', 1)[1].strip().decode() for ln in head.split(b'\r\n') if ln.lower().startswith(b'range:')), None)
+                self.ranges.append(rng); conn.sendall(a(int(rng[len('bytes='):-1]) if rng else 0))
+
+    def close(self): self.sock.close()
+
+
+class EarlyClose(unittest.TestCase):   # WR-01: a body cut short without an exception (a clean close) is a dropped link, over a real socket, not a fake urlopen
+    def setUp(self):
+        from porter import fetch
+        self.fetch = fetch
+        self.d = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, self.d, True)
+        self.dest, self.part = self.d / 'tool.zip', self.d / 'tool.zip.part'
+        self.said = []; p = mock.patch.object(fetch.PROG, 'say', self.said.append); p.start(); self.addCleanup(p.stop)
+        env = mock.patch.dict(os.environ, {'no_proxy': '*', 'NO_PROXY': '*'}); env.start(); self.addCleanup(env.stop)   # a developer's proxy never routes loopback
+
+    def get(self, *answers):
+        srv = Loopback(*answers); self.addCleanup(srv.close)
+        self.item = self.fetch.Item('adb', '1', srv.url, len(BODY), hashlib.sha256(BODY).hexdigest(), 'sha256', 'platform-tools', '')
+        return srv
+
+    def test_clean_close_resumed(self):   # at 03-12's code: one request, a sha256 BuildError and the .part deleted
+        srv = self.get(short, full); self.fetch._download(self.item, self.dest)
+        self.assertEqual(srv.ranges, [None, 'bytes=3000-']); self.assertEqual(self.dest.read_bytes(), BODY); self.assertFalse(self.part.exists())
+        self.assertTrue(any('tool.zip' in m and f'3000 of {len(BODY)}' in m and 'retry 1' in m for m in self.said), self.said)
 
 
 def evil_zip(path, members):   # (name, link target or None, mode): a link is a member with S_IFLNK and its target as data
