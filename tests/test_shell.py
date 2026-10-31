@@ -106,4 +106,58 @@ class Gate(unittest.TestCase):
         self.assertEqual([w.nav.item(i).text() for i in range(w.nav.count())], ['Setup'])
 
 
+class SetupView(unittest.TestCase):
+    def test_checklist(self):   # firstrun.fill_checks: a row per check, then a '!' row per note
+        d = doc(); d['notes'] = ['No adb yet: port now, install later.']
+        w, _ = launch(self, d); t = w.setup.table
+        self.assertEqual(t.rowCount(), len(d['checks']) + 1)
+        self.assertEqual([t.item(i, 1).text() for i in range(len(d['checks']))], [r['name'] for r in d['checks']])
+        last = t.rowCount() - 1
+        self.assertEqual((t.item(last, 0).text(), t.item(last, 1).text(), t.item(last, 2).text()), ('!', 'Note', 'No adb yet: port now, install later.'))
+
+    def test_run_setup(self):   # the wizard at the first step porter reports not ok, the done page when all are
+        for name, page in (('setup_ready.json', 'done'), ('setup_missing.json', 'keys')):
+            with self.subTest(name):
+                w, _ = launch(self, doc(name)); self.assertEqual(w.setup.run_btn.text(), 'Run setup')
+                w.setup.run_btn.click(); z = w.first_run.wizard
+                self.assertIsNotNone(z, 'Run setup opened no wizard'); self.assertTrue(z.isVisible())
+                self.assertEqual(z.currentId(), firstrun.PAGES.index(page)); z.close()
+
+
+class Close(unittest.TestCase):   # the shell's tool download, a real Porter on the bridge's --tree stand-in
+    def setUp(self):
+        keep = runner.PORTER; self.addCleanup(setattr, runner, 'PORTER', keep)
+        runner.PORTER = [FAKE, '--tree', '--']
+
+    def shell(self, answer):
+        w, _ = launch(self); w.show()
+        self.addCleanup(self.finish, w.fetch)
+        ask = mock.patch.object(w, 'ask_stop', create=True, return_value=answer); self.addCleanup(ask.stop)
+        return w, ask.start()
+
+    def finish(self, porter):   # a run a test left going
+        if porter.running(): fin = QSignalSpy(porter.finished); porter.stop(); fin.wait(10000)
+
+    def test_idle_close(self):
+        w, ask = self.shell(True)
+        self.assertTrue(w.close()); ask.assert_not_called()
+
+    def test_running_asks(self):
+        w, ask = self.shell(True)
+        w.fetch.start(['tools', '--download', '--progress', 'json'])
+        self.assertTrue(until(lambda: w.fetch.pgid, 10000))
+        fin = QSignalSpy(w.fetch.finished)
+        self.assertFalse(w.close()); self.assertFalse(w.close())   # refused while it stops; asked once
+        ask.assert_called_once_with()
+        self.assertTrue(w.isVisible())
+        self.assertTrue(fin.wait(10000))
+        self.assertTrue(until(lambda: not w.isVisible(), 3000)); self.assertFalse(w.fetch.running())
+
+    def test_keep_running(self):
+        w, ask = self.shell(False)
+        w.fetch.start(['tools', '--download', '--progress', 'json'])
+        self.assertTrue(until(lambda: w.fetch.pgid, 10000))
+        self.assertFalse(w.close()); self.assertTrue(w.fetch.running()); self.assertTrue(w.isVisible())
+
+
 if __name__ == '__main__': unittest.main()
