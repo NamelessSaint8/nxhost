@@ -8,7 +8,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 os.environ['NX2A_HOME'] = tempfile.mkdtemp()   # before porter is imported: no test touches the developer's settings or probe cache
 
-from porter import distro, probe, toolchain   # noqa: E402
+from porter import distro, hosttools, probe, toolchain   # noqa: E402
 
 VERSION = 'Android (12470979, +pgo, +bolt, +lto, +mlgo, based on r522817c) clang version 18.0.3 (https://android.googlesource.com/toolchain/llvm-project)\nTarget: x86_64\n'
 
@@ -91,6 +91,42 @@ class Probe(unittest.TestCase):
         self.assertFalse(r['ok']); self.assertIn('Exec format error', r['detail'])
 
 
+class HostFolder(unittest.TestCase):   # the prebuilt host folder per host, and nxnative/dm/android/build.py's copy of the rule (it runs standalone, no porter import)
+    def setUp(self): self.t = Path(tempfile.mkdtemp())
+
+    def on(self, name, platform, machine):   # os / sys / platform.machine() as another host shows them, in probe and in hosttools.linux_arm64
+        s = types.SimpleNamespace(platform=platform); stack = [mock.patch.object(probe, 'os', types.SimpleNamespace(name=name)), mock.patch.object(probe, 'sys', s),
+                                                              mock.patch.object(hosttools, 'sys', s), mock.patch.object(hosttools, 'platform', types.SimpleNamespace(machine=lambda: machine))]
+        for p in stack: p.start(); self.addCleanup(p.stop)
+
+    def folder(self, *hosts):
+        d = self.t / '-'.join(hosts or ('none',))
+        for h in hosts: (d / 'toolchains/llvm/prebuilt' / h / 'bin').mkdir(parents=True, exist_ok=True)
+        return d
+
+    def test_per_host(self):
+        both = self.folder('linux-arm64', 'linux-x86_64')   # the community tarball: linux-x86_64 is a link to linux-arm64, so prebuilt/* is never globbed
+        for (name, platform, machine), d, want in ((('posix', 'linux', 'aarch64'), both, 'linux-arm64'), (('posix', 'linux', 'arm64'), self.folder('linux-aarch64'), 'linux-aarch64'),
+                                                   (('posix', 'linux', 'aarch64'), self.folder(), 'linux-x86_64'), (('posix', 'linux', 'x86_64'), both, 'linux-x86_64'),
+                                                   (('posix', 'darwin', 'arm64'), both, 'darwin-x86_64'), (('nt', 'win32', 'AMD64'), both, 'windows-x86_64')):
+            with self.subTest(platform=platform, machine=machine, folder=d.name):
+                self.on(name, platform, machine); self.assertEqual(probe.host_folder(d), want)
+
+    def test_note(self):   # D-09, D-10: a community arm64 NDK is never shown as the build the titles were tested with
+        self.on('posix', 'linux', 'aarch64'); home = self.t / 'home'
+        with mock.patch.object(probe, 'player_tools', lambda: home / 'toolchains'):
+            mine = self.folder('linux-arm64'); pin = home / 'toolchains' / 'android-ndk-r27c'; (pin / 'toolchains/llvm/prebuilt/linux-arm64').mkdir(parents=True)
+            self.assertEqual(probe.note(pin, 'clang 18.0.3'), 'community r27c build (HomuHomu833), clang 18.0.3: not the build the titles were tested with')
+            self.assertEqual(probe.note(mine, 'clang 18.0.3'), 'community arm64 build, clang 18.0.3: not the build the titles were tested with')
+            self.on('posix', 'linux', 'x86_64'); self.assertEqual(probe.note(mine, 'clang 18.0.3'), '')
+
+    def test_build_py_same_rule(self):
+        src = (REPO / 'nxnative/dm/android/build.py').read_text(encoding='utf-8')
+        for want in (repr(probe.ARM_HOSTS), "sys.platform.startswith('linux') and platform.machine().lower() in ('aarch64', 'arm64')",
+                     "(Path(a.ndk) / 'toolchains/llvm/prebuilt' / h).is_dir()", '[RED] no glslc in the NDK', "shutil.which('glslc')"):
+            with self.subTest(want): self.assertTrue(want in src, f'build.py lacks {want}')   # not assertIn: it would print the whole file
+
+
 class Rows(unittest.TestCase):   # the rows `doctor --json` and the setup screen show
     def setUp(self):
         env = mock.patch.dict(os.environ); env.start(); self.addCleanup(env.stop)
@@ -126,6 +162,12 @@ class Rows(unittest.TestCase):   # the rows `doctor --json` and the setup screen
             self.assertFalse(r.ok); self.assertIn('too old', r.detail); self.assertIn('newer adb from your distribution', r.fix); self.assertEqual('Download missing tools' in r.fix, not arm)
         r, hint = row(None, True, found=False)
         self.assertFalse(r.ok); self.assertEqual(r.fix, hint); self.assertEqual(hint, 'Run sudo apt install adb, then press Re-check.')
+
+    def test_require_notes(self):   # D-09: the port's log repeats every passing row's note
+        com = 'community r27c build (HomuHomu833), clang 18.0.3: not the build the titles were tested with'
+        def rows(note): return [toolchain.Check('Android NDK', True, '', path='/ndk', note=note), toolchain.Check('.NET SDK', True, '', path='/dotnet'), toolchain.Check('adb', True, '', required=False, path='/adb')]
+        with mock.patch.object(toolchain, 'checks', return_value=rows(com)): self.assertEqual(toolchain.require({})['notes'], [com])
+        with mock.patch.object(toolchain, 'checks', return_value=rows('')): self.assertEqual(toolchain.require({})['notes'], [])
 
 
 if __name__ == '__main__':
