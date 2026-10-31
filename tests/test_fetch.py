@@ -40,6 +40,8 @@ RIDS = ('win-x64', 'osx-arm64', 'osx-x64', 'linux-x64', 'linux-arm64')
 REPO_XML = ('<repo><remotePackage path="platform-tools"><revision><major>38</major><minor>0</minor><micro>0</micro></revision><archives>'
             + ''.join(f'<archive><complete><size>5</size><checksum type="sha1">{h[0] * 40}</checksum><url>platform-tools_r38.0.0-{h}.zip</url></complete>'
                       f'<host-os>{h}</host-os></archive>' for h in HOSTS) + '</archives></remotePackage></repo>').encode()
+ARM_NDK = 'https://github.com/HomuHomu833/android-ndk-custom/releases/download/r27/android-ndk-r27c-aarch64-linux-gnu.tar.xz'
+ARM_SHA = '9c6214a64fc3c532b78ec68d56711413e0e9ead27d5c6f2c61d92b9555fdc00c'
 KIND = '.zip' if sys.platform == 'win32' else '.tar.gz'
 NEW_DN = 'https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.500/dotnet-sdk-10.0.500-{}' + KIND
 
@@ -55,6 +57,8 @@ class Pins(unittest.TestCase):
         self.fetch, self.pins = fetch, pins
         for name, val in (('_google_os', lambda: 'macosx'), ('_dotnet_rid', lambda: 'osx-arm64')):   # the same rows on every CI host
             p = mock.patch.object(fetch, name, val); p.start(); self.addCleanup(p.stop)
+        # and not arm64: the ubuntu-24.04-arm runner would otherwise read the community NDK row and refuse adb
+        p = mock.patch('porter.hosttools.linux_arm64', lambda: False); p.start(); self.addCleanup(p.stop)
 
     def urls(self, *drop):   # every pinned URL of this (patched) host answering HEAD 200, but those in drop
         f = self.pins
@@ -67,13 +71,13 @@ class Pins(unittest.TestCase):
 
     def test_rows_complete(self):
         p = self.pins
-        self.assertEqual(set(p.NDK['files']), set(HOSTS)); self.assertEqual(set(p.PLATFORM_TOOLS['files']), set(HOSTS))
+        self.assertEqual(set(p.NDK['files']), set(HOSTS) | {'linux-arm64'}); self.assertEqual(set(p.PLATFORM_TOOLS['files']), set(HOSTS))
         self.assertEqual(set(p.DOTNET['files']), {'win-x64', 'osx-arm64', 'linux-x64', 'linux-arm64'})
         for pin in (p.NDK, p.PLATFORM_TOOLS, p.DOTNET):
             for host, (url, size, algo, h) in pin['files'].items():
                 with self.subTest(host=host, url=url):
                     self.assertTrue(url.startswith('https://')); self.assertIsInstance(size, int)
-                    self.assertRegex(h, {'sha1': r'^[0-9a-f]{40}$', 'sha512': r'^[0-9a-f]{128}$'}[algo])
+                    self.assertRegex(h, {'sha1': r'^[0-9a-f]{40}$', 'sha256': r'^[0-9a-f]{64}$', 'sha512': r'^[0-9a-f]{128}$'}[algo])
 
     def test_pinned_row_used(self):
         table, rows = self.urls()
@@ -114,6 +118,45 @@ class Pins(unittest.TestCase):
             self.fetch._download(it, d / 'tool.zip')
         msg = str(cm.exception)
         for s in ('tool.zip', '0' * 40, hashlib.sha1(b'hello').hexdigest()): self.assertIn(s, msg)
+        self.assertEqual(list(d.iterdir()), [])
+
+    def arm64(self): return mock.patch('porter.hosttools.linux_arm64', lambda: True)
+
+    def test_arm64_ndk_row(self):   # D-08: the community r27c build, by its pin, through the same plan as every host
+        with self.arm64(): (it,), get = self.plan({ARM_NDK: (200, {'Content-Length': '127731408'}, b'')}, names=['Android NDK'])
+        get.assert_not_called()
+        self.assertEqual((it.url, it.algo, it.hash, it.version, it.folder, it.untested), (ARM_NDK, 'sha256', ARM_SHA, 'r27c', 'android-ndk-r27c', False))
+
+    def test_arm64_ndk_gone_stops(self):   # no fallback: Google's index has no arm64 NDK either
+        from porter.upstream import BuildError
+        with self.arm64(), self.assertRaises(BuildError) as cm: self.plan({}, names=['Android NDK'])
+        self.assertIn(ARM_NDK, str(cm.exception))
+
+    def test_arm64_no_adb(self):   # D-25: Google ships no arm64 platform-tools, so a download never fixes adb there
+        from porter.upstream import BuildError
+        rows = [mock.Mock(ok=False) for _ in range(3)]
+        for r, n in zip(rows, ('Android NDK', '.NET SDK', 'adb')): r.name = n
+        with mock.patch.object(self.fetch.toolchain, 'checks', lambda cfg=None: rows):
+            self.assertIn('adb', self.fetch.missing())
+            with self.arm64():
+                self.assertEqual(self.fetch.missing(), ['Android NDK', '.NET SDK'])
+                with self.assertRaises(BuildError) as cm: self.plan({}, names=['adb'])
+        self.assertIn("distribution's adb", str(cm.exception))
+
+    def test_arm64_dotnet(self):   # TOOL-02: .NET's own linux-arm64 pin
+        row = self.pins.DOTNET['files']['linux-arm64']
+        with self.arm64(), mock.patch.object(self.fetch, '_dotnet_rid', lambda: 'linux-arm64'):
+            (it,), get = self.plan({row[0]: (200, {'Content-Length': '9'}, b'')}, names=['.NET SDK'])
+        get.assert_not_called(); self.assertEqual((it.url, it.algo, it.hash, it.untested), (row[0], 'sha512', row[3], False))
+
+    def test_ndk_mismatch_fix_text(self):   # D-08: the community asset is re-uploaded in place at times; the fix is a pin bump or the player's own NDK
+        from porter.upstream import BuildError
+        d = Path(tempfile.mkdtemp()); url = 'https://h/x/ndk.tar.xz'
+        it = self.fetch.Item('Android NDK', 'r27c', url, 5, '0' * 64, 'sha256', 'android-ndk-r27c', '')
+        with mock.patch.object(self.fetch.urllib.request, 'urlopen', fake({url: (200, {'Content-Length': '5'}, b'hello')})), self.assertRaises(BuildError) as cm:
+            self.fetch._download(it, d / 'ndk.tar.xz')
+        msg = str(cm.exception)
+        for s in ('0' * 64, hashlib.sha256(b'hello').hexdigest(), 'pin bump', 'your own NDK'): self.assertIn(s, msg)
         self.assertEqual(list(d.iterdir()), [])
 
 
