@@ -24,7 +24,7 @@ if not (OLD or MISSING):
     from PySide6.QtTest import QSignalSpy, QTest
     from PySide6.QtCore import QProcess
     from PySide6.QtWidgets import QApplication, QMessageBox
-    from gui import app, runner
+    from gui import app, firstrun, runner
     from porter import paths
 APP = None
 
@@ -323,6 +323,19 @@ class Close(Fake):
         self.assertFalse(w.close())
         ask.assert_called_once_with(False)
 
+    def test_setup_cancel_label(self):   # D-21: the Setup tab's button cancels a download or a Prepare, whoever started it
+        w = self.window(); s = w.setup
+        for args, label in ((['tools', '--download', '--progress', 'json'], 'Cancel download'), (['tools', '--prepare', '--progress', 'json'], 'Cancel .NET preparation')):
+            with self.subTest(label):
+                evs = []; s.fetch.event.connect(evs.append); s.fetch.start(args)
+                self.assertTrue(until(lambda: any(e.get('ev') == 'pids' for e in evs), 10000))
+                pids = next(e for e in evs if e.get('ev') == 'pids'); self.addCleanup(reap, pids['detached']); self.addCleanup(reap, pids['child'])
+                s.fetch.event.disconnect(evs.append)
+                self.assertEqual(s.dl_btn.text(), label); self.assertTrue(s.dl_btn.isEnabled())
+                fin = QSignalSpy(s.fetch.finished); s.dl_btn.click(); self.assertEqual(s.dl_step.text(), 'stopping…')
+                self.assertTrue(fin.wait(10000)); self.assertEqual(fin.at(0), [130]); self.assertTrue(gone(pids['child']))
+                self.assertEqual(s.dl_btn.text(), 'Download missing tools'); self.assertEqual(s.dl_step.text(), 'cancelled')
+
     def test_download_failure_inline(self):
         runner.PORTER = [FAKE, '--']   # the Window's own one-shots
         w = self.window()
@@ -404,6 +417,14 @@ class Downloads(unittest.TestCase):   # the Setup tab's confirm dialog: an untes
         text = box.call_args[0][2]
         for s in ('(untested)', '&lt;b&gt;x&lt;/b&gt;', '&quot;onclick='): self.assertIn(s, text)
         self.assertNotIn('<b>x</b>', text)
+        self.assertNotIn('downloading them means you accept those', text)   # D-07: the legal notice covers the vendors' licenses
+
+    def test_progress_line(self):   # D-26: the tools page's line, word-wrapped
+        w = window(self); s = w.setup
+        ev = {'ev': 'progress', 'name': 'Android NDK r27c', 'step': 'downloading', 'done': 412 * 2**20, 'total': 781 * 2**20, 'unit': 'B', 'frac': 0.53, 'eta': 61, 'rate': 6396314}
+        s.on_fetch({'ev': 'stage', 'k': 2, 'n': 3, 'name': 'Android NDK r27c'}); s.on_fetch(ev)
+        self.assertEqual(s.dl_step.text(), firstrun.progress_line(ev, '[2/3]')); self.assertIn('/s · 1 min left', s.dl_step.text())
+        self.assertTrue(s.dl_step.wordWrap())
 
 
 class Escaping(unittest.TestCase):   # the game card shows porter's strings as text, the language box offers porter's list, the log takes the system fixed font

@@ -1,0 +1,10 @@
+{
+ "command": "NO_COLOR=1 QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest tests.test_bridge.Downloads.test_progress_line",
+ "exitCode": 1,
+ "output": "qt.qpa.fonts: Populating font family aliases took 308 ms. Replace uses of missing font family \"Sans Serif\" with one that exists to avoid this cost. \nF\n======================================================================\nFAIL: test_progress_line (tests.test_bridge.Downloads.test_progress_line)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/Volumes/Data/Dev/nx2android/tests/test_bridge.py\", line 426, in test_progress_line\n    self.assertEqual(s.dl_step.text(), firstrun.progress_line(ev, '[2/3]')); self.assertIn('/s · 1 min left', s.dl_step.text())\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 'Android NDK r27c · downloading · 412.0 MB / 781.0 MB' != '[2/3] Android NDK r27c · downloading · 41[37 chars]left'\n- Android NDK r27c · downloading · 412.0 MB / 781.0 MB\n+ [2/3] Android NDK r27c · downloading · 412.0 MB / 781.0 MB · 6.1 MB/s · 1 min left\n? ++++++                                                    ++++++++++++++++++++++++\n\n\n----------------------------------------------------------------------\nRan 1 test in 0.624s\n\nFAILED (failures=1)\n",
+ "targetTest": "test_progress_line",
+ "targetFile": "tests/test_bridge.py",
+ "expected": "dl_step shows firstrun.progress_line(ev, '[2/3]') with speed and time left, word-wrapped",
+ "actual": "dl_step shows today's 'name · step · done / total' with no [k/n], speed or time left",
+ "semanticAssessment": "Valid RED: Downloads.test_progress_line ran and failed on its equality assertion because SetupTab.on_fetch still builds its own line; the window and porter loaded. test_setup_cancel_label fails on 'Download missing tools' != 'Cancel download' and test_untested_and_escaped on the license paragraph, the other two planned behaviours. Classifier: RED_EVIDENCE_OK."
+}
