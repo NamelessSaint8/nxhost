@@ -6,7 +6,7 @@ import glob, importlib.util, json, os, re, shutil, subprocess, sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from porter import config, hosttools
+from porter import config, hosttools, probe
 from porter.paths import LOCAL_TOOLS, player_tools, signing_key
 
 NDK_REVISION = '27.2.12479018'   # r27c: the NDK the Android host is built and tested with
@@ -29,6 +29,9 @@ class Check:
     required: bool = True
     path: str = ''
     fix: str = ''
+    source: str = ''    # where it was found (D-13): configured / env / PATH / known place / Android SDK / downloaded
+    version: str = ''
+    note: str = ''      # shown beside a passing row and repeated in a port's log (the community NDK, an adb without -Z)
 
     def as_dict(self): return dict(self.__dict__)
 
@@ -125,12 +128,16 @@ def checks(cfg=None, keys=None):
     out.append(Check('Pillow', _importable('PIL'), 'the app icon from the game\'s icon' if _importable('PIL') else 'missing: the app gets no icon', required=False, fix='pip install pillow'))
     ndk, rev = find_ndk(cfg)
     if not ndk: out.append(Check('Android NDK', False, 'not found', fix=f'Download missing tools, or install NDK {NDK_RELEASE} (developer.android.com/ndk/downloads) and set its folder'))
-    else: out.append(Check('Android NDK', rev == NDK_REVISION, f'{rev} at {ndk}' + ('' if rev == NDK_REVISION else f': the host is built with {NDK_RELEASE} ({NDK_REVISION}); others are untested'),
-                           required=rev.split('.')[0] == NDK_REVISION.split('.')[0], path=str(ndk), fix='' if rev == NDK_REVISION else f'install NDK {NDK_RELEASE}'))
+    else:   # D-11: no NDK row is green until it has compiled and linked an Android program here
+        pr = probe.probe(ndk); ok = rev == NDK_REVISION and pr['ok']
+        out.append(Check('Android NDK', ok, f'{rev} at {ndk}' + ('' if rev == NDK_REVISION else f': the host is built with {NDK_RELEASE} ({NDK_REVISION}); others are untested') + ('' if pr['ok'] else f': {pr["detail"]}'),
+                         required=not pr['ok'] or rev.split('.')[0] == NDK_REVISION.split('.')[0], path=str(ndk), fix=pr['fix'] if not pr['ok'] else '' if rev == NDK_REVISION else f'install NDK {NDK_RELEASE}',
+                         source=hosttools.source_of(ndk, cfg, 'ndk', _sdk_roots()), version=rev, note=probe.note(ndk, pr['version']) if ok else ''))
     dn = find_dotnet(cfg)
     sdks = dotnet_sdks(dn) if dn else []
     good = [s for s in sdks if int(s.split('.')[0]) >= DOTNET_MAJOR]
-    out.append(Check('.NET SDK', bool(good), (f'{", ".join(sdks) or "no SDK"} ({dn})' if dn else 'dotnet not found'), path=str(dn or ''), fix='' if good else f'Download missing tools, or install the .NET SDK {DOTNET_MAJOR} (dotnet.microsoft.com)'))
+    out.append(Check('.NET SDK', bool(good), (f'{", ".join(sdks) or "no SDK"} ({dn})' if dn else 'dotnet not found'), path=str(dn or ''), fix='' if good else f'Download missing tools, or install the .NET SDK {DOTNET_MAJOR} (dotnet.microsoft.com)',
+                     source=hosttools.source_of(dn, cfg, 'dotnet', _sdk_roots()) if dn else '', version=max(good, key=lambda s: tuple(map(int, s.split('.'))), default='')))
     adb = find_adb(cfg)
     out.append(Check('adb', bool(adb), str(adb) if adb else 'not found: the tool cannot install on a device (the APK and data pack are still made)', required=False, path=str(adb or ''),
                      fix='' if adb else 'Download missing tools, or install Android platform-tools'))
