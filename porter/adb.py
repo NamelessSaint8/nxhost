@@ -2,7 +2,7 @@
 # devices (a 6 GB RomFS), so small files go in batches and big files in 64 MB pieces that the device joins; a rerun resumes (files already at their size are skipped,
 # pieces already in place are kept). The port's own outputs are also compared by MD5: a rewriter cut changes a module without changing its size, and Unpacking's sdk cuts never
 # reached the device until they were. Pushes use -Z: compressing them took adbd down.
-import contextlib, hashlib, os, shlex, shutil, subprocess, tempfile, time
+import contextlib, hashlib, os, re, shlex, shutil, subprocess, tempfile, time
 from pathlib import Path
 
 
@@ -13,6 +13,10 @@ def md5(p):   # in pieces: a rewritten module can be hundreds of MB
 class AdbError(Exception):
     pass
 
+
+# One `adb devices -l` line: the serial (which can be "(no serial number)"), then the whole state up to the first usb:/product:/model:/device:/transport_id: field
+# (AOSP transport.cpp). The state can hold spaces: "no permissions (...); see [...]" (diagnose_usb.cpp), which a whitespace split cut to "no" (RESEARCH Pattern 5)
+ROW = re.compile(r'^(\(no serial number\)|\S+)\s+(.+?)(?=\s+(?:usb:|product:|model:|device:|transport_id:)|\s*$)')
 
 LONG_PATH = 240   # adb.exe is not long-path aware: it cannot open a file whose full path passes Windows' 260 characters (Viractal's Unity bundles in a deep game folder)
 
@@ -62,9 +66,9 @@ class Adb:
         """[(serial, state, description)] of every device adb sees"""
         out = subprocess.run([self.exe, 'devices', '-l'], capture_output=True, text=True, errors='replace', timeout=30, env=self.env).stdout
         rows = []
-        for ln in out.splitlines()[1:]:
-            parts = ln.split()
-            if len(parts) >= 2: rows.append((parts[0], parts[1], ' '.join(p for p in parts[2:] if p.startswith(('model:', 'device:')))))
+        for ln in out.split('List of devices attached', 1)[-1].splitlines():   # past the header; blank lines and daemon notices do not match
+            m = ROW.match(ln)
+            if m: rows.append((m[1], m[2], ' '.join(p for p in ln[m.end():].split() if p.startswith(('model:', 'device:')))))
         return rows
 
     def pick(self):   # the configured device, else the only one connected

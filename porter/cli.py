@@ -133,13 +133,15 @@ def cmd_install(a):
 
 
 def cmd_devices(a):
-    from porter import config, toolchain
+    from porter import config, distro, toolchain
     from porter.adb import Adb
     exe = toolchain.find_adb()
+    if not exe and a.json: _print_json({'error': 'adb not found: ' + distro.adb_hint()}); return 1
     if not exe: print('adb not found', file=sys.stderr); return 1
-    rows = Adb(exe).devices()
-    if a.json: _print_json([{'serial': s, 'state': st, 'info': d} for s, st, d in rows]); return 0
-    for s, st, d in rows: print(f'{s}\t{st}\t{d}')
+    # detail: adb's own state text, which testers quote; state: its kind ('no permissions' for that family)
+    rows = [{'serial': s, 'state': distro.state_kind(st), 'info': d, 'detail': st, 'fix': distro.device_fix(st)} for s, st, d in Adb(exe).devices()]
+    if a.json: _print_json(rows); return 0
+    for r in rows: print(f"{r['serial']}\t{r['detail']}\t{r['info']}" + (f"\n  {r['fix']}" if r['fix'] else ''))
     if not rows: print('no device')
     return 0
 
