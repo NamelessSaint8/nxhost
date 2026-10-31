@@ -482,7 +482,7 @@ class Done(unittest.TestCase):   # the last page (D-20, D-28): a summary per ste
                 {'id': '0100C', 'name': 'Work In Progress', 'status': 'wip'}]
 
     def open(self, d=None, profiles=(), win=None):   # the wizard at the done page over `d`; profiles --json answers `profiles`
-        w, calls = (win or launch)(self, d or doc()); calls.answers['profiles'] = copy.deepcopy(list(profiles))
+        w, calls = (win or launch)(self, d or doc()); calls.answers['profiles'] = copy.deepcopy(list(profiles)); self.base = len(calls.sent('profiles'))   # today's Games tab asks too
         z = firstrun.open_setup(w, 'done'); p = z.page(firstrun.PAGES.index('done'))
         self.assertEqual(z.currentId(), firstrun.PAGES.index('done'))
         return w, calls, z, p
@@ -513,7 +513,7 @@ class Done(unittest.TestCase):   # the last page (D-20, D-28): a summary per ste
 
     def test_playable(self):
         w, calls, z, p = self.open(profiles=self.PROFILES)
-        self.assertEqual(calls.sent('profiles'), [['profiles', '--json']])
+        self.assertEqual(calls.sent('profiles')[self.base:], [['profiles', '--json']])
         self.assertTrue(until(lambda: p.playable.isVisibleTo(p), 2000))
         self.assertEqual(p.playable.text(), 'Alpha Run\nZeta Quest'); self.assertEqual(p.playable.textFormat(), Qt.PlainText)
         self.assertTrue(p.games.isVisibleTo(p)); self.assertEqual(p.games.text(), 'Games that play today')
@@ -522,7 +522,7 @@ class Done(unittest.TestCase):   # the last page (D-20, D-28): a summary per ste
                 w, calls = launch(self)
                 if fail: calls.fail['profiles'] = fail
                 w, calls, z, p = self.open(win=lambda _t, _d: (w, calls), profiles=profiles)
-                self.assertTrue(until(lambda: len(calls.sent('profiles')) == 1, 1000)); QTest.qWait(50)
+                self.assertTrue(until(lambda: len(calls.sent('profiles')) == self.base + 1, 1000)); QTest.qWait(50)
                 self.assertFalse(p.playable.isVisibleTo(p)); self.assertFalse(p.games.isVisibleTo(p))
                 self.assertIn('Setup is ready', shown(p)); self.assertTrue(p.port.isVisibleTo(p))   # the summary and Port a game still show
 

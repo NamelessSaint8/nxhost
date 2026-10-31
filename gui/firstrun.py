@@ -94,12 +94,13 @@ def body(text=''):   # a body label: plain text, word-wrapped
 class Wizard(QWizard):   # non-modal, shown with show() and never exec(); Skip setup, the close box and Esc all just close it: no confirmation, no write
     def __init__(self, win, gate):
         super().__init__(win, Qt.Window); self.win, self.gate, self.jumping = win, gate, False
+        self.seen_device = None   # whether the device page's last answer had a ready device (None: it never answered); in memory only, for the done page
         self.setWindowTitle('nx2android setup'); self.setWizardStyle(QWizard.ClassicStyle)   # Classic on every host: no Mac watermark, follows the palette
         self.setOptions(QWizard.NoBackButtonOnStartPage | QWizard.HaveCustomButton1 | QWizard.NoCancelButton)
         self.setButtonText(QWizard.CustomButton1, 'Skip setup'); self.setButtonText(QWizard.FinishButton, 'Close setup')
         self.setButtonLayout([QWizard.CustomButton1, QWizard.Stretch, QWizard.BackButton, QWizard.NextButton, QWizard.FinishButton])
         self.customButtonClicked.connect(lambda _which: self.close())
-        self.currentIdChanged.connect(lambda i: self.pages['device'].moved(i == PAGES.index('device')))   # Back, Next or a jump: polling only while it shows
+        self.currentIdChanged.connect(self.moved)
         self.setMinimumSize(720, 560); self.resize(760, 600)
         self.pages = {k: cls() for k, cls in zip(PAGES, (LegalPage, KeysPage, ToolsPage, DevicePage, DonePage))}
         for i, k in enumerate(PAGES): self.setPage(i, self.pages[k])
@@ -113,6 +114,12 @@ class Wizard(QWizard):   # non-modal, shown with show() and never exec(); Skip s
 
     def redraw(self, doc):
         for pg in self.pages.values(): pg.redraw(doc)
+
+    def moved(self, i):   # Back, Next or a jump: the device page polls only while it shows; on the done page Port a game, not Close setup, is the default
+        self.pages['device'].moved(i == PAGES.index('device'))
+        port = i == PAGES.index('done') and self.pages['done'].port.isVisibleTo(self.pages['done'])
+        self.setOption(QWizard.NoDefaultButton, port)   # else QWizard makes its Finish button the default again on every page switch
+        if port: self.pages['done'].port.setDefault(True)
 
     def done(self, r):   # every way out (Skip setup, close box, Esc, Close setup) comes here
         self.pages['device'].stop(); super().done(r)
@@ -266,8 +273,8 @@ class DevicePage(StepPage):   # D-15, DEV-01: devices --json while this page sho
         super().__init__('Connect your Android device', stretch=False); self.gen, self.busy, self.rows = 0, False, None
         self.v.addWidget(body('1. On the device, open Settings › About and tap Build number seven times. 2. Open Settings › System › Developer options and turn on '
                               'USB debugging. 3. Connect it by USB and tap Allow on the "Allow USB debugging?" prompt.'))
-        self.list = QListWidget(); self.empty = body('Looking again every few seconds…')
-        self.v.addWidget(self.list, 1); self.v.addWidget(self.empty); self.list.hide()   # the list scrolls on its own, so the button row stays in view
+        self.list = QListWidget(); self.list.itemSelectionChanged.connect(self.pick); self.empty = body('Looking again every few seconds…'); self.error = body()
+        self.v.addWidget(self.list, 1); self.v.addWidget(self.empty); self.v.addWidget(self.error); self.list.hide()   # the list scrolls on its own, so the button row stays in view
         self.setButtonText(QWizard.NextButton, 'Skip: install later')
 
     def here(self): z = self.wizard(); return z is not None and z.isVisible() and z.currentPage() is self
@@ -290,18 +297,79 @@ class DevicePage(StepPage):   # D-15, DEV-01: devices --json while this page sho
 
     def draw(self, rows, fail):   # a failure keeps the last list and shows its cause in the empty row; polling goes on
         if fail: self.empty.setText(cause(fail)); self.empty.show(); return
-        if rows != self.rows:
-            self.rows = rows; self.list.clear()
+        rows = rows or []; self.wizard().seen_device = any(r['state'] == 'device' for r in rows)
+        if rows != self.rows:   # rebuilt only when adb's answer changed, keeping the selected serial
+            keep = {self.list.itemWidget(it).r['serial'] for it in self.list.selectedItems()}; self.rows = rows
+            self.list.blockSignals(True); self.list.clear()
             for r in rows:
-                it = QListWidgetItem(self.list); w = DeviceRow(r); it.setSizeHint(w.sizeHint()); self.list.setItemWidget(it, w)
+                it = QListWidgetItem(self.list); w = DeviceRow(r); it.setSizeHint(w.sizeHint()); self.list.setItemWidget(it, w); it.setSelected(r['serial'] in keep)
+            self.list.blockSignals(False)
         self.list.setVisible(bool(rows)); self.empty.setText('No device found yet. Looking again every few seconds…'); self.empty.setVisible(not rows)
-        self.setButtonText(QWizard.NextButton, 'Next' if any(r['state'] == 'device' for r in rows) else 'Skip: install later')
+        self.setButtonText(QWizard.NextButton, 'Next' if self.wizard().seen_device else 'Skip: install later')
+
+    def pick(self):   # D-15: with several ready devices the selected one is saved for installs; with one there is nothing to choose
+        r = next((self.list.itemWidget(it).r for it in self.list.selectedItems()), None)
+        if not r or r['state'] != 'device' or sum(x['state'] == 'device' for x in self.rows) < 2: return
+        self.error.setText('')
+        call_json(self, ['config', 'device', r['serial'], '--json'], lambda _obj, _code, fail: self.error.setText(cause(fail) if fail else ''))
 
 
-class DonePage(Page):
-    def __init__(self): super().__init__('Setup is ready'); self.v.addStretch(1)
+NAMES = {'legal': 'Notice', 'keys': 'prod.keys', 'tools': 'Tools', 'device': 'adb'}   # the summary's name for each of porter's step ids
 
-    def redraw(self, doc): self.head.setText('Setup is ready' if doc['ready'] else 'Setup is not finished')
+
+class Line(QWidget):   # a summary row: the glyph in its colour, then plain, word-wrapped text
+    def __init__(self, mark, role, text):
+        super().__init__(); h = QHBoxLayout(self); h.setContentsMargins(0, 0, 0, 0); h.setSpacing(8)
+        self.glyph = QLabel(mark); self.glyph.setStyleSheet(f'color: {colour(self, role)}'); self.text = body(text)
+        h.addWidget(self.glyph, 0, Qt.AlignTop); h.addWidget(self.text, 1)
+
+
+class DonePage(Page):   # D-28: what is ready, porter's notes, the games that play today, the Linux menu entry (D-20) and the first port
+    def __init__(self):
+        super().__init__('Setup is ready'); self.doc, self.lines = None, []
+        inner = QWidget(); iv = QVBoxLayout(inner); iv.setContentsMargins(0, 0, 0, 0); iv.setSpacing(8)
+        self.summary = QVBoxLayout(); self.summary.setSpacing(8); iv.addLayout(self.summary); iv.addSpacing(8)
+        self.games = QLabel('Games that play today'); f = self.games.font(); f.setBold(True); self.games.setFont(f); self.playable = body()
+        self.menu_result = body()
+        for x in (self.games, self.playable, self.menu_result): iv.addWidget(x)
+        iv.addStretch(1); self.games.hide(); self.playable.hide()
+        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QScrollArea.NoFrame); scroll.setWidget(inner)   # many titles scroll; the buttons stay
+        self.menu = QPushButton('Add to app menu'); self.menu.clicked.connect(self.add_to_menu); self.menu.hide()
+        self.port = QPushButton('Port a game'); self.port.setDefault(True); self.port.setMinimumHeight(36); self.port.clicked.connect(self.port_a_game)
+        f = self.port.font(); f.setBold(True); f.setPointSizeF(f.pointSizeF() + 2); self.port.setFont(f)
+        row = QHBoxLayout(); row.setSpacing(8); row.addWidget(self.menu); row.addStretch(1); row.addWidget(self.port)
+        self.v.addWidget(scroll, 1); self.v.addSpacing(16); self.v.addLayout(row)   # 16 + 16: UI-SPEC xl, 32 px above the primary row
+
+    def redraw(self, doc):
+        self.doc = doc; self.head.setText('Setup is ready' if doc['ready'] else 'Setup is not finished')
+        self.menu.setVisible(bool((doc.get('desktop') or {}).get('offer')))
+        self.port.setVisible(callable(getattr(self.wizard().win, 'port_a_game', None)))   # the new shell has no port view yet (Phase 4)
+        self.draw_summary(doc)
+
+    def initializePage(self): self.draw_summary(self.doc); self.load_playable()   # the device page may have answered since the last redraw
+
+    def draw_summary(self, doc):   # one row per step, then each note with '!'; "No device yet" only when the device page asked and saw no ready device
+        for x in self.lines: x.setParent(None)
+        no_device = ['No device yet: port now, install later.'] if self.wizard().seen_device is False else []
+        rows = [(('✓', 'ok') if st['ok'] else ('!', 'note') if st.get('soft') else ('✗', 'bad'), f"{NAMES.get(st['id'], st['id'])}: {st.get('detail') or ''}")
+                for st in doc['steps']] + [(('!', 'note'), n) for n in list(doc.get('notes') or []) + no_device]
+        self.lines = [Line(mark, role, text) for (mark, role), text in rows]
+        for x in self.lines: self.summary.addWidget(x)
+
+    def load_playable(self):   # porter's profiles whose status is playable, sorted; the section stays hidden while there are none or the call failed
+        def got(obj, _code, _fail):
+            names = sorted(e['name'] for e in obj or [] if e.get('status') == 'playable')
+            self.playable.setText('\n'.join(names)); self.games.setVisible(bool(names)); self.playable.setVisible(bool(names))
+        call_json(self, ['profiles', '--json'], got)
+
+    def add_to_menu(self):   # D-20: the menu entry is written on this press only, and porter offers it only in the Linux bundle (T-03-33)
+        state(self.menu, self.menu, 'saving…', False); self.menu_result.setText('')
+
+        def got(_obj, _code, fail):
+            state(self.menu, self.menu, 'Add to app menu', True); self.menu_result.setText(cause(fail) if fail else 'Added to the app menu.')
+        call_json(self, ['desktop-entry', '--install', '--json'], got)
+
+    def port_a_game(self): z = self.wizard(); win = z.win; z.close(); win.port_a_game()
 
 
 def fill_checks(table, doc):   # the Setup tab's checklist: porter's check rows drawn as before (✓ / ✗ / –), then each soft note as a '!' row
