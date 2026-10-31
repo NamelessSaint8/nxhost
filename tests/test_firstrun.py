@@ -21,9 +21,9 @@ for _m in () if OLD else ('PySide6.QtWidgets',):
 
 HOME = tempfile.mkdtemp()
 if not (OLD or MISSING):
-    from PySide6.QtCore import Qt, QTimer
+    from PySide6.QtCore import QSize, Qt, QTimer
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QWizard
     from gui import app, firstrun
 APP = None
 
@@ -158,6 +158,110 @@ class SetupTab(unittest.TestCase):
     def test_run_setup_button(self):
         w, _ = launch(self)
         self.assertEqual(w.setup.run_btn.text(), 'Run setup')
+
+    def test_run_setup_opens_done(self):   # every step ok: Run setup opens the wizard at the done page
+        w, _ = launch(self); w.setup.run_btn.click()
+        z = wiz(self, w); self.assertTrue(z.isVisible()); self.assertEqual(z.currentId(), firstrun.PAGES.index('done'))
+
+
+def wiz(test, w):
+    z = gate(test, w).wizard; test.assertIsNotNone(z, 'no wizard is open'); return z
+
+
+def shown(page): return '\n'.join(l.text() for l in page.findChildren(QLabel) if l.isVisibleTo(page))   # the page's text as the player sees it
+
+
+class Wizard(unittest.TestCase):
+    def test_non_modal_classic(self):
+        w, _ = launch(self, doc('setup_first.json')); z = wiz(self, w)
+        self.assertIsInstance(z, QWizard); self.assertTrue(z.isVisible()); self.assertFalse(z.isModal())
+        self.assertIs(z.parentWidget(), w); self.assertTrue(z.windowFlags() & Qt.Window)
+        self.assertEqual(z.wizardStyle(), QWizard.ClassicStyle); self.assertEqual(z.windowTitle(), 'nx2android setup')
+        self.assertEqual(z.minimumSize(), QSize(720, 560))
+        self.assertEqual(z.currentId(), firstrun.PAGES.index('legal'))
+        self.assertEqual(z.button(QWizard.CustomButton1).text(), 'Skip setup')
+
+    def test_start_first_not_ok(self):   # legal ok, keys not: the keys page, and Back still reaches legal (D-04)
+        w, _ = launch(self, doc('setup_missing.json')); gate(self, w).button.click()
+        z = wiz(self, w); self.assertEqual(z.currentId(), firstrun.PAGES.index('keys'))
+        z.back(); self.assertEqual(z.currentId(), firstrun.PAGES.index('legal'))
+        w2, _ = launch(self); firstrun.open_setup(w2)
+        self.assertEqual(wiz(self, w2).currentId(), firstrun.PAGES.index('done'))
+
+    def test_single_instance(self):
+        w, _ = launch(self, doc('setup_missing.json')); g = gate(self, w)
+        g.button.click(); z = wiz(self, w); g.button.click()
+        self.assertIs(wiz(self, w), z); self.assertEqual(len([x for x in w.findChildren(QWizard) if x.isVisible()]), 1)
+
+    def test_skip_closes_no_write(self):
+        w, calls = launch(self, doc('setup_first.json')); g = gate(self, w); z = wiz(self, w)
+        z.button(QWizard.CustomButton1).click()
+        self.assertTrue(until(lambda: not z.isVisible(), 1000)); self.assertIsNone(g.wizard)
+        w.recheck(); self.assertTrue(until(lambda: len(calls.sent('setup')) == 2, 3000)); QTest.qWait(50)
+        self.assertIsNone(g.wizard)   # the next answer does not reopen it
+        self.assertEqual(calls.sent('config'), [])
+        g.button.click(); z = wiz(self, w); QTest.keyClick(z, Qt.Key_Escape)   # Esc does the same
+        self.assertTrue(until(lambda: not z.isVisible(), 1000)); self.assertIsNone(g.wizard)
+
+    def test_page_text(self):
+        d = doc('setup_missing.json'); d['steps'][3].update(ok=False, detail='no adb found', fix='Download missing tools')
+        w, _ = launch(self, d); gate(self, w).button.click(); z = wiz(self, w)
+        for k, head in (('keys', 'Your prod.keys'), ('tools', 'Tools for building the app'), ('device', 'Connect your Android device')):
+            s = next(x for x in d['steps'] if x['id'] == k); text = shown(z.page(firstrun.PAGES.index(k)))
+            with self.subTest(k):
+                for want in (head, s['detail'], s['fix']): self.assertIn(want, text)
+        self.assertIn('Setup is not finished', shown(z.page(firstrun.PAGES.index('done'))))
+        d = doc(); d['steps'][2]['fix'] = 'a fix for an ok step'
+        w, _ = launch(self, d); firstrun.open_setup(w); z = wiz(self, w); text = shown(z.page(firstrun.PAGES.index('tools')))
+        self.assertIn('every tool is here', text); self.assertNotIn('a fix for an ok step', text)
+        self.assertIn('Setup is ready', shown(z.page(firstrun.PAGES.index('done'))))
+
+    def test_next_never_disabled(self):   # never blocking: Next (Finish on the done page) stays enabled while a call is pending
+        w, calls = launch(self); firstrun.open_setup(w, 'legal'); z = wiz(self, w)
+        calls.hold.add('setup'); w.recheck()
+        for i in range(len(firstrun.PAGES)):
+            with self.subTest(firstrun.PAGES[i]):
+                self.assertEqual(z.currentId(), i)
+                self.assertTrue(z.button(QWizard.FinishButton if i == len(firstrun.PAGES) - 1 else QWizard.NextButton).isEnabled())
+            z.next()
+        self.assertEqual(z.button(QWizard.FinishButton).text(), 'Close setup')
+
+
+class Legal(unittest.TestCase):
+    def page(self, w): return wiz(self, w).page(firstrun.PAGES.index('legal'))
+
+    def test_text_and_links(self):
+        d = doc('setup_first.json'); d['legal']['links']['A <b>"x"'] = 'https://e/"onclick='
+        w, _ = launch(self, d); p = self.page(w)
+        self.assertEqual(p.notice.text(), d['legal']['text']); self.assertEqual(p.notice.textFormat(), Qt.PlainText); self.assertTrue(p.notice.wordWrap())
+        self.assertTrue(p.findChild(QScrollArea).widget().isAncestorOf(p.notice))   # a long notice scrolls; the button row stays
+        links = p.links.text()
+        self.assertEqual(links.count('<a href'), len(d['legal']['links']))
+        for x in ('A &lt;b&gt;&quot;x&quot;', 'https://e/&quot;onclick=', '>Android NDK</a>'): self.assertIn(x, links)
+        self.assertNotIn('<b>"x"', links)
+
+    def test_accept_saves_version(self):
+        d = doc('setup_first.json'); d['legal']['version'] = 3
+        w, calls = launch(self, d); z = wiz(self, w); b = z.button(QWizard.NextButton)
+        self.assertEqual(b.text(), 'Accept and continue')
+        with mock.patch.object(w, 'recheck') as again:
+            b.click()
+            self.assertEqual(calls.sent('config'), [['config', 'legal', '3', '--json']])
+            self.assertEqual(b.text(), 'saving…'); self.assertFalse(b.isEnabled())
+            self.assertTrue(until(lambda: again.called, 3000))
+        self.assertTrue(until(lambda: z.currentId() == firstrun.PAGES.index('keys'), 1000))
+
+    def test_save_fails(self):
+        w, calls = launch(self, doc('setup_first.json')); calls.fail['config'] = {'timeout': 0, 'error': 'bad <version>', 'stderr': ''}
+        z = wiz(self, w); p = self.page(w); b = z.button(QWizard.NextButton); b.click()
+        self.assertTrue(until(lambda: 'Retry' in p.error.text(), 3000))
+        self.assertIn('bad &lt;version&gt;', p.error.text())
+        self.assertEqual(z.currentId(), firstrun.PAGES.index('legal')); self.assertTrue(b.isEnabled()); self.assertEqual(b.text(), 'Accept and continue')
+        p.error.linkActivated.emit('retry'); self.assertEqual(len(calls.sent('config')), 2)
+
+    def test_footer(self):
+        w, _ = launch(self, doc('setup_first.json'))
+        self.assertEqual(self.page(w).footer.text(), 'Skip setup closes this window. It opens again next time until you accept.')
 
 
 if __name__ == '__main__': unittest.main()
