@@ -9,7 +9,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 os.environ['NX2A_HOME'] = tempfile.mkdtemp()
 
-from porter import keys, setup   # noqa: E402
+from porter import keys, pins, setup   # noqa: E402
 from porter.toolchain import Check   # noqa: E402
 
 NAMES = ('Python', 'Python modules', 'Pillow', 'Android NDK', '.NET SDK', 'adb', 'prod.keys', 'Signing key', 'Disk space')
@@ -55,10 +55,55 @@ class Report(unittest.TestCase):
     def test_tools_step(self):
         d = report(bad=('.NET SDK', 'adb')); by = {s['id']: s for s in d['steps']}; all_rows = {r.name: r.as_dict() for r in rows(('.NET SDK', 'adb'))}
         t = by['tools']
-        self.assertEqual(t['items'], [all_rows[n] for n in ('Android NDK', '.NET SDK', 'adb')]); self.assertEqual(t['downloadable'], ['.NET SDK', 'adb'])
+        self.assertEqual([{k: v for k, v in i.items() if k != 'download'} for i in t['items']], [all_rows[n] for n in ('Android NDK', '.NET SDK', 'adb')])
+        self.assertEqual(t['downloadable'], ['.NET SDK', 'adb'])
         self.assertFalse(t['ok'])
         dv = by['device']; adb = all_rows['adb']
         self.assertTrue(dv['soft']); self.assertEqual((dv['ok'], dv['detail'], dv['fix'], dv['path']), (adb['ok'], adb['detail'], adb['fix'], adb['path']))
+
+
+def items(d): return {i['name']: i for i in next(s for s in d['steps'] if s['id'] == 'tools')['items']}
+
+
+PINS = {'Android NDK': ('r27c', 'https://x/ndk.zip', 836128272, 'sha1', 'h'), '.NET SDK': ('10.0.403', 'https://x/dotnet.tar.gz', 0, 'sha512', 'h'), 'adb': ('37.0.1', 'https://x/pt.zip', 9, 'sha1', 'h')}
+
+
+class ToolFacts(unittest.TestCase):   # D-23: every fact the tools page draws, from pins and the check rows only
+    def test_download_sizes(self):
+        with mock.patch('porter.fetch._pinned', side_effect=PINS.get): it = items(report(bad=('Android NDK', '.NET SDK')))
+        self.assertEqual(it['Android NDK']['download'], {'version': 'r27c', 'size': 836128272})
+        self.assertEqual(it['.NET SDK']['download'], {'version': '10.0.403', 'size': 0})   # not pinned: the GUI shows about 200 MB
+        self.assertNotIn('download', it['adb'])
+
+    def test_no_lz4(self):   # porter.fetch imports porter.upstream, which needs lz4: setup answers without it
+        with mock.patch.dict(sys.modules, {'porter.fetch': None}): d = report(bad=('Android NDK', '.NET SDK'))
+        self.assertTrue(all('download' not in i for i in items(d).values())); json.dumps(d)
+
+    def test_device_facts(self):
+        r = [Check(n, True, f'{n} detail', required=n not in OPTIONAL, path=f'/x/{n}') for n in NAMES]
+        r[NAMES.index('adb')] = Check('adb', True, '/usr/bin/adb', required=False, path='/usr/bin/adb', source='PATH', version='1:29.0.6-28', note='adb 1:29.0.6-28: pushes without -Z')
+        with mock.patch.object(setup.toolchain, 'checks', return_value=r), mock.patch.object(setup.keys, 'step', return_value=keystep()): d = setup.report({'legal': str(setup.VERSION)})
+        dv = next(s for s in d['steps'] if s['id'] == 'device')
+        self.assertEqual((dv['path'], dv['version'], dv['source'], dv['note']), ('/usr/bin/adb', '1:29.0.6-28', 'PATH', 'adb 1:29.0.6-28: pushes without -Z'))
+
+    def test_no_network(self):
+        with mock.patch('urllib.request.urlopen', side_effect=AssertionError('setup must not touch the network')): d = report(bad=('Android NDK', '.NET SDK', 'adb'))
+        self.assertIn('download', items(d)['Android NDK'])
+
+
+class Arm64(unittest.TestCase):   # D-25: Google ships no Linux arm64 platform-tools; the community NDK is offered
+    def setUp(self):
+        for p in (mock.patch('porter.hosttools.linux_arm64', return_value=True), mock.patch('porter.distro.family', return_value='debian')): p.start(); self.addCleanup(p.stop)
+
+    def test_no_adb_download(self):
+        d = report(bad=('adb',)); t = next(s for s in d['steps'] if s['id'] == 'tools'); a = items(d)['adb']
+        self.assertNotIn('adb', t['downloadable']); self.assertNotIn('download', a)
+        self.assertEqual((a['fix'], a['command']), ('Run sudo apt install adb, then press Re-check.', 'sudo apt install adb'))
+
+    def test_ndk_offered(self):
+        d = report(bad=('Android NDK',)); t = next(s for s in d['steps'] if s['id'] == 'tools')
+        self.assertIn('Android NDK', t['downloadable'])
+        self.assertEqual(items(d)['Android NDK']['download'], {'version': 'r27c', 'size': pins.NDK['files']['linux-arm64'][1]})
 
 
 def porter(*args, home):
