@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 03
 current_phase_name: Host Toolchains and Guided First Run
 status: executing
-stopped_at: Completed 03-06-PLAN.md
-last_updated: "2026-10-31T16:19:14.851Z"
+stopped_at: Completed 03-07-PLAN.md
+last_updated: "2026-10-31T16:26:21.386Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 03 execution started
-state_head: a25bdf4380946bf13778906e8f9eecadf160931a
+state_head: ff22f49b08fe87485921e8b9c5f8594077f60cdb
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 35
-  completed_plans: 29
+  completed_plans: 30
   percent: 33
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-10-31)
 ## Current Position
 
 Phase: 03 (Host Toolchains and Guided First Run) — EXECUTING
-Plan: 7 of 12
+Plan: 8 of 12
 Status: Ready to execute
 Last activity: 2026-10-31 — Phase 03 execution started
 
@@ -86,6 +86,7 @@ Progress: [███░░░░░░░] 33%
 | Phase 03 P04 | 8min | 3 tasks | 11 files |
 | Phase 03 P05 | 8min | 2 tasks | 10 files |
 | Phase 03 P06 | 4 min | 2 tasks | 6 files |
+| Phase 03 P07 | 3 min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -166,6 +167,8 @@ Recent decisions affecting current work:
 - [Phase 03]: devices() reads the lines after the List of devices attached header, so a daemon notice on stdout cannot shift the header into the rows
 - [Phase 03]: devices --json fix text comes only from porter literals chosen by state kind and os-release family; the plugdev user name from adb is never copied (T-03-21)
 - [Phase 03]: Push -Z is gated per Adb by a cached hosttools.push_flags: one adb version, asked only when pushing
+- [Phase 03]: gui/shell.py is a second window on gui/firstrun.py's protocol (fetch, recheck, set_ready); it imports nothing from gui/app.py and has no port_a_game in Phase 3
+- [Phase 03]: tests/arch_rules.py 5b keeps gui/firstrun.py and gui/shell.py pure views: stdlib, PySide6 and gui.runner (+ gui.firstrun) only, no open(/write_text(/write_bytes(/QSettings; rule 6 reads hyphenated subcommands and call_json(<owner>, [...]) calls
 
 ### Pending Todos
 
@@ -190,6 +193,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-31T16:19:14.643Z
-Stopped at: Completed 03-06-PLAN.md
+Last session: 2026-10-31T16:26:21.171Z
+Stopped at: Completed 03-07-PLAN.md
 Resume file: None
