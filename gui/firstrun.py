@@ -6,7 +6,7 @@ import html
 
 from PySide6.QtCore import QObject, Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QFontDatabase
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QSizePolicy, QTableWidgetItem, QToolBar, QVBoxLayout,
+from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QSizePolicy, QTableWidgetItem, QToolBar, QVBoxLayout,
                                QWidget, QWizard, QWizardPage)
 
 from gui.runner import call_json
@@ -199,15 +199,20 @@ class KeysPage(Page):   # D-05/D-06: the files porter found with its verdict, an
         super().__init__('Your prod.keys')
         self.v.addWidget(body('nx2android reads your games with the keys from your own Switch. The file stays where it is; only its location is saved.'))
         self.list = QListWidget(); self.list.itemSelectionChanged.connect(self.pick)   # selection, not current item: focusing the list must not save its first row
-        self.result = body()
-        self.v.addWidget(self.list, 1); self.v.addWidget(self.result)   # the list scrolls on its own, so the button row stays in view
+        self.empty = body('No prod.keys found in the usual emulator folders. Choose your file with Browse….')
+        self.browse = QPushButton('Browse…'); self.browse.clicked.connect(self.choose)   # D-06: always there, whatever porter found
+        self.result = body(); self.retry = None
+        self.error = QLabel(); self.error.setTextFormat(Qt.RichText); self.error.setWordWrap(True); self.error.linkActivated.connect(lambda _link: self.retry and self.retry())
+        col = QVBoxLayout(); col.setSpacing(8); col.addWidget(self.list, 1); col.addWidget(self.empty); col.addWidget(self.error)
+        h = QHBoxLayout(); h.setSpacing(8); h.addLayout(col, 1); h.addWidget(self.browse, 0, Qt.AlignTop)
+        self.v.addLayout(h, 1); self.v.addWidget(self.result)   # the list scrolls on its own, so the button row stays in view
 
     def redraw(self, doc):
         st = step(doc, 'keys'); found = st.get('found') or []
         self.list.blockSignals(True); self.list.clear()
         for e in found:
             it = QListWidgetItem(self.list); r = KeyRow(e); it.setSizeHint(r.sizeHint()); self.list.setItemWidget(it, r)
-        self.list.blockSignals(False)
+        self.list.blockSignals(False); self.list.setVisible(bool(found)); self.empty.setVisible(not found)
         p = st.get('path') or ''; fix = st.get('fix') if not st['ok'] else ''
         self.result.setText((f'{p}: ' if p else '') + (st.get('detail') or '') + (f'. {fix}' if fix else ''))   # Copywriting "Keys bad file": `<path>: <detail>. <fix>`
 
@@ -215,12 +220,17 @@ class KeysPage(Page):   # D-05/D-06: the files porter found with its verdict, an
         r = next((self.list.itemWidget(it) for it in self.list.selectedItems()), None)
         if r and r.e['ok']: self.save(str(r.e['path']), r, r.detail, r.e.get('detail') or '')
 
+    def choose(self):   # any file, saved as a path for porter to check; a cancelled dialog does nothing
+        path, _ = QFileDialog.getOpenFileName(self, 'Choose your prod.keys', '', 'prod.keys (*.keys);;All files (*)')
+        if path: self.save(path, self.browse, self.browse, 'Browse…')
+
     def save(self, path, src, txt, idle):   # the one place that sends config keys: its source (a row or Browse…) reads saving… and is disabled until porter answers
-        state(src, txt, 'saving…', False)
+        state(src, txt, 'saving…', False); self.error.setText('')
 
         def saved(_obj, _code, fail):
             state(src, txt, idle, True)
-            if not fail: self.wizard().win.recheck()   # the next setup answer redraws this page with porter's verdict
+            if fail: self.retry = lambda: self.save(path, src, txt, idle); self.error.setText(failed(fail)); return   # stay here; Next is never disabled
+            self.wizard().win.recheck()   # the next setup answer redraws this page with porter's verdict
         call_json(self, ['config', 'keys', path, '--json'], saved)
 
 
