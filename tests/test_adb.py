@@ -176,4 +176,24 @@ class Devices(unittest.TestCase):   # DEV-01: every `adb devices -l` line read w
             self.assertNotIn('kill-server', c); self.assertNotIn('reconnect', c); self.assertNotEqual(c[0], 'sudo')
 
 
+class Compression(unittest.TestCase):   # D-12 / TOOL-03: push -Z only to an adb that has push compression (platform-tools 30+); Ubuntu 22.04 / Debian 12 ship 29.0.6
+    def pushes_with(self, version):
+        local = tree(tempfile.mkdtemp(), {'a.bin': b'aaaa', 'big.bin': b'0123456789'}); calls = []
+        table = {'adb version': f'Android Debug Bridge version 1.0.41\n{version}' if version else '', 'stat -c %s': '10\n'}
+        with mock.patch.object(adb.subprocess, 'run', fake(table, calls)):
+            a = adb.Adb('adb', log=lambda m: None); a.push_tree(local, '/sdcard/x', chunk=4); a.push_file(local / 'big.bin', '/sdcard/x/y.bin', chunk=4)
+        self.assertEqual(calls.count(['version']), 1)
+        ps = pushes(calls); self.assertGreaterEqual(len(ps), 3)
+        return ps
+
+    def test_old_adb_no_z(self):
+        for p in self.pushes_with('Version 29.0.6-debian\n'): self.assertNotIn('-Z', p)
+
+    def test_new_adb_z(self):
+        for p in self.pushes_with('Version 36.0.0-13206524\n'): self.assertEqual(p[1], '-Z')
+
+    def test_unknown_keeps_z(self):   # an unread version keeps today's -Z, which protects adbd on new adbs
+        for p in self.pushes_with(None): self.assertEqual(p[1], '-Z')
+
+
 if __name__ == '__main__': unittest.main()
