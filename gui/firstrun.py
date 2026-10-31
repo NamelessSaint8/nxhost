@@ -4,7 +4,7 @@
 # on_ready) and optionally `port_a_game()` can host it: today's gui/app.py Window and the new shell (gui/shell.py).
 import html
 
-from PySide6.QtCore import QObject, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QFontDatabase, QGuiApplication
 from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QHeaderView, QLabel, QListWidget, QListWidgetItem, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
                                QTableWidget, QTableWidgetItem, QToolBar, QVBoxLayout, QWidget, QWizard, QWizardPage)
@@ -19,7 +19,8 @@ POLL_MS = 2500   # D-15: devices --json again this long after each answer, never
 STATE_GLYPH = {'device': ('✓', 'ok'), 'unauthorized': ('✗', 'bad'), 'offline': ('✗', 'bad'), 'no permissions': ('✗', 'bad'), 'authorizing': ('▶', 'note'), 'connecting': ('▶', 'note')}
 
 
-def colour(widget, key): return COLOUR[key][widget.palette().window().color().lightness() < 128]
+def colour(widget, key):   # the pair's light or dark colour for the widget's palette, or the application's for None (failed(), which has no widget)
+    return COLOUR[key][(QGuiApplication.palette() if widget is None else widget.palette()).window().color().lightness() < 128]
 
 
 # cause/failed/size are gui/app.py's with "nx2android" for "porter" (players never see the word porter, UI-SPEC Copywriting); copies, not imports,
@@ -32,7 +33,7 @@ def cause(fail):
 def failed(fail):   # red rich text: the cause, the last lines of stderr, and a Retry link (href "retry"); porter's text is escaped
     head = cause(fail) if fail.get('timeout') or fail.get('error') or not fail.get('stderr') else 'nx2android failed'
     tail = html.escape(fail.get('stderr') or '', quote=False).replace('\n', '<br>')
-    return f'<span style="color:#c62828">{html.escape(head, quote=False)}' + (f'<br>{tail}' if tail else '') + '</span> &nbsp;<a href="retry">Retry</a>'
+    return f'<span style="color:{colour(None, "bad")}">{html.escape(head, quote=False)}' + (f'<br>{tail}' if tail else '') + '</span> &nbsp;<a href="retry">Retry</a>'
 
 
 def size(b):
@@ -71,19 +72,25 @@ def first_open(doc): return doc['legal']['accepted'] != doc['legal']['version'] 
 
 class Gate(QObject):   # one per window: porter's last answer, the banner, the open wizard, and whether a launch answer has come yet
     def __init__(self, win):
-        super().__init__(win); self.win, self.doc, self.wizard, self.seen, self.start = win, None, None, False, None
+        super().__init__(win); self.win, self.doc, self.wizard, self.seen = win, None, None, False
+
+    def paint(self):   # the banner's tint and its '!' from the window's palette, again on each palette change
+        self.banner.setStyleSheet(f'QToolBar {{ background: {colour(self.win, "banner")}; border: 0; }}'); self.mark.setStyleSheet(f'color: {colour(self.win, "note")}')
+
+    def eventFilter(self, obj, e):   # styled once in attach(), a light or dark switch while the app ran left a cream banner on a dark window (03-UI-REVIEW top fix 3)
+        if e.type() == QEvent.PaletteChange: self.paint()
+        return False
 
 
 def attach(win):
     g = win.first_run = Gate(win)
     bar = g.banner = QToolBar('Setup', win); bar.setMovable(False); bar.setFloatable(False); bar.toggleViewAction().setVisible(False)
-    bar.setStyleSheet(f'QToolBar {{ background: {colour(win, "banner")}; border: 0; }}')
     w = QWidget(); h = QHBoxLayout(w); h.setContentsMargins(16, 8, 16, 8); h.setSpacing(8)
-    mark = QLabel('!'); f = mark.font(); f.setBold(True); mark.setFont(f); mark.setStyleSheet(f'color: {colour(win, "note")}')
+    mark = g.mark = QLabel('!'); f = mark.font(); f.setBold(True); mark.setFont(f)
     g.text = QLabel(); g.text.setTextFormat(Qt.PlainText); g.text.setWordWrap(True)   # porter's names are text, not markup
     g.button = QPushButton('Continue setup'); g.button.clicked.connect(lambda: open_setup(win))
     h.addWidget(mark); h.addWidget(g.text, 1); h.addWidget(g.button)
-    bar.addWidget(w); win.addToolBar(Qt.TopToolBarArea, bar); bar.hide()
+    bar.addWidget(w); win.addToolBar(Qt.TopToolBarArea, bar); bar.hide(); g.paint(); win.installEventFilter(g)
     return g
 
 
@@ -541,7 +548,7 @@ class DonePage(Page):   # D-28: what is ready, porter's notes, the games that pl
 
 def fill_checks(table, doc):   # the Setup tab's checklist: porter's check rows drawn as before (✓ / ✗ / –), then each soft note as a '!' row
     table.setRowCount(0)
-    rows = [(('✓', '#2e7d32') if r['ok'] else ('✗', '#c62828') if r['required'] else ('–', '#ef6c00'), r['name'],
+    rows = [(('✓', colour(table, 'ok')) if r['ok'] else ('✗', colour(table, 'bad')) if r['required'] else ('–', colour(table, 'note')), r['name'],
              r['detail'] + (f'  →  {r["fix"]}' if r['fix'] and not r['ok'] else '')) for r in doc.get('checks') or []]
     rows += [(('!', colour(table, 'note')), 'Note', n) for n in doc.get('notes') or []]
     for (glyph, col), name, text in rows:
