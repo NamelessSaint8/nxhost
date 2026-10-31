@@ -115,7 +115,7 @@ def plan(names=None):
 
 
 def _download(it, dest, retries=3):
-    """To dest through dest.part, hashing as it goes (D-21, D-22). A .part already there (a dropped link, a Cancel, a restart) is hashed first and the rest asked
+    """To dest through dest.part, hashing as it goes (D-21, D-22); a body that ends before its announced length is a dropped link. A .part already there (a dropped link, a Cancel, a restart) is hashed first and the rest asked
     for with Range; only a 206 whose Content-Range starts at its size is appended to, so no other range is ever spliced in. A dropped link is retried, logged;
     KeyboardInterrupt (Cancel) is never caught, so the .part stays for the next run. A wrong final hash deletes the .part and stops"""
     part, name, failed = dest.with_suffix(dest.suffix + '.part'), Path(it.url).name, 0
@@ -132,10 +132,12 @@ def _download(it, dest, retries=3):
                 if have and not (st == 206 and (r.headers.get('Content-Range') or '').startswith(f'bytes {have}-')):
                     if st == 206: part.unlink(); continue   # another range than asked: asked again whole, never spliced
                     have = 0; h = hashlib.new(it.algo)   # the server ignored Range: this answer is the whole file
-                total = have + int(r.headers.get('Content-Length') or 0) or it.size or None
-                PROG.set(step='downloading', done=have, total=total, unit='B')
+                end = have + int(n) if (n := r.headers.get('Content-Length')) else None   # None for a chunked answer
+                PROG.set(step='downloading', done=have, total=end or it.size or None, unit='B')
                 with open(part, 'ab' if have else 'wb') as f:
                     while chunk := r.read(1 << 20): f.write(chunk); h.update(chunk); have += len(chunk); PROG.set(done=have)
+                # read() gives b'' on a clean close before Content-Length: 03-VERIFICATION gap 2, 300 of 1000 bytes made one request, a hash error, the .part deleted
+                if end and have < end: raise ConnectionResetError(f'the server closed the link at {have} of {end} bytes')
             break
         except urllib.error.HTTPError as e:
             if e.code != 416 or not have: raise
