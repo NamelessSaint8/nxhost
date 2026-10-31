@@ -77,9 +77,16 @@ created: "2026-10-31"
 | T-03-32 | Denial of service | device polls piling up | medium | mitigate | firstrun.py:441-449 busy flag + generation, next poll from each answer, :435-439 stop on leave; `Device.test_no_stacking` | closed |
 | T-03-33 | Tampering | menu entry without consent | low | mitigate | firstrun.py:498, :518-523 only on press and only when offered; setup.py:49 frozen Linux only; desktop.py:59 refuses elsewhere | closed |
 | T-03-34 | Spoofing | error and say text as markup | medium | mitigate | firstrun.py:276, :356-357, :394-399 PlainText / `html.escape`; app.py:302-309, :334-336 escape; `Tools.test_failure_inline`, `test_download_failure_inline` | closed |
-| T-03-35 | Denial of service | cancelled download leaving children behind | medium | mitigate | Cancel goes through `Porter.stop` (firstrun.py:371, app.py:296) and `Tools.test_cancel` passes, but gui/app.py:300-313 `confirm_download` starts `self.fetch` without checking `running()`, and `Porter.start` (runner.py:53-60) replaces the tracked process; a second start leaves the first run (and a Prepare run's dotnet children) untracked by Cancel and the close guard (app.py:407-427). Fix: `if self.fetch.running(): return` at the top of `confirm_download`, or the same guard in `Porter.start` | open — below high threshold (non-blocking) |
+| T-03-35 | Denial of service | cancelled download leaving children behind | medium | mitigate | fixed by 03-15: gui/runner.py:58 `Porter.start` returns False while `running()` (held until `_reap` finds the session empty, :116-122); :65 emits `started`; gui/app.py:302, :313 `confirm_download` refuses while a run is going; firstrun.py:379 `ToolsPage.start` guard; Cancel and the close guard reach the live run (app.py:297, :421-442; firstrun.py:383; shell.py:54-71); `Stop.test_second_start_refused`, `Close.test_confirm_while_running`, `Tools.test_label_from_start` | closed |
 | T-03-36 | Tampering | Copy command clipboard | low | mitigate | firstrun.py:325 copies only `it['command']`, a distro.py literal (setup.py:31) | closed |
-| T-03-SC | Tampering | npm / pip / cargo installs (all 12 plans) | low | accept | see Accepted Risks Log AR-03-05 | closed |
+| T-03-37 | Denial of service | fetch._download on a server that closes the link cleanly mid-file | medium | mitigate | porter/fetch.py:135 `end = have + Content-Length`; :140 raises `ConnectionResetError` before the hash at :149; :145 retries OSError and `http.client.HTTPException` (logged, max 3); the `.part` is deleted only on a hash mismatch (:150); `EarlyClose` tests (test_fetch.py:309, :314, :319, real loopback socket) | closed |
+| T-03-38 | Denial of service | probe cache write failing | low | mitigate | porter/probe.py:63-68 per-process `mkstemp` + `os.replace` inside `try/except OSError`, temp unlinked on failure, :69 returns the pass anyway; `Probe.test_cache_write_fails` (test_probe.py:87) | closed |
+| T-03-39 | Elevation of privilege | probe fix text pasted into a shell | low | mitigate | probe.py:50-51 `shlex.quote` on both paths, glob outside the quotes; `Probe.test_quoted_fix` (test_probe.py:96) | closed |
+| T-03-40 | Denial of service | Prepare chain during Stop and quit | medium | mitigate | firstrun.py:67 `quitting(win)` checked in `start()` (:379) and the chain (:404); both hosts set the flag (app.py:417/:440, shell.py:32/:70); `Tools.test_no_prepare_while_quitting` (test_firstrun.py:822) | closed |
+| T-03-41 | Tampering | SetupTab.save writing stale values over porter-saved settings | medium | mitigate | gui/app.py:357-361 `load()` refreshes untouched fields; :363-367 `save()` writes only changed fields then reloads; :444 `Window.recheck` calls `setup.load`; `SetupTab.test_wizard_save_kept`, `test_save_writes_changed_only`, `test_unsaved_edit_kept` | closed |
+| T-03-42 | Denial of service | `setup --json` killed at the GUI limit | low | mitigate | gui/runner.py:19 `'setup': 150` > 2 × probe.TIMEOUT (60) + adb version (15 s); `Timeout.test_default_limits` (test_bridge.py:435) | closed |
+| T-03-43 | Denial of service | two `setup --json` runs at once after a download | low | mitigate | gui/app.py:371-379 `checking` flag with one re-ask, cleared in `got`; `call_json` calls `done` once (runner.py:141-145); porter-side backstop T-03-38; `SetupTab.test_one_check_at_a_time`, `test_fetch_end_checks_in_turn` | closed |
+| T-03-SC | Tampering | npm / pip / cargo installs (all 15 plans) | low | accept | see Accepted Risks Log AR-03-05 | closed |
 
 *Status: open · closed · open — below high threshold (non-blocking)*
 *Severity: critical > high > medium > low — only open threats at or above workflow.security_block_on count toward threats_open*
@@ -106,6 +113,7 @@ created: "2026-10-31"
 | Audit Date | Threats Total | Closed | Open | Run By |
 |------------|---------------|--------|------|--------|
 | 2026-10-31 | 37 | 36 | 1 (T-03-35, medium, non-blocking) | gsd-security-auditor (ASVS L1, block_on high) via /gsd-execute-phase 3 |
+| 2026-10-31 | 44 | 44 | 0 | gsd-security-auditor re-audit after gap closure 03-13..03-15 (ASVS L1, block_on high; 189 pinning tests green; moved citations re-checked, none reopened) |
 
 Audit depth: L1 (each mitigation present and placed where its plan says, cited at file:line; 264 pinning tests run green). Not done: an end-to-end L3 trace, a real `fork-release.yml` run, or race-window analysis between the symlink check and the write in `desktop.install` beyond L1. The 03-12 keys-page tooltip (`firstrun.py:209`, not HTML-escaped) reopens no threat: the path comes from porter's search or the file dialog and Qt tooltips run no script.
 
@@ -118,7 +126,7 @@ Audit depth: L1 (each mitigation present and placed where its plan says, cited a
 - [x] `threats_open: 0` confirmed
 - [x] `status: verified` set in frontmatter
 
-**Approval:** verified 2026-10-31 (T-03-35 open below the high threshold; owner to fix or accept)
+**Approval:** verified 2026-10-31 (re-audit after gap closure: 44/44 closed, T-03-35 fixed by 03-15). Non-blocking notes from the re-audit: `gui/shell.py:41-47` `Shell.recheck` has no one-check-at-a-time guard (T-03-38 keeps an overlap harmless); the post-dialog guard at app.py:313 has no test of its own (runner.py:58 covers it); T-03-42's 150 s sum covers the probe and adb version, not every `setup` check.
 
 ## Security Audit 2026-10-31
 
@@ -127,3 +135,11 @@ Audit depth: L1 (each mitigation present and placed where its plan says, cited a
 | Threats found | 37 |
 | Closed | 36 |
 | Open | 1 |
+
+## Security Audit 2026-10-31
+
+| Metric | Count |
+|---|---|
+| Threats found | 44 |
+| Closed | 44 |
+| Open | 0 |
