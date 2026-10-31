@@ -33,6 +33,8 @@ def _parser():
     t.add_argument('--only', default='', help='these instead of the missing ones: ndk, dotnet, adb (comma-separated)'); t.add_argument('--json', action='store_true')
     t.add_argument('--progress', default='auto', choices=('auto', 'bar', 'lines', 'json', 'off'))
     c = sub.add_parser('config', help='show or change the saved settings'); c.add_argument('key', nargs='?'); c.add_argument('value', nargs='?')
+    c.add_argument('--json', action='store_true')
+    su = sub.add_parser('setup', help='what setup still needs, for the first-run wizard (one JSON document with --json)'); su.add_argument('--json', action='store_true')
     return ap
 
 
@@ -46,6 +48,11 @@ def cmd_doctor(a):
     else:
         for r in rows: print(f'{"ok " if r.ok else ("!! " if r.required else "-- ")} {r.name:15} {r.detail}' + (f'\n{"":19}→ {r.fix}' if r.fix and not r.ok else ''))
     return 0 if all(r.ok or not r.required for r in rows) else 1
+
+
+def cmd_setup(a):
+    from porter import setup
+    return setup.main(a)
 
 
 def cmd_profiles(a):
@@ -157,16 +164,24 @@ def cmd_tools(a):
 def cmd_config(a):
     from porter import config
     if a.key is None:
+        if a.json: _print_json(config.load()); return 0
         for k, v in config.load().items(): print(f'{k:9} {v or "-":40}  {config.KEYS[k]}')
         print(f'({config.path()})'); return 0
-    if a.value is None: print(config.load().get(a.key, '')); return 0
-    try: config.set_value(a.key, a.value)
-    except KeyError as e: print(e.args[0], file=sys.stderr); return 1
-    return 0
+    if not a.json:
+        if a.value is None: print(config.load().get(a.key, '')); return 0
+        try: config.set_value(a.key, a.value)
+        except KeyError as e: print(e.args[0], file=sys.stderr); return 1
+        return 0
+    from porter import setup
+    if a.key not in config.KEYS: _print_json({'error': f'unknown setting {a.key!r}: one of {", ".join(config.KEYS)}'}); return 1
+    if a.value is None: _print_json({'key': a.key, 'value': config.load()[a.key]}); return 0
+    # T-03-05: the notice is accepted only at the version setup --json shows, so a stale or made-up value never reads as accepted
+    if a.key == 'legal' and a.value != str(setup.VERSION): _print_json({'error': f'legal takes the current notice version, {setup.VERSION} (porter setup shows the notice)'}); return 1
+    config.set_value(a.key, a.value); _print_json({'key': a.key, 'value': a.value}); return 0
 
 
 def main(argv):
     if hasattr(sys.stdout, 'reconfigure'): sys.stdout.reconfigure(encoding='utf-8', errors='replace')   # game names and progress bars on a Windows console
     a = _parser().parse_args(argv)
     from porter import runlog
-    return runlog.run(a, {'doctor': cmd_doctor, 'profiles': cmd_profiles, 'inspect': cmd_inspect, 'port': cmd_port, 'install': cmd_install, 'devices': cmd_devices, 'tools': cmd_tools, 'config': cmd_config}[a.cmd])
+    return runlog.run(a, {'doctor': cmd_doctor, 'profiles': cmd_profiles, 'inspect': cmd_inspect, 'port': cmd_port, 'install': cmd_install, 'devices': cmd_devices, 'tools': cmd_tools, 'config': cmd_config, 'setup': cmd_setup}[a.cmd])

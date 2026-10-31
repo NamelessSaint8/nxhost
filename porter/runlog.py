@@ -133,7 +133,7 @@ def _refuse(a, long):   # a Python whose tarfile filter can be bypassed: doctor 
 def run(a, fn):
     """Run one command; a long one inside its log"""
     long = a.cmd in LONG or (a.cmd == 'tools' and getattr(a, 'download', False))
-    if a.cmd != 'doctor' and not toolchain.python_ok(): return _refuse(a, long)
+    if a.cmd not in ('doctor', 'setup') and not toolchain.python_ok(): return _refuse(a, long)   # both show the red Python row instead of refusing
     note = procs.setup(a, cut_off)
     if not long:
         if not getattr(a, 'json', False): return fn(a)
