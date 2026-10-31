@@ -66,7 +66,7 @@ Requirements for the cross-platform GUI milestone. Each maps to a roadmap phase.
 - [x] **PKG-04**: User on Linux arm64 (glibc 2.39+: Ubuntu 24.04+, Debian 13, Fedora 40+) can unpack the `tar.gz` bundle and run it under X11 and Wayland
 - [x] **PKG-05**: The bundle never writes into its own folder; it runs from a read-only location, and the macOS signature still verifies after a full port
 - [x] **PKG-06**: Python dependencies are pinned in a hashed universal lockfile, with build and dev requirements declared separately
-- [ ] **PKG-07**: Downloaded toolchains (NDK, .NET, platform-tools) and NuGet packages are pinned to exact versions and hashes in one manifest
+- [x] **PKG-07**: Downloaded toolchains (NDK, .NET, platform-tools) and NuGet packages are pinned to exact versions and hashes in one manifest
 
 ### CI
 
@@ -84,20 +84,20 @@ Requirements for the cross-platform GUI milestone. Each maps to a roadmap phase.
 
 ### Hardening
 
-- [ ] **HARD-01**: Zip and tar extraction cannot write outside the unpack folder (symlinks, `..`, absolute paths); tar uses `filter='data'` and porter refuses Pythons without the CVE-2025-4517 fix (3.11.13 / 3.12.11 / 3.13.4+)
-- [ ] **HARD-02**: The signing key is created with mode 0600 and written atomically, and porter refuses to regenerate it when it exists but cannot be read
-- [ ] **HARD-03**: FPSLocker configs come from a pinned commit or their hash is recorded and shown in the port log
-- [ ] **HARD-04**: User starting a second port of the same game folder gets a clear "already running" message (build-folder lock)
-- [ ] **HARD-05**: A stage cut off mid-run is redone on the next run (stage stamps written last and atomically)
-- [ ] **HARD-06**: The pipeline passes env dicts with absolute tool paths to subprocesses instead of mutating `os.environ`, and the upstream overrides are named and asserted at import
-- [ ] **HARD-07**: A crash during the data-pack swap never leaves the game without a pack, and install hashes files in chunks
-- [ ] **HARD-08**: Game names and other control-data strings render escaped in the GUI
-- [ ] **HARD-09**: The disk-space check counts files recursively, including DLC folders, and re-checks after extraction
-- [ ] **HARD-10**: Repository housekeeping is done: `probes/app/mkapk.py` uses the committed signer, the FLIP version is recorded, Ryujinx local changes are kept as a patch file, the commit hook is bootstrapped, `*.code-workspace` is ignored, and the language list has one source
+- [x] **HARD-01**: Zip and tar extraction cannot write outside the unpack folder (symlinks, `..`, absolute paths); tar uses `filter='data'` and porter refuses Pythons without the CVE-2025-4517 fix (3.11.13 / 3.12.11 / 3.13.4+)
+- [x] **HARD-02**: The signing key is created with mode 0600 and written atomically, and porter refuses to regenerate it when it exists but cannot be read
+- [x] **HARD-03**: FPSLocker configs come from a pinned commit or their hash is recorded and shown in the port log
+- [x] **HARD-04**: User starting a second port of the same game folder gets a clear "already running" message (build-folder lock)
+- [x] **HARD-05**: A stage cut off mid-run is redone on the next run (stage stamps written last and atomically)
+- [x] **HARD-06**: The pipeline passes env dicts with absolute tool paths to subprocesses instead of mutating `os.environ`, and the upstream overrides are named and asserted at import
+- [x] **HARD-07**: A crash during the data-pack swap never leaves the game without a pack, and install hashes files in chunks
+- [x] **HARD-08**: Game names and other control-data strings render escaped in the GUI
+- [x] **HARD-09**: The disk-space check counts files recursively, including DLC folders, and re-checks after extraction
+- [x] **HARD-10**: Repository housekeeping is done: `probes/app/mkapk.py` uses the committed signer, the FLIP version is recorded, Ryujinx local changes are kept as a patch file, the commit hook is bootstrapped, `*.code-workspace` is ignored, and the language list has one source
 
 ### Tests
 
-- [ ] **TEST-01**: Tests cover downloads and unpacking (crafted zip/tar), adb and install (resume, size parsing, stale-file removal, replace-signer), toolchain detection per OS, and CLI error paths
+- [x] **TEST-01**: Tests cover downloads and unpacking (crafted zip/tar), adb and install (resume, size parsing, stale-file removal, replace-signer), toolchain detection per OS, and CLI error paths
 - [x] **TEST-02**: The suite reports a clear skip instead of failing at import when optional engine modules (e.g. `lz4`) are missing
 - [x] **TEST-03**: GUI bridge tests replay golden JSON-lines fixtures and run headless (Qt offscreen)
 
@@ -203,7 +203,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PKG-04 | Phase 1 | Complete |
 | PKG-05 | Phase 1 | Complete |
 | PKG-06 | Phase 1 | Complete |
-| PKG-07 | Phase 2 | Gaps Found |
+| PKG-07 | Phase 2 | Complete |
 | CI-01 | Phase 1 | Complete |
 | CI-02 | Phase 1 | Complete |
 | CI-03 | Phase 1 | Complete |
@@ -212,17 +212,17 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TOOL-02 | Phase 3 | Pending |
 | TOOL-03 | Phase 3 | Pending |
 | TOOL-04 | Phase 3 | Pending |
-| HARD-01 | Phase 2 | Gaps Found |
-| HARD-02 | Phase 2 | Gaps Found |
-| HARD-03 | Phase 2 | Gaps Found |
-| HARD-04 | Phase 2 | Gaps Found |
-| HARD-05 | Phase 2 | Gaps Found |
-| HARD-06 | Phase 2 | Gaps Found |
-| HARD-07 | Phase 2 | Gaps Found |
-| HARD-08 | Phase 2 | Gaps Found |
-| HARD-09 | Phase 2 | Gaps Found |
-| HARD-10 | Phase 2 | Gaps Found |
-| TEST-01 | Phase 2 | Gaps Found |
+| HARD-01 | Phase 2 | Complete |
+| HARD-02 | Phase 2 | Complete |
+| HARD-03 | Phase 2 | Complete |
+| HARD-04 | Phase 2 | Complete |
+| HARD-05 | Phase 2 | Complete |
+| HARD-06 | Phase 2 | Complete |
+| HARD-07 | Phase 2 | Complete |
+| HARD-08 | Phase 2 | Complete |
+| HARD-09 | Phase 2 | Complete |
+| HARD-10 | Phase 2 | Complete |
+| TEST-01 | Phase 2 | Complete |
 | TEST-02 | Phase 1 | Complete |
 | TEST-03 | Phase 1 | Complete |
 | VER-01 | Phase 6 | Pending |

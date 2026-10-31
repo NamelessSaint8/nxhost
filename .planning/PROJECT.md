@@ -34,6 +34,14 @@ A tester on any supported host (Windows x64, macOS Apple Silicon, Linux x64, Lin
 - ✓ Cancel stops the whole process tree on every OS; closing the window during a port asks first and stops the run — Phase 1
 - ✓ Errors from the CLI reach the GUI with their real cause; a hung one-shot call times out with Retry; the run log opens from the GUI — Phase 1
 - ✓ Python dependencies are pinned in hashed universal locks; build and dev (devtools) requirements are declared separately — Phase 1
+- ✓ Zip and tar extraction cannot write outside the unpack folder (symlinks, `..`, absolute paths; tar uses `filter='data'` and refuses Pythons without the CVE-2025-4517 fix: 3.11.13 / 3.12.11 / 3.13.4+) — Phase 2
+- ✓ The signing key is written atomically with mode 0600, and the tool refuses to silently regenerate it — Phase 2
+- ✓ Downloads and FPSLocker configs are checked against pinned or recorded hashes — Phase 2
+- ✓ A lock per build folder prevents two ports of the same game running at once — Phase 2
+- ✓ The pipeline passes env dicts to subprocesses instead of mutating `os.environ`; upstream monkey-patches are named and asserted — Phase 2
+- ✓ Tests cover downloads/unpacking, adb/install, toolchain detection and CLI error paths (the GUI event bridge is covered since Phase 1) — Phase 2
+- ✓ Data pack swap is atomic; install hashes files in chunks — Phase 2
+- ✓ Remaining smaller items in CONCERNS.md (rich-text escaping, font choice, call timeouts, duplicate `probes/app/mkapk.py`, FLIP version record, Ryujinx patch file, hooks bootstrap) — Phase 2
 
 ### Active
 
@@ -47,16 +55,6 @@ A tester on any supported host (Windows x64, macOS Apple Silicon, Linux x64, Lin
 
 **Cross-platform bundles**
 - [ ] Linux arm64 toolchains: distro adb and a community arm64 NDK build that Setup detects or fetches (the arm64 bundle itself shipped in Phase 1)
-
-**Hardening (all of `.planning/codebase/CONCERNS.md`)**
-- [ ] Zip and tar extraction cannot write outside the unpack folder (symlinks, `..`, absolute paths; tar uses `filter='data'` and refuses Pythons without the CVE-2025-4517 fix: 3.11.13 / 3.12.11 / 3.13.4+)
-- [ ] The signing key is written atomically with mode 0600, and the tool refuses to silently regenerate it
-- [ ] Downloads and FPSLocker configs are checked against pinned or recorded hashes
-- [ ] A lock per build folder prevents two ports of the same game running at once
-- [ ] The pipeline passes env dicts to subprocesses instead of mutating `os.environ`; upstream monkey-patches are named and asserted
-- [ ] Tests cover downloads/unpacking, adb/install, toolchain detection and CLI error paths (the GUI event bridge is covered since Phase 1)
-- [ ] Data pack swap is atomic; install hashes files in chunks
-- [ ] Remaining smaller items in CONCERNS.md (rich-text escaping, font choice, call timeouts, duplicate `probes/app/mkapk.py`, FLIP version record, Ryujinx patch file, hooks bootstrap)
 
 **Verification**
 - [ ] On each of the four hosts, a tester ports and installs at least one already-playable title end to end through the new GUI
@@ -110,7 +108,9 @@ A tester on any supported host (Windows x64, macOS Apple Silicon, Linux x64, Lin
 | GitHub Actions builds, signs and tests all bundles | Four hosts are too many to build and check by hand | ✓ Good — fork-ci and fork-release green for every bundle (Phase 1) |
 | HTTPS trust: one porter SSL context that adds the host's CA file only when the bundled OpenSSL loads none; no `SSL_CERT_FILE`, no truststore | A process-wide variable reaches dotnet's NuGet restore and every child; truststore adds a dependency never run in the hardened-runtime app | ✓ Good — downloads work from the DMG and on Fedora 44 (Phase 1). Limit: a root only in the macOS keychain is not trusted |
 | Linux bundles leave PySide6's gtk3 theme and glib network plugin out (PyInstaller hook overrides), and the build refuses libgio/libgtk | The bundled older GIO loaded the host's newer gvfs modules on GNOME; no environment variable reaches children | ✓ Good — clean start and working folder picker on Debian GNOME (Phase 1 UAT) |
-| Hardening covers all of CONCERNS.md | The developer chose a solid base before adding features | — Pending |
+| Hardening covers all of CONCERNS.md | The developer chose a solid base before adding features | ✓ Good — HARD-01..10, PKG-07 and TEST-01 verified; Phase 2 UAT passed on all five fork-ci jobs |
+| Pins live only in `porter/pins.py` (toolchains, FPSLocker commit, NuGet content hashes); no lock file in the nxnative subtree | One manifest, and the engine subtree stays mergeable | ✓ Good — Phase 2 |
+| Toolchain downloads fall back to the vendor's newest only on 404/410, marked untested; the NDK never falls back | A moved pin should not block Setup, but an unpinned file must be visible | — Pending (Phase 2 research: do old platform-tools URLs stay up?) |
 | Keep syncing upstream shirai91/nx2android | Upstream fixes keep flowing into the fork | — Pending |
 | Next-milestone titles must reach `playable`, not just boot | Same bar as today's 11 playable titles | — Pending |
 | Cheats: Atmosphère files plus profile defaults, toggled in game | The standard format, plus curated defaults | — Pending |
@@ -134,4 +134,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-10-30 after Phase 1*
+*Last updated: 2026-10-31 after Phase 2*

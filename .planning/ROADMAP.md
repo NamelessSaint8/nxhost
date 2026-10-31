@@ -13,7 +13,7 @@ This milestone takes the Windows-only PySide6 GUI to four hosts and reworks it f
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Bridge, Bundles and CI** - Today's GUI stops runs cleanly, reports real errors, and ships as a CI-built bundle on all four hosts (completed 2026-10-30)
-- [ ] **Phase 2: Porter Hardening** - Ports survive kills, hostile archives and tampered downloads without losing builds or the signing key
+- [x] **Phase 2: Porter Hardening** - Ports survive kills, hostile archives and tampered downloads without losing builds or the signing key (completed 2026-10-31)
 - [ ] **Phase 3: Host Toolchains and Guided First Run** - A fresh tester on any host reaches a ready setup by following the GUI
 - [ ] **Phase 4: Game Library and Per-Game Settings** - Users port games and manage them in one library, with settings porter keeps per game
 - [ ] **Phase 5: Device Manager and Diagnostics** - Users see device compatibility, manage ports per device, and copy a full diagnostics report
@@ -69,7 +69,7 @@ Plans:
   3. Each downloaded toolchain, NuGet package and FPSLocker config is checked against the exact version and hash recorded in one manifest, the FPSLocker hash appears in the port log, and a mismatch stops with a clear message.
   4. The signing key is created atomically with mode 0600, and when the key file exists but can't be read, porter stops with an error instead of making a new key.
   5. Every item in `.planning/codebase/CONCERNS.md` is closed (escaped game names, system monospace font, recursive disk-space check with a re-check after extraction, env dicts with absolute tool paths, named and asserted upstream overrides, repo housekeeping), and the suite covers downloads and unpacking, adb and install, per-OS toolchain detection and CLI error paths.
-**Plans**: 13/13 plans executed
+**Plans**: 13/13 plans complete
 
 Plans:
 **Wave 1**
@@ -156,7 +156,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Bridge, Bundles and CI | 10/10 | Complete    | 2026-10-30 |
-| 2. Porter Hardening | 13/13 | In Progress | - |
+| 2. Porter Hardening | 13/13 | Complete    | 2026-10-31 |
 | 3. Host Toolchains and Guided First Run | 0/TBD | Not started | - |
 | 4. Game Library and Per-Game Settings | 0/TBD | Not started | - |
 | 5. Device Manager and Diagnostics | 0/TBD | Not started | - |
