@@ -116,4 +116,52 @@ class ChildEnv(unittest.TestCase):   # D-18: the real DOTNET_ROOT, invariant glo
         for p in ('/usr/lib/dotnet/dotnet', '/usr/share/dotnet/dotnet', str(Path.home() / '.dotnet' / 'dotnet')): self.assertIn(p, k)
 
 
+class AdbVersion(unittest.TestCase):   # D-12: `adb version` as numbers; an unread version keeps -Z (today's behaviour)
+    def test_parse(self):
+        cases = (('Android Debug Bridge version 1.0.41\nVersion 36.0.0-13206524\nInstalled as /x/adb\n', '36.0.0-13206524', 36, 41),
+                 ('Android Debug Bridge version 1.0.41\nVersion 29.0.6-debian\n', '29.0.6-debian', 29, 41),   # Debian 12, Ubuntu 22.04
+                 ('Android Debug Bridge version 1.0.41\nVersion 1:10.0.0+r36-7\n', '1:10.0.0+r36-7', 10, 41),   # a Debian epoch
+                 ('', None, None, None), ('garbage', None, None, None))
+        for out, version, major, protocol in cases:
+            with self.subTest(out), listed(out): self.assertEqual(hosttools.adb_version('adb'), {'version': version, 'major': major, 'protocol': protocol})
+        for err in (OSError('gone'), subprocess.TimeoutExpired('adb', 15)):
+            with self.subTest(err=type(err).__name__), listed(err=err): self.assertIsNone(hosttools.adb_version('adb'))
+
+    def test_push_flags(self):
+        for v, want in (({'major': 29}, []), ({'major': 36}, ['-Z']), ({'major': None}, ['-Z']), (None, ['-Z'])):
+            with self.subTest(v=v), mock.patch.object(hosttools, 'adb_version', return_value=v): self.assertEqual(hosttools.push_flags('adb'), want)
+
+    def test_numeric(self):   # as strings '9' > '30'
+        with listed('Version 9.0.0-1\n'): self.assertEqual(hosttools.adb_version('adb')['major'], 9)
+        with listed('Version 9.0.0-1\n'): self.assertEqual(hosttools.push_flags('adb'), [])
+
+
+class Source(unittest.TestCase):   # D-13: where a found tool came from
+    def setUp(self):
+        self.t = Path(tempfile.mkdtemp())
+        env = mock.patch.dict(os.environ); env.start(); self.addCleanup(env.stop)
+        for k in ('DOTNET_ROOT', 'ANDROID_NDK_HOME', 'ANDROID_NDK_ROOT'): os.environ.pop(k, None)
+        for p in (mock.patch.object(hosttools, 'player_tools', lambda: self.t / 'player'), mock.patch.object(hosttools, 'LOCAL_TOOLS', self.t / 'local'),
+                  mock.patch.object(hosttools.shutil, 'which', lambda n: str(self.t / 'path' / n)), mock.patch.object(hosttools, 'known', lambda n: [str(self.t / 'known' / n)])):
+            p.start(); self.addCleanup(p.stop)
+
+    def test_labels(self):
+        t = self.t; mine = t / 'player' / 'platform-tools' / 'adb'
+        self.assertEqual(hosttools.source_of(mine, {}, 'adb'), 'downloaded')
+        self.assertEqual(hosttools.source_of(mine, {'adb': str(mine)}, 'adb'), 'downloaded')   # a downloaded tool the settings point at (RESEARCH Open Question 3)
+        self.assertEqual(hosttools.source_of(t / 'cfg' / 'adb', {'adb': str(t / 'cfg' / 'adb')}, 'adb'), 'configured')
+        for k in ('DOTNET_ROOT', 'ANDROID_NDK_HOME', 'ANDROID_NDK_ROOT'):
+            with self.subTest(k), mock.patch.dict(os.environ, {k: str(t / 'env')}): self.assertEqual(hosttools.source_of(t / 'env' / 'dotnet', {}, 'dotnet'), 'env')
+        self.assertEqual(hosttools.source_of(t / 'path' / 'adb', {}, 'adb'), 'PATH')
+        self.assertEqual(hosttools.source_of(t / 'known' / 'adb', {}, 'adb'), 'known place')
+        self.assertEqual(hosttools.source_of(t / 'sdk' / 'platform-tools' / 'adb', {}, 'adb', sdk_roots=[t / 'sdk']), 'Android SDK')
+        self.assertEqual(hosttools.source_of(t / 'local' / 'platform-tools' / 'adb', {}, 'adb'), 'known place')
+
+    def test_linux_arm64(self):
+        for platform, machine, want in (('linux', 'aarch64', True), ('linux', 'arm64', True), ('linux', 'x86_64', False), ('darwin', 'arm64', False)):
+            with self.subTest(platform=platform, machine=machine), mock.patch.object(hosttools, 'sys', types.SimpleNamespace(platform=platform)), \
+                 mock.patch.object(hosttools.platform, 'machine', return_value=machine):
+                self.assertEqual(hosttools.linux_arm64(), want)
+
+
 if __name__ == '__main__': unittest.main()

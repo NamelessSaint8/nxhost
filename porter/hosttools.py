@@ -22,3 +22,13 @@ def dotnet_root(dotnet):
     except (OSError, subprocess.TimeoutExpired): r = None
     m = r and re.search(r'\[(.+)\]\s*$', r.stdout, re.M)
     return Path(m.group(1)).parent if m else Path(dotnet).resolve().parent
+
+
+ADB_Z_MAJOR = 30
+ADB_MIN_PROTOCOL = 39
+
+
+def adb_version(exe): return None   # stub (RED)
+def push_flags(exe): return ['-Z']   # stub (RED)
+def linux_arm64(): return False   # stub (RED)
+def source_of(path, cfg, key, sdk_roots=()): return ''   # stub (RED)

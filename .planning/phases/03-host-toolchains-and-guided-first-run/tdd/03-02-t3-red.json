@@ -1,0 +1,9 @@
+{
+ "command": "NO_COLOR=1 .venv/bin/python -m unittest tests.test_hosttools.Source.test_labels -v",
+ "exitCode": 1,
+ "output": "test_labels (tests.test_hosttools.Source.test_labels) ... FAIL\n\n======================================================================\nFAIL: test_labels (tests.test_hosttools.Source.test_labels)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/Volumes/Data/Dev/nx2android/tests/test_hosttools.py\", line 150, in test_labels\n    self.assertEqual(hosttools.source_of(mine, {}, 'adb'), 'downloaded')\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: '' != 'downloaded'\n+ downloaded\n\n\n----------------------------------------------------------------------\nRan 1 test in 0.001s\n\nFAILED (failures=1)\n",
+ "targetTest": "test_labels",
+ "targetFile": "tests/test_hosttools.py",
+ "expected": "source_of labels a player_tools() adb 'downloaded'",
+ "actual": "stub returns ''"
+}
