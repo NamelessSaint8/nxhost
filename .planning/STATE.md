@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 03
 current_phase_name: Host Toolchains and Guided First Run
 status: executing
-stopped_at: Completed 03-13-PLAN.md
-last_updated: "2026-10-31T18:32:24.997Z"
+stopped_at: Completed 03-14-PLAN.md
+last_updated: "2026-10-31T18:55:51.767Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 03 execution started
-state_head: 5c5f31241842d3ff4dc073a4981cd91915a58ab7
+state_head: 89bf547639e6aaa6c22b779bdebc270355f62abb
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 38
-  completed_plans: 36
+  completed_plans: 37
   percent: 33
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-10-31)
 ## Current Position
 
 Phase: 03 (Host Toolchains and Guided First Run) — EXECUTING
-Plan: 14 of 15
+Plan: 15 of 15
 Status: Ready to execute
 Last activity: 2026-10-31 — Phase 03 execution started
 
@@ -93,6 +93,7 @@ Progress: [███░░░░░░░] 33%
 | Phase 03 P10 | 8 min | 2 tasks | 2 files |
 | Phase 03 P11 | 10min | 3 tasks | 5 files |
 | Phase 03 P13 | 3 min | 3 tasks | 5 files |
+| Phase 03 P14 | 10 min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -189,6 +190,9 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-11: Wizard.primary(i) makes a page's own primary button (done, tools) the default instead of QWizard's Next
 - [Phase 03]: 03-13: _download treats a body shorter than have + Content-Length as a dropped link (retried ConnectionResetError); http.client.HTTPException is retried too
 - [Phase 03]: 03-13: the probe cache is best-effort (per-process mkstemp + os.replace, OSError swallowed); only passes are cached
+- [Phase 03]: 03-14: the Prepare guard lives in ToolsPage.start and in the chain, so neither the automatic chain nor the Prepare .NET tools button starts a run on a quitting window
+- [Phase 03]: 03-14: colour(None, key) reads the application palette, so failed() keeps its one-argument signature
+- [Phase 03]: 03-14: the banner restyles on the host window's PaletteChange (Gate.paint via an event filter), not on a setup --json answer
 
 ### Pending Todos
 
@@ -213,6 +217,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-31T18:32:24.741Z
-Stopped at: Completed 03-13-PLAN.md
+Last session: 2026-10-31T18:55:51.503Z
+Stopped at: Completed 03-14-PLAN.md
 Resume file: None
