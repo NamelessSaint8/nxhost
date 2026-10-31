@@ -289,6 +289,7 @@ class SetupTab(QWidget):
         row = QHBoxLayout(); save = QPushButton('Save and check'); save.clicked.connect(self.save); row.addStretch(1); row.addWidget(save)
         f.addRow('', row)
         v.addWidget(s); v.addStretch(1)
+        self.loaded = {}   # the config values last copied into the edits
         self.load()
 
     # ---- downloading the missing tools ----
@@ -345,15 +346,19 @@ class SetupTab(QWidget):
         p = QFileDialog.getExistingDirectory(self, key, e.text()) if kind == 'dir' else QFileDialog.getOpenFileName(self, key, e.text())[0]
         if p: e.setText(p)
 
+    # 03-VERIFICATION gap 1: the edits were filled at start-up only, so after the wizard saved prod.keys through porter config, Save and check wrote '' over it.
+    # Now every load refreshes the fields the player has not typed into, and a save writes only the fields changed since the last load
     def load(self):
-        for k, v in config.load().items():
-            if k in self.edits: self.edits[k].setText(v)
-        self.check()
-
-    def save(self):
         c = config.load()
-        for k, e in self.edits.items(): c[k] = e.text().strip()
-        config.save(c); self.check()
+        for k, e in self.edits.items():
+            if e.text().strip() == self.loaded.get(k, ''): e.setText(c[k])
+        self.loaded = {k: c[k] for k in self.edits}; self.check()
+
+    def save(self):   # an emptied field is a change and is written
+        c = config.load()
+        for k, e in self.edits.items():
+            if e.text().strip() != self.loaded.get(k, ''): c[k] = e.text().strip()
+        config.save(c); self.load()
 
     def check(self):
         self.check_msg.setText('')   # a Retry link is gone before the new call
@@ -427,7 +432,7 @@ class Window(QMainWindow):
         for p in runs: p.stop()
         self.port.step.setText('stopping…')
 
-    def recheck(self): self.setup.check()   # setup --json again; its answer reaches firstrun.on_ready through set_ready
+    def recheck(self): self.setup.load()   # the Setup tab's untouched fields from config.json (the wizard saves through porter config), then setup --json; its answer reaches firstrun.on_ready through set_ready
 
     def port_a_game(self): self.tabs.setCurrentWidget(self.port); self.port.pick_folder()
 
