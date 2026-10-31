@@ -1,0 +1,10 @@
+{
+ "command": "NO_COLOR=1 QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest tests.test_firstrun.Device.test_pick_saves",
+ "exitCode": 1,
+ "output": "qt.qpa.fonts: Populating font family aliases took 293 ms. Replace uses of missing font family \"Sans Serif\" with one that exists to avoid this cost. \nF\n======================================================================\nFAIL: test_pick_saves (tests.test_firstrun.Device.test_pick_saves)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/Volumes/Data/Dev/nx2android/tests/test_firstrun.py\", line 465, in test_pick_saves\n    p.list.setCurrentRow(1); self.assertEqual(calls.sent('config'), [['config', 'device', 'R5CT2', '--json']])\n                             ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: Lists differ: [] != [['config', 'device', 'R5CT2', '--json']]\n\nSecond list contains 1 additional elements.\nFirst extra element 0:\n['config', 'device', 'R5CT2', '--json']\n\n- []\n+ [['config', 'device', 'R5CT2', '--json']]\n\n----------------------------------------------------------------------\nRan 1 test in 0.531s\n\nFAILED (failures=1)",
+ "targetTest": "test_pick_saves",
+ "targetFile": "tests/test_firstrun.py",
+ "expected": "selecting the second of two ready devices sends ['config', 'device', 'R5CT2', '--json']",
+ "actual": "no config call: the device page does not save a selection yet",
+ "semanticAssessment": "Valid RED: test_pick_saves ran and failed on the planned assertion (no config device call after selecting a second ready device). The Done tests error on the missing lines/playable/menu/port attributes of the 03-05 DonePage stub, the planned absence; test_close_setup already passes because 03-05 labelled Finish."
+}

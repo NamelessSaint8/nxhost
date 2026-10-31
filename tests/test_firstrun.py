@@ -24,7 +24,7 @@ if not (OLD or MISSING):
     from PySide6.QtCore import QSize, Qt, QTimer
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QWidget, QWizard
-    from gui import app, firstrun
+    from gui import app, firstrun, shell
 APP = None
 
 
@@ -51,7 +51,7 @@ class Calls:   # stands in for gui.runner.call_json: answers each command from s
     def __init__(self, test, setup):
         self.args, self.fail, self.hold, self.queue = [], {}, set(), {}
         self.answers = {'setup': setup, 'devices': [], 'profiles': []}
-        for m in (app, firstrun):
+        for m in (app, firstrun, shell):
             p = mock.patch.object(m, 'call_json', self); p.start(); test.addCleanup(p.stop)
 
     def __call__(self, parent, args, done, timeout=None):
@@ -456,6 +456,106 @@ class Device(unittest.TestCase):   # the device page (D-15, DEV-01): devices --j
     def test_instructions(self):
         w, calls, z, p = self.open()
         self.assertIn(STEPS, shown(p)); self.assertIn('Connect your Android device', shown(p))
+
+    def test_pick_saves(self):   # several devices ready: the selected one is saved; one: nothing to pick
+        two = [dev('R5CT1', 'device'), dev('R5CT2', 'device'), dev('R5CT3', 'unauthorized', 'Unlock the device and tap Allow on the USB debugging prompt.')]
+        w, calls, z, p = self.open(); calls.answers['devices'] = two
+        self.assertTrue(until(lambda: p.list.count() == 3, 2000))
+        p.list.setCurrentRow(2); QTest.qWait(50); self.assertEqual(calls.sent('config'), [])   # not in device state: not saved
+        p.list.setCurrentRow(1); self.assertEqual(calls.sent('config'), [['config', 'device', 'R5CT2', '--json']])
+        calls.answers['devices'] = two + [dev('R5CT4', 'offline')]   # a redraw keeps the choice and saves nothing again
+        self.assertTrue(until(lambda: p.list.count() == 4, 3000)); QTest.qWait(50)
+        self.assertEqual([p.list.itemWidget(it).r['serial'] for it in p.list.selectedItems()], ['R5CT2']); self.assertEqual(len(calls.sent('config')), 1)
+        w, calls, z, p = self.open(); calls.answers['devices'] = [dev('R5CT1', 'device'), dev('R5CT3', 'offline')]
+        self.assertTrue(until(lambda: p.list.count() == 2, 2000))
+        p.list.setCurrentRow(0); QTest.qWait(50); self.assertEqual(calls.sent('config'), [])
+
+    def test_pick_fails(self):
+        w, calls, z, p = self.open(); calls.answers['devices'] = [dev('R5CT1', 'device'), dev('R5CT2', 'device')]
+        calls.fail['config'] = {'timeout': 0, 'error': 'cannot <save>', 'stderr': ''}
+        self.assertTrue(until(lambda: p.list.count() == 2, 2000)); p.list.setCurrentRow(0)
+        self.assertTrue(until(lambda: 'cannot <save>' in p.error.text(), 2000)); self.assertEqual(p.error.textFormat(), Qt.PlainText)
+
+
+class Done(unittest.TestCase):   # the last page (D-20, D-28): a summary per step, porter's notes, the games that play today, Add to app menu, Port a game
+    PROFILES = [{'id': '0100A', 'name': 'Zeta Quest', 'status': 'playable'}, {'id': '0100B', 'name': 'Alpha Run', 'status': 'playable'},
+                {'id': '0100C', 'name': 'Work In Progress', 'status': 'wip'}]
+
+    def open(self, d=None, profiles=(), win=None):   # the wizard at the done page over `d`; profiles --json answers `profiles`
+        w, calls = (win or launch)(self, d or doc()); calls.answers['profiles'] = copy.deepcopy(list(profiles))
+        z = firstrun.open_setup(w, 'done'); p = z.page(firstrun.PAGES.index('done'))
+        self.assertEqual(z.currentId(), firstrun.PAGES.index('done'))
+        return w, calls, z, p
+
+    def lines(self, p): return [(x.glyph.text(), x.text.text()) for x in p.lines]
+
+    def test_summary(self):
+        d = doc('setup_missing.json'); d['notes'] = ['No adb yet: port now, install later.']
+        w, calls, z, p = self.open(d); got = self.lines(p)
+        self.assertEqual(len(got), len(d['steps']) + 1)
+        for (mark, text), st in zip(got, d['steps']):
+            with self.subTest(st['id']): self.assertEqual(mark, '✓' if st['ok'] else '✗'); self.assertIn(st['detail'], text)
+        self.assertEqual(got[-1], ('!', 'No adb yet: port now, install later.'))
+        self.assertIn(firstrun.colour(p, 'note'), p.lines[-1].glyph.styleSheet())
+        for x in p.lines: self.assertTrue(x.text.wordWrap()); self.assertEqual(x.text.textFormat(), Qt.PlainText)
+        self.assertEqual(p.head.text(), 'Setup is not finished')
+        w, calls, z, p = self.open(); self.assertEqual(p.head.text(), 'Setup is ready')
+
+    def test_no_device_note(self):   # what the device page last saw in this wizard; a wizard that never polled says nothing of devices
+        note = 'No device yet: port now, install later.'
+        w, calls, z, p = self.open(); self.assertNotIn(note, [t for _, t in self.lines(p)])
+        for rows, want in (([], True), ([dev('R5CT1', 'unauthorized')], True), ([dev('R5CT1', 'device')], False)):
+            with self.subTest(rows=rows):
+                w, calls = launch(self); calls.answers['devices'] = rows
+                z = firstrun.open_setup(w, 'device'); dp = z.page(firstrun.PAGES.index('device'))
+                self.assertTrue(until(lambda: dp.rows is not None, 2000)); z.next()
+                p = z.page(firstrun.PAGES.index('done')); self.assertEqual(note in [t for _, t in self.lines(p)], want)
+
+    def test_playable(self):
+        w, calls, z, p = self.open(profiles=self.PROFILES)
+        self.assertEqual(calls.sent('profiles'), [['profiles', '--json']])
+        self.assertTrue(until(lambda: p.playable.isVisibleTo(p), 2000))
+        self.assertEqual(p.playable.text(), 'Alpha Run\nZeta Quest'); self.assertEqual(p.playable.textFormat(), Qt.PlainText)
+        self.assertTrue(p.games.isVisibleTo(p)); self.assertEqual(p.games.text(), 'Games that play today')
+        for profiles, fail in (([], None), (self.PROFILES[2:], None), (self.PROFILES, {'timeout': 20, 'error': '', 'stderr': ''})):
+            with self.subTest(profiles=profiles, fail=fail):
+                w, calls = launch(self)
+                if fail: calls.fail['profiles'] = fail
+                w, calls, z, p = self.open(win=lambda _t, _d: (w, calls), profiles=profiles)
+                self.assertTrue(until(lambda: len(calls.sent('profiles')) == 1, 1000)); QTest.qWait(50)
+                self.assertFalse(p.playable.isVisibleTo(p)); self.assertFalse(p.games.isVisibleTo(p))
+                self.assertIn('Setup is ready', shown(p)); self.assertTrue(p.port.isVisibleTo(p))   # the summary and Port a game still show
+
+    def test_add_to_menu_offer(self):
+        w, calls, z, p = self.open(); self.assertFalse(p.menu.isVisibleTo(p))
+        d = doc(); d['desktop']['offer'] = True
+        w, calls, z, p = self.open(d); self.assertTrue(p.menu.isVisibleTo(p)); self.assertEqual(p.menu.text(), 'Add to app menu')
+        QTest.qWait(50); self.assertEqual(calls.sent('desktop-entry'), [])   # nothing written before the press (T-03-33)
+        calls.answers['desktop-entry'] = {'path': '/home/t/.local/share/applications/nx2android.desktop', 'icon': '/x.png', 'exec': '/opt/nx2android/nx2android'}
+        calls.hold.add('desktop-entry'); p.menu.click()
+        self.assertEqual(calls.sent('desktop-entry'), [['desktop-entry', '--install', '--json']])
+        self.assertEqual(p.menu.text(), 'saving…'); self.assertFalse(p.menu.isEnabled())
+        w, calls, z, p = self.open(d); calls.answers['desktop-entry'] = {'path': '/x.desktop', 'icon': '/x.png', 'exec': '/x'}; p.menu.click()
+        self.assertTrue(until(lambda: p.menu_result.text() == 'Added to the app menu.', 2000)); self.assertTrue(p.menu.isEnabled())
+        w, calls, z, p = self.open(d); calls.fail['desktop-entry'] = {'timeout': 0, 'error': 'cannot write <dir>', 'stderr': ''}; p.menu.click()
+        self.assertTrue(until(lambda: 'cannot write <dir>' in p.menu_result.text(), 2000)); self.assertEqual(p.menu_result.textFormat(), Qt.PlainText)
+        self.assertEqual(p.menu.text(), 'Add to app menu'); self.assertTrue(p.menu.isEnabled())
+
+    def test_port_a_game(self):
+        w, calls, z, p = self.open(); self.assertTrue(p.port.isVisibleTo(p)); self.assertEqual(p.port.text(), 'Port a game')
+        self.assertTrue(p.port.isDefault()); self.assertGreaterEqual(p.port.minimumHeight(), 36); self.assertTrue(p.port.font().bold())
+        with mock.patch.object(w, 'port_a_game') as go:
+            p.port.click(); go.assert_called_once_with()
+        self.assertTrue(until(lambda: not z.isVisible(), 1000)); self.assertIsNone(gate(self, w).wizard)
+        def on_shell(test, d):
+            c = Calls(test, d); s = shell.Shell(); test.addCleanup(s.deleteLater); until(lambda: s.first_run.doc is not None, 3000); return s, c
+        w, calls, z, p = self.open(win=on_shell)
+        self.assertFalse(hasattr(w, 'port_a_game')); self.assertFalse(p.port.isVisibleTo(p))
+
+    def test_close_setup(self):
+        w, calls, z, p = self.open(); b = z.button(QWizard.FinishButton)
+        self.assertEqual(b.text(), 'Close setup'); b.click()
+        self.assertTrue(until(lambda: not z.isVisible(), 1000)); self.assertIsNone(gate(self, w).wizard)
 
 
 if __name__ == '__main__': unittest.main()
