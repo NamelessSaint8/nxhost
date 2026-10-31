@@ -15,5 +15,10 @@ def known(name):
     return [f'{d}/{name}' for d in dirs]
 
 
-def dotnet_root(dotnet):   # stub (RED)
-    return Path(dotnet).parent
+def dotnet_root(dotnet):
+    """The folder dotnet's runtime and SDKs are in: the one above the `[.../sdk]` path `dotnet --list-sdks` prints, else the resolved executable's folder.
+    Homebrew's /opt/homebrew/bin/dotnet, Ubuntu's /usr/bin/dotnet and snap's /snap/bin/dotnet are links: their own folder as DOTNET_ROOT breaks nx_extract's apphost (Pitfall 4)"""
+    try: r = subprocess.run([str(dotnet), '--list-sdks'], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired): r = None
+    m = r and re.search(r'\[(.+)\]\s*$', r.stdout, re.M)
+    return Path(m.group(1)).parent if m else Path(dotnet).resolve().parent

@@ -7,7 +7,7 @@ import os, re, shutil, sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from porter import config, datapack, fpslocker, install, nuget, paths, pins, profiles, toolchain
+from porter import childenv, config, datapack, fpslocker, install, nuget, paths, pins, profiles, toolchain
 from porter.adb import Adb, AdbError
 from porter.paths import DM, NXNATIVE
 from porter.upstream import BuildError, PROG, android_profile, game, nacp, nsp, profile_guess, say
@@ -93,10 +93,8 @@ class Port:
         # DOTNET_ROOT: where nx_extract's apphost looks for the runtime (else the system's, which may lack .NET 10).
         # PYTHONUTF8: the engine's tools write their tables with open() and no encoding, which is the ANSI code page on Windows (shader_split.py's "→" failed)
         # NUGET_PACKAGES: every dotnet call restores into and builds from the one folder porter/nuget.py checks against pins.NUGET (RESEARCH Pitfall 7)
-        dn = str(self.tools['dotnet'].parent)
-        self.env = dict(os.environ, PATH=os.pathsep.join([dn, os.environ.get('PATH', '')]), DOTNET_ROOT=dn,
-                        J=str(o.jobs), PYTHONIOENCODING='utf-8', PYTHONUTF8='1', DOTNET_CLI_TELEMETRY_OPTOUT='1',
-                        NUGET_PACKAGES=str(paths.user_dir() / 'nuget'))
+        # D-18: built by porter/childenv.py (dotnet's real root, invariant globalization, a UTF-8 LANG), which Prepare's .NET tools share
+        self.env = childenv.dotnet(self.tools['dotnet'], o.jobs)
 
         self.inputs()
         PROG.plan(1 + len(self.versions) + bool(self.fam['dlc']) + bool(o.fps60) + 6 + bool(o.install))   # nx_extract, the versions, the DLC, 60 fps, rewrite / split / Vulkan shaders / host / APK / data, install
