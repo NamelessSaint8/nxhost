@@ -1,6 +1,6 @@
 # The nx2android desktop app: three tabs over porter.
 #   Port   pick the game folder (porter inspect), options, Port (porter port --progress json): the stage list, the current stage's bar, the log; then open or install the result
-#   Setup  the tools a port needs (porter doctor), downloading the missing ones (porter tools --download), and the saved settings (porter.config): prod.keys, the NDK,
+#   Setup  the tools a port needs (porter setup; gui/firstrun.py draws its banner and wizard), downloading the missing ones (porter tools --download), and the saved settings (porter.config): prod.keys, the NDK,
 #          dotnet, adb, the output folder, the device
 #   Games  the game profiles (porter profiles --all)
 import html, subprocess, sys, time
@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, 
                                QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from porter import config
+from gui import firstrun
 from gui.runner import Porter, call_json
 
 STATUS_COLOUR = {'playable': '#2e7d32', 'wip': '#ef6c00', 'boots': '#ef6c00', 'experimental': '#ef6c00', 'ios only': '#757575'}
@@ -263,6 +264,7 @@ class SetupTab(QWidget):
         self.win = win
         v = QVBoxLayout(self)
         g = QGroupBox('Requirements'); gl = QVBoxLayout(g)
+        top = QHBoxLayout(); self.run_btn = QPushButton('Run setup'); self.run_btn.clicked.connect(lambda: firstrun.open_setup(self.win)); top.addStretch(1); top.addWidget(self.run_btn); gl.addLayout(top)
         self.table = QTableWidget(0, 3); self.table.setHorizontalHeaderLabels(['', 'Requirement', 'Found']); self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers); self.table.setSelectionMode(QTableWidget.NoSelection)
         hh = self.table.horizontalHeader(); hh.setSectionResizeMode(0, QHeaderView.ResizeToContents); hh.setSectionResizeMode(1, QHeaderView.ResizeToContents); hh.setSectionResizeMode(2, QHeaderView.Stretch)
@@ -352,18 +354,12 @@ class SetupTab(QWidget):
 
     def check(self):
         self.check_msg.setText('')   # a Retry link is gone before the new call
-        def got(rows, code, fail):
+        def got(doc, code, fail):   # setup --json exits 1 when not ready: its document is still the answer
             self.table.setRowCount(0); self.check_msg.setText(failed(fail) if fail else '')
             if fail: self.win.set_ready(False); return
-            for r in rows or []:
-                i = self.table.rowCount(); self.table.insertRow(i)
-                mark = QTableWidgetItem('✓' if r['ok'] else ('✗' if r['required'] else '–'))
-                mark.setForeground(QColor('#2e7d32' if r['ok'] else '#c62828' if r['required'] else '#ef6c00'))
-                self.table.setItem(i, 0, mark); self.table.setItem(i, 1, QTableWidgetItem(r['name']))
-                self.table.setItem(i, 2, QTableWidgetItem(r['detail'] + (f'  →  {r["fix"]}' if r['fix'] and not r['ok'] else '')))
-            self.table.resizeRowsToContents()
-            self.win.set_ready(bool(rows) and all(r['ok'] or not r['required'] for r in rows))
-        call_json(self, ['doctor', '--json'], got)
+            firstrun.fill_checks(self.table, doc); self.table.resizeRowsToContents()
+            self.win.set_ready(bool(doc.get('ready')), doc)
+        call_json(self, ['setup', '--json'], got)
 
 
 # ---------------- Games ----------------
@@ -402,6 +398,7 @@ class Window(QMainWindow):
         self.tabs.addTab(self.port, 'Port'); self.tabs.addTab(self.setup, 'Setup'); self.tabs.addTab(self.games, 'Games')
         self.setCentralWidget(self.tabs)
         self.first = True; self.quitting = False
+        self.fetch = self.setup.fetch; firstrun.attach(self)   # the window protocol gui/firstrun.py draws on
         for p in (self.port.porter, self.setup.fetch): p.finished.connect(self.run_ended)
 
     def runs(self): return [p for p in (self.port.porter, self.setup.fetch) if p.running()]
@@ -427,9 +424,13 @@ class Window(QMainWindow):
         for p in runs: p.stop()
         self.port.step.setText('stopping…')
 
-    def set_ready(self, ok):   # the first check: a missing requirement opens the Setup tab
-        if self.first and not ok: self.tabs.setCurrentWidget(self.setup)
-        self.first = False
+    def recheck(self): self.setup.check()   # setup --json again; its answer reaches firstrun.on_ready through set_ready
+
+    def port_a_game(self): self.tabs.setCurrentWidget(self.port); self.port.pick_folder()
+
+    def set_ready(self, ok, doc=None):   # a failed first check opens the Setup tab (its Retry in view); porter's answer goes to the banner and the wizard
+        if self.first and not ok and doc is None: self.tabs.setCurrentWidget(self.setup)
+        self.first = False; firstrun.on_ready(self, doc)
 
 
 def main(argv):
