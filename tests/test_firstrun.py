@@ -1,7 +1,7 @@
 # The first-run gate (gui/firstrun.py) over today's window, headless: porter's `setup --json` drawn on every launch as the Setup tab's checklist, a banner that
 # names what is missing, and the wizard that opens while the legal notice is not accepted. A stand-in call_json (patched on gui.app and gui.firstrun) answers
 # from tests/fixtures/bridge/setup_*.json on the next event-loop turn; the subprocess path is tests/test_bridge.py's.
-import copy, json, os, sys, tempfile, time, unittest
+import copy, json, os, re, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -23,7 +23,7 @@ HOME = tempfile.mkdtemp()
 if not (OLD or MISSING):
     from PySide6.QtCore import QSize, Qt, QTimer
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QWizard
+    from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QWidget, QWizard
     from gui import app, firstrun
 APP = None
 
@@ -262,6 +262,63 @@ class Legal(unittest.TestCase):
     def test_footer(self):
         w, _ = launch(self, doc('setup_first.json'))
         self.assertEqual(self.page(w).footer.text(), 'Skip setup closes this window. It opens again next time until you accept.')
+
+
+HEX32 = re.compile('[0-9A-Fa-f]{32}')   # a key value's shape: no text on the keys page may carry one
+
+
+class Keys(unittest.TestCase):   # the prod.keys page (03-12, D-05/D-06): porter's found files with its verdict, Browse…, a save through config keys
+    OK = {'path': '~/.switch/prod.keys', 'ok': True, 'detail': 'keys up to generation 19', 'generation': 19, 'missing': []}
+    BAD = {'path': '/opt/nx2a-test/old/prod.keys', 'ok': False, 'detail': 'missing header_key', 'generation': None, 'missing': ['header_key']}
+
+    def open(self, found, **st):   # the wizard at the keys page over setup_missing.json with the keys step's found entries (and any step fields) replaced
+        d = doc('setup_missing.json'); s = firstrun.step(d, 'keys'); s['found'] = copy.deepcopy(found); s.update(st)
+        w, calls = launch(self, d); z = firstrun.open_setup(w, 'keys'); p = z.page(firstrun.PAGES.index('keys'))
+        self.assertEqual(z.currentId(), firstrun.PAGES.index('keys'))
+        for a in ('list', 'result'): self.assertIsNotNone(getattr(p, a, None), f'the keys page has no {a}')
+        return w, calls, z, p
+
+    def row(self, p, i):
+        r = p.list.itemWidget(p.list.item(i)); self.assertIsNotNone(r, f'list row {i} has no row widget'); return r
+
+    def test_candidates(self):
+        w, _, z, p = self.open([self.OK, self.BAD])
+        self.assertEqual(p.list.count(), 2)
+        for i, e, mark, role in ((0, self.OK, '✓', 'ok'), (1, self.BAD, '✗', 'bad')):
+            with self.subTest(e['path']):
+                r = self.row(p, i)
+                self.assertEqual(r.glyph.text(), mark); self.assertIn(firstrun.colour(r.glyph, role), r.glyph.styleSheet())
+                self.assertEqual(r.path.toolTip(), e['path']); self.assertEqual(r.path.font().family(), firstrun.mono().family())
+                self.assertEqual(r.detail.text(), e['detail'])
+        long = '/opt/nx2a-test/' + 'deep/' * 80 + 'prod.keys'
+        w, _, z, p = self.open([dict(self.OK, path=long)]); r = self.row(p, 0)
+        self.assertTrue(until(lambda: '…' in r.path.text(), 1000), r.path.text())   # elided in the middle: both ends kept
+        self.assertTrue(r.path.text().startswith('/opt/')); self.assertTrue(r.path.text().endswith('prod.keys')); self.assertEqual(r.path.toolTip(), long)
+
+    def test_pick_saves(self):
+        w, calls, z, p = self.open([self.OK, self.BAD])
+        with mock.patch.object(w, 'recheck') as again:
+            p.list.setCurrentRow(1); QTest.qWait(50)
+            self.assertEqual(calls.sent('config'), [])   # a not-ok row is not saved
+            p.list.setCurrentRow(0)
+            self.assertEqual(calls.sent('config'), [['config', 'keys', self.OK['path'], '--json']])
+            r = self.row(p, 0); self.assertEqual(r.detail.text(), 'saving…'); self.assertFalse(r.isEnabled())
+            self.assertTrue(until(lambda: again.called, 3000))
+
+    def test_bad_file_line(self):
+        fix = 'Pick a prod.keys dumped from your own Switch.'
+        w, _, z, p = self.open([], ok=False, path=self.BAD['path'], detail='missing header_key', fix=fix)
+        self.assertEqual(p.result.text(), f"{self.BAD['path']}: missing header_key. {fix}"); self.assertEqual(p.result.textFormat(), Qt.PlainText)
+        w, _, z, p = self.open([], ok=True, path=self.OK['path'], detail='keys up to generation 19', fix='')
+        self.assertEqual(p.result.text(), f"{self.OK['path']}: keys up to generation 19")
+
+    def test_no_values(self):   # porter never sends a value; even if a doc carried one in another field, the page shows only path, glyph, detail and fix
+        v = 'ab' * 16   # built here: no 32-digit hex literal in this file
+        w, _, z, p = self.open([dict(self.OK, value=v, header_key=v)], ok=True, path=self.OK['path'], detail='keys up to generation 19', value=v, header_key=v)
+        self.assertEqual(p.list.count(), 1)
+        texts = [x.text() for x in p.findChildren(QLabel)] + [x.toolTip() for x in p.findChildren(QWidget)]
+        texts += [t for i in range(p.list.count()) for t in (p.list.item(i).text(), p.list.item(i).toolTip())]
+        for t in texts: self.assertNotRegex(t, HEX32)
 
 
 if __name__ == '__main__': unittest.main()
