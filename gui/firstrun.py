@@ -430,10 +430,16 @@ class DevicePage(StepPage):   # D-15, DEV-01: devices --json while this page sho
 
     def __init__(self):
         super().__init__('Connect your Android device', stretch=False); self.gen, self.busy, self.rows = 0, False, None
-        self.v.addWidget(body('1. On the device, open Settings › About and tap Build number seven times. 2. Open Settings › System › Developer options and turn on '
-                              'USB debugging. 3. Connect it by USB and tap Allow on the "Allow USB debugging?" prompt.'))
+        self.v.addWidget(body('1. On the device, open Settings › About and tap Build number seven times.\n2. Open Settings › System › Developer options and turn on '
+                              'USB debugging.\n3. Connect it by USB and tap Allow on the "Allow USB debugging?" prompt.'))
         self.list = QListWidget(); self.list.itemSelectionChanged.connect(self.pick); self.empty = body('Looking again every few seconds…'); self.error = body()
         self.v.addWidget(self.list, 1); self.v.addWidget(self.empty); self.v.addWidget(self.error); self.list.hide()   # the list scrolls on its own, so the button row stays in view
+        # the spare height while the list is hidden: without it every label shared it, the heading sat about 70 px down and the lines floated about 90 px
+        # apart (03-UI-REVIEW top fix 1, wiz-device.png); draw() hands it back to the list once devices show
+        self.v.addStretch(1)
+
+    def redraw(self, doc):   # an ok device step's detail is only the adb path, which means nothing to a player; a not-ok one shows with its fix
+        super().redraw(doc); self.detail.setVisible(not step(doc, self.SID)['ok'])
         self.setButtonText(QWizard.NextButton, 'Skip: install later')
 
     def here(self): z = self.wizard(); return z is not None and z.isVisible() and z.currentPage() is self
@@ -463,7 +469,7 @@ class DevicePage(StepPage):   # D-15, DEV-01: devices --json while this page sho
             for r in rows:
                 it = QListWidgetItem(self.list); w = DeviceRow(r); it.setSizeHint(w.sizeHint()); self.list.setItemWidget(it, w); it.setSelected(r['serial'] in keep)
             self.list.blockSignals(False)
-        self.list.setVisible(bool(rows)); self.empty.setText('No device found yet. Looking again every few seconds…'); self.empty.setVisible(not rows)
+        self.list.setVisible(bool(rows)); self.v.setStretch(self.v.count() - 1, 0 if rows else 1); self.empty.setText('No device found yet. Looking again every few seconds…'); self.empty.setVisible(not rows)
         self.setButtonText(QWizard.NextButton, 'Next' if self.wizard().seen_device else 'Skip: install later')
 
     def pick(self):   # D-15: with several ready devices the selected one is saved for installs; with one there is nothing to choose

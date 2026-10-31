@@ -463,7 +463,8 @@ class Device(unittest.TestCase):   # the device page (D-15, DEV-01): devices --j
         self.assertLessEqual(p.head.geometry().top(), 24)
         steps = next(l for l in p.findChildren(QLabel) if l.text().startswith('1. ')); self.assertTrue(steps.isVisibleTo(p))
         for lab in (l for l in p.findChildren(QLabel) if l.isVisibleTo(p)):
-            natural = lab.heightForWidth(lab.width()) if lab.wordWrap() else lab.sizeHint().height()
+            natural = lab.heightForWidth(lab.width()) if lab.wordWrap() else -1
+            if natural < 0: natural = lab.sizeHint().height()   # heightForWidth is -1 for an empty label (the error line)
             with self.subTest(lab.text()[:30]): self.assertLessEqual(lab.height(), natural + 8)
         self.assertEqual(p.v.stretch(p.v.count() - 1), 1)   # the spare height goes below the labels
         self.assertTrue(until(lambda: p.list.isVisibleTo(p), 3000)); self.assertEqual(p.v.stretch(p.v.count() - 1), 0)   # and to the list once it shows
