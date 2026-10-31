@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 03
 current_phase_name: Host Toolchains and Guided First Run
 status: executing
-stopped_at: Completed 03-07-PLAN.md
-last_updated: "2026-10-31T16:26:21.386Z"
+stopped_at: Completed 03-08-PLAN.md
+last_updated: "2026-10-31T16:34:20.285Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 03 execution started
-state_head: ff22f49b08fe87485921e8b9c5f8594077f60cdb
+state_head: d7b76d7748b6c052225b93c896775702a9431b71
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 35
-  completed_plans: 30
+  completed_plans: 31
   percent: 33
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-10-31)
 ## Current Position
 
 Phase: 03 (Host Toolchains and Guided First Run) — EXECUTING
-Plan: 8 of 12
+Plan: 9 of 12
 Status: Ready to execute
 Last activity: 2026-10-31 — Phase 03 execution started
 
@@ -87,6 +87,7 @@ Progress: [███░░░░░░░] 33%
 | Phase 03 P05 | 8min | 2 tasks | 10 files |
 | Phase 03 P06 | 4 min | 2 tasks | 6 files |
 | Phase 03 P07 | 3 min | 2 tasks | 4 files |
+| Phase 03 P08 | 25min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -169,6 +170,9 @@ Recent decisions affecting current work:
 - [Phase 03]: Push -Z is gated per Adb by a cached hosttools.push_flags: one adb version, asked only when pushing
 - [Phase 03]: gui/shell.py is a second window on gui/firstrun.py's protocol (fetch, recheck, set_ready); it imports nothing from gui/app.py and has no port_a_game in Phase 3
 - [Phase 03]: tests/arch_rules.py 5b keeps gui/firstrun.py and gui/shell.py pure views: stdlib, PySide6 and gui.runner (+ gui.firstrun) only, no open(/write_text(/write_bytes(/QSettings; rule 6 reads hyphenated subcommands and call_json(<owner>, [...]) calls
+- [Phase 03]: smoke_bundle.py bare_env_check runs frozen in fork-release and unfrozen in the suite; a missing tool row fails naming it (D-19)
+- [Phase 03]: The linux-arm64 release job downloads the community NDK through the frozen bundle and requires an ok NDK row with the community note (TOOL-01)
+- [Phase 03]: The D-10 fallback NDK recipe uses a bin/clang wrapper passing -resource-dir and --sysroot in a linux-arm64 host folder, documented only
 
 ### Pending Todos
 
@@ -193,6 +197,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-31T16:26:21.171Z
-Stopped at: Completed 03-07-PLAN.md
+Last session: 2026-10-31T16:34:20.049Z
+Stopped at: Completed 03-08-PLAN.md
 Resume file: None

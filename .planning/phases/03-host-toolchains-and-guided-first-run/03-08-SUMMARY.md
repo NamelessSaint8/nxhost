@@ -121,3 +121,7 @@ None.
 - `QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest discover tests`: 370 tests OK (363 at base + 7 new)
 - `.venv/bin/python tests/arch_rules.py`: all checks passed
 - Acceptance greps: `def bare_env_check` 1, `/usr/bin:/bin` 3, `smoke_bundle.py --community-ndk` in the workflow 1, `def compare` 1, `TOOL-04` 3, `ndk_pin.py` 1, `DEV-01` 2, `HomuHomu833` 1, `Add to app menu` 1
+
+## Self-Check: PASSED
+
+All five task commits (63cf0e0, e9c4fb8, 5468248, 93f275f, b9b0207) are ancestors of HEAD; devtools/ndk_pin.py and the SUMMARY exist.
