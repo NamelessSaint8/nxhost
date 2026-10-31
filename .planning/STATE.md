@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 03
 current_phase_name: Host Toolchains and Guided First Run
 status: executing
-stopped_at: Completed 03-02-PLAN.md
-last_updated: "2026-10-31T15:39:32.361Z"
+stopped_at: Completed 03-03-PLAN.md
+last_updated: "2026-10-31T15:50:26.885Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 03 execution started
-state_head: f6c6c8126ee8f2cb4835acd63d56a2d66187f1e3
+state_head: 5864a0b6c4c7aba07cba652c83dfcfe3b53cb300
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 35
-  completed_plans: 25
+  completed_plans: 26
   percent: 33
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-10-31)
 ## Current Position
 
 Phase: 03 (Host Toolchains and Guided First Run) — EXECUTING
-Plan: 3 of 12
+Plan: 4 of 12
 Status: Ready to execute
 Last activity: 2026-10-31 — Phase 03 execution started
 
@@ -82,6 +82,7 @@ Progress: [███░░░░░░░] 33%
 | Phase 02 P13 | 7 min | 3 tasks | 6 files |
 | Phase 03 P01 | 8 min | 3 tasks | 10 files |
 | Phase 03 P02 | 15min | 3 tasks | 6 files |
+| Phase 03 P03 | 8 min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -151,6 +152,8 @@ Recent decisions affecting current work:
 - [Phase 03]: find_dotnet dedupes candidates by resolved path, keeping the earliest spelling (Homebrew's dotnet link asked once)
 - [Phase 03]: hosttools.source_of falls back to 'known place' for LOCAL_TOOLS and find_dotnet's other fixed folders
 - [Phase 03]: childenv.dotnet is the one env builder for dotnet children; Port.run uses it and Prepare (03-09) must too
+- [Phase 03]: 03-03: a 206 for another offset discards the .part and re-requests without Range; only a 206 whose Content-Range starts at the part size is appended
+- [Phase 03]: 03-03: rate (bytes/s) is added to unit-B progress events in runlog._wrap from upstream's eta, never in the engine subtree
 
 ### Pending Todos
 
@@ -175,6 +178,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-31T15:39:32.177Z
-Stopped at: Completed 03-02-PLAN.md
+Last session: 2026-10-31T15:50:26.688Z
+Stopped at: Completed 03-03-PLAN.md
 Resume file: None
