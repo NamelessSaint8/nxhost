@@ -109,7 +109,7 @@ Plans:
   3. On Linux arm64, setup detects or downloads a community arm64 NDK r27c, checked by hash and a compile probe, and .NET 10, and the host build uses the NDK's `linux-arm64` folder.
   4. On Linux, setup shows the distro adb version and handles or refuses one without `push -Z`, with fix text. Connected devices show their adb state, and `unauthorized`, `offline` and `no permissions` each come with a one-line fix (the udev rules package for `no permissions`).
   5. Launched from Finder or a desktop menu with a minimal PATH, the app finds every tool by absolute path and a port runs.
-**Plans**: 12/12 plans executed
+**Plans**: 12/15 plans executed
 
 Plans:
 **Wave 1**
@@ -133,6 +133,11 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 - [x] 03-11-PLAN.md — Wizard tools page and Setup tab downloads: progress with speed, Cancel, resume, Use my own…, Prepare .NET tools (FRUN-01, TOOL-01, TOOL-03)
+
+**Gap closure** *(from 03-VERIFICATION.md: CR-01, WR-01; review warnings WR-02..WR-06 and UI-review top fixes folded in)*
+- [ ] 03-13-PLAN.md — A download cut off cleanly or mid-chunk is retried and resumed, never hashed short (WR-01); best-effort probe cache and quoted fix text (WR-03, WR-06) (FRUN-01, TOOL-01, wave 1)
+- [ ] 03-14-PLAN.md — No Prepare on a quitting window (WR-05); compact device page; colours through COLOUR and a banner that follows the theme (UI fixes 1 and 3, IN-01) (FRUN-01, FRUN-02, DEV-01, TOOL-02, wave 1)
+- [ ] 03-15-PLAN.md — Wizard saves survive the Setup tab's Save (CR-01); one run per runner and one setup check at a time (WR-04, T-03-35, WR-03); setup limit 150 s (WR-02); nx2android wording (UI fix 2, in part); findings ledger (FRUN-01, FRUN-03, TOOL-01, wave 2)
 **UI hint**: yes
 
 ### Phase 4: Game Library and Per-Game Settings
@@ -180,7 +185,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 |-------|----------------|--------|-----------|
 | 1. Bridge, Bundles and CI | 10/10 | Complete    | 2026-10-30 |
 | 2. Porter Hardening | 13/13 | Complete    | 2026-10-31 |
-| 3. Host Toolchains and Guided First Run | 12/12 | In Progress | - |
+| 3. Host Toolchains and Guided First Run | 12/15 | In Progress | - |
 | 4. Game Library and Per-Game Settings | 0/TBD | Not started | - |
 | 5. Device Manager and Diagnostics | 0/TBD | Not started | - |
 | 6. Switch-Over and Tester Verification | 0/TBD | Not started | - |
