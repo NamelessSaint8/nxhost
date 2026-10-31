@@ -5,7 +5,7 @@
 import html
 
 from PySide6.QtCore import QObject, Qt, QTimer, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QFontDatabase
+from PySide6.QtGui import QColor, QDesktopServices, QFontDatabase, QGuiApplication
 from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QHeaderView, QLabel, QListWidget, QListWidgetItem, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
                                QTableWidget, QTableWidgetItem, QToolBar, QVBoxLayout, QWidget, QWizard, QWizardPage)
 
@@ -266,6 +266,18 @@ class KeysPage(Page):   # D-05/D-06: the files porter found with its verdict, an
 
 
 DOTNET_GUESS = 200 * 2**20   # .NET has no pinned size (porter/pins.py sends 0): about 200 MB
+TOOL_KEYS = {'Android NDK': 'ndk', '.NET SDK': 'dotnet', 'adb': 'adb'}   # each tools row's config key, for Use my own…
+
+
+class ToolCell(QWidget):   # the Tool column: the name, porter's note with '!' in the note colour (D-09), and for a row that is not ok its fix and command, selectable (D-25)
+    def __init__(self, it):
+        super().__init__(); v = QVBoxLayout(self); v.setContentsMargins(4, 4, 4, 4); v.setSpacing(2); bad = not it['ok']
+        self.name = body(it['name']); self.fix = body(it.get('fix') or ''); self.command = body(it.get('command') or ''); self.command.setFont(mono())
+        self.note = QLabel(f'<span style="color:{colour(self, "note")}">!</span> ' + html.escape(it.get('note') or '', quote=False))   # porter's text, escaped
+        self.note.setTextFormat(Qt.RichText); self.note.setWordWrap(True)
+        for x in (self.fix, self.command): x.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.note.setVisible(bool(it.get('note'))); self.fix.setVisible(bad and bool(it.get('fix'))); self.command.setVisible(bad and bool(it.get('command')))
+        for x in (self.name, self.note, self.fix, self.command): v.addWidget(x)
 
 
 class ToolsPage(StepPage):   # D-07, D-21, D-23..D-26: porter's tools rows; Download all missing and Cancel on the window's own fetch run, so its close guard covers it
@@ -273,7 +285,7 @@ class ToolsPage(StepPage):   # D-07, D-21, D-23..D-26: porter's tools rows; Down
 
     def __init__(self):
         super().__init__('Tools for building the app', stretch=False)
-        self.doc, self.hooked, self.mine, self.kn, self.errors, self.log, self.error = None, False, None, '', [], None, None
+        self.doc, self.hooked, self.mine, self.kn, self.errors, self.log, self.error, self.prep, self.retry = None, False, None, '', [], None, None, None, None
         self.v.insertWidget(2, body('A port needs the Android NDK and the .NET SDK. adb is only needed to install on your device. Downloads go to your nx2android folder.'))
         t = self.table = QTableWidget(0, 6); t.setHorizontalHeaderLabels(['', 'Tool', 'Version', 'Source', 'Size or note', '']); t.verticalHeader().setVisible(False)
         t.setEditTriggers(QTableWidget.NoEditTriggers); t.setSelectionMode(QTableWidget.NoSelection)
@@ -291,14 +303,40 @@ class ToolsPage(StepPage):   # D-07, D-21, D-23..D-26: porter's tools rows; Down
         super().redraw(doc); self.doc = doc
         if not self.hooked:   # once; a closed wizard's page is a deleted QObject, which Qt disconnects
             self.hooked = True; self.fetch().event.connect(self.on_event); self.fetch().finished.connect(self.on_finished)
-        items = step(doc, 'tools').get('items') or []; t = self.table; t.setRowCount(len(items))
+        items = step(doc, 'tools').get('items') or []; t = self.table; t.setRowCount(len(items)); self.prep = None
         for i, it in enumerate(items):
             mark, role = ('✓', 'ok') if it['ok'] else ('✗', 'bad') if it.get('required') else ('–', 'note')
             d = it.get('download')
-            cells = (mark, it['name'], it.get('version') or '', it.get('source') or '', (size(d['size']) if d['size'] else 'about 200 MB') if d and not it['ok'] else '')
+            cells = (mark, '', it.get('version') or '', it.get('source') or '', (size(d['size']) if d['size'] else 'about 200 MB') if d and not it['ok'] else '')
             for c, text in enumerate(cells): t.setItem(i, c, QTableWidgetItem(text))
-            t.item(i, 0).setForeground(QColor(colour(self, role)))
+            t.item(i, 0).setForeground(QColor(colour(self, role))); t.setCellWidget(i, 1, ToolCell(it)); t.setCellWidget(i, 5, self.actions(it))
         t.resizeRowsToContents(); self.sync()
+
+    def actions(self, it):   # D-23, D-25: Use my own… on a row that is not ok (with Copy command and Re-check when porter sends a command); Prepare .NET tools on an ok .NET row
+        w = QWidget(); h = QHBoxLayout(w); h.setContentsMargins(4, 2, 4, 2); h.setSpacing(8); key = TOOL_KEYS.get(it['name'])
+
+        def add(text, fn): b = QPushButton(text); b.clicked.connect(lambda _=False: fn(b)); h.addWidget(b); return b
+        if not it['ok']:
+            if it.get('command'): add('Copy command', lambda _b: self.copy_command(it)); add('Re-check', lambda _b: self.wizard().win.recheck())
+            if key: add('Use my own…', lambda b: self.use_own(it, b))
+        elif key == 'dotnet': self.prep = add('Prepare .NET tools', lambda _b: self.prepare())
+        h.addStretch(1); return w
+
+    def copy_command(self, it): QGuiApplication.clipboard().setText(it['command'])   # porter's literal command only (T-03-36)
+
+    def use_own(self, it, b):   # the player's own tool: a folder for the NDK, a file for dotnet and adb; porter checks it on the next setup --json
+        key = TOOL_KEYS[it['name']]
+        path = QFileDialog.getExistingDirectory(self, 'Choose the Android NDK folder') if key == 'ndk' else QFileDialog.getOpenFileName(self, f'Choose {key}')[0]
+        if path: self.save(key, path, b)
+
+    def save(self, key, path, b):   # Use my own… reads saving… and is disabled until porter answers
+        state(b, b, 'saving…', False); self.say('')
+
+        def saved(_obj, _code, fail):
+            state(b, b, 'Use my own…', True)
+            if fail: self.retry = lambda: self.save(key, path, b); self.say(failed(fail), True); return
+            self.wizard().win.recheck()   # the next setup answer redraws the row with porter's verdict
+        call_json(self, ['config', key, path, '--json'], saved)
 
     def total(self):   # the pinned sizes of what porter can download, .NET's 0 counted as about 200 MB
         st = step(self.doc, 'tools'); can = st.get('downloadable') or []
@@ -309,6 +347,7 @@ class ToolsPage(StepPage):   # D-07, D-21, D-23..D-26: porter's tools rows; Down
         f = self.fetch(); run, can = f.running(), self.doc and step(self.doc, 'tools').get('downloadable')
         self.dl.setText(('Cancel .NET preparation' if run_kind(f) == 'prepare' else 'Cancel download') if run else f'Download all missing ({self.total()})')
         self.dl.setVisible(bool(run or can)); self.all_here.setVisible(not run and not can); self.dl.setDefault(False)
+        if self.prep: self.prep.setVisible(not run)
         z = self.wizard()
         if z.currentPage() is self: z.primary(z.currentId())
 
@@ -320,6 +359,8 @@ class ToolsPage(StepPage):   # D-07, D-21, D-23..D-26: porter's tools rows; Down
     def press(self): (self.cancel if self.fetch().running() else self.download)()
 
     def download(self): self.start(['tools', '--download', '--progress', 'json'], 'download')   # D-07: no license dialog, the legal notice covers them
+
+    def prepare(self): self.start(['tools', '--prepare', '--progress', 'json'], 'prepare')   # D-24: restore and build the .NET tools once, so the first port finds them
 
     def start(self, args, kind):
         f = self.fetch()
@@ -344,17 +385,22 @@ class ToolsPage(StepPage):   # D-07, D-21, D-23..D-26: porter's tools rows; Down
     def on_finished(self, code):
         kind, self.mine = self.mine, None; self.bar.hide(); self.sync()
         if code == 130: self.say('cancelled. Download all missing resumes where it stopped.')
-        elif code == 0: self.say('')
+        elif code == 0:
+            self.say('.NET tools are ready.' if kind == 'prepare' else '')
+            if kind == 'download': QTimer.singleShot(0, self, self.prepare)   # a turn later: finished's other listeners see the download end first
         else: self.failure(kind)
         self.wizard().win.recheck()   # porter's verdict on each tool: what finished in a cancelled run shows ✓
 
-    def failure(self, kind):   # porter's cause, escaped, in the problem colour with Open log; a hash mismatch in the fixed font so both hashes read cleanly
-        msg = (self.error or {}).get('msg') or '\n'.join(self.errors) or 'the download failed'
+    def failure(self, kind):   # porter's cause, escaped, with Open log: a download's in the problem colour (a hash mismatch in the fixed font so both hashes read
+        # cleanly), a Prepare's as a '!' note, never a blocker (D-24): the first port prepares the tools itself
+        msg = (self.error or {}).get('msg') or '\n'.join(self.errors) or ('the .NET preparation failed' if kind == 'prepare' else 'the download failed')
         text = html.escape(msg, quote=False).replace('\n', '<br>'); link = ' &nbsp;<a href="log">Open log</a>' if self.log else ''
-        self.say(f'<span style="color:{colour(self, "bad")}">{text}</span>{link}', True, mono() if 'not the expected' in msg else None)
+        if kind == 'prepare': self.say(f'<span style="color:{colour(self, "note")}">!</span> {text}{link}', True)
+        else: self.say(f'<span style="color:{colour(self, "bad")}">{text}</span>{link}', True, mono() if 'not the expected' in msg else None)
 
-    def link(self, href):
+    def link(self, href):   # the status line's links: the failed run's log, or Retry of a failed Use my own… save
         if href == 'log' and self.log: QDesktopServices.openUrl(QUrl.fromLocalFile(self.log))
+        elif href == 'retry' and self.retry: self.retry()
 
 
 def model(r):   # adb's `model:Lenovo_TB320FC device:…` as `Lenovo TB320FC`, else the serial
