@@ -320,5 +320,53 @@ class Keys(unittest.TestCase):   # the prod.keys page (03-12, D-05/D-06): porter
         texts += [t for i in range(p.list.count()) for t in (p.list.item(i).text(), p.list.item(i).toolTip())]
         for t in texts: self.assertNotRegex(t, HEX32)
 
+    def browse(self, p):
+        b = getattr(p, 'browse', None); self.assertIsNotNone(b, 'the keys page has no Browse… button'); return b
+
+    def test_empty(self):
+        w, _, z, p = self.open([])
+        empty = getattr(p, 'empty', None); self.assertIsNotNone(empty, 'the keys page has no empty-state line')
+        self.assertTrue(empty.isVisibleTo(p)); self.assertEqual(empty.text(), 'No prod.keys found in the usual emulator folders. Choose your file with Browse….')
+        self.assertTrue(p.list.count() == 0 or not p.list.isVisibleTo(p))
+        b = self.browse(p); self.assertTrue(b.isVisibleTo(p)); self.assertTrue(b.isEnabled())
+        w, _, z, p = self.open([self.OK]); self.assertFalse(p.empty.isVisibleTo(p)); self.assertTrue(p.list.isVisibleTo(p))
+
+    def test_browse_saves(self):
+        w, calls, z, p = self.open([self.OK]); b = self.browse(p); mine = '/opt/nx2a-test/mine/prod.keys'
+        with mock.patch.object(firstrun.QFileDialog, 'getOpenFileName', return_value=('', '')): b.click()
+        QTest.qWait(50); self.assertEqual(calls.sent('config'), [])   # cancelled: nothing sent
+        with mock.patch.object(firstrun.QFileDialog, 'getOpenFileName', return_value=(mine, 'prod.keys (*.keys)')), mock.patch.object(w, 'recheck') as again:
+            b.click()
+            self.assertEqual(calls.sent('config'), [['config', 'keys', mine, '--json']])
+            self.assertEqual(b.text(), 'saving…'); self.assertFalse(b.isEnabled())
+            self.assertTrue(until(lambda: again.called, 3000))
+        self.assertEqual(b.text(), 'Browse…'); self.assertTrue(b.isEnabled())
+
+    def test_save_fails(self):
+        w, calls, z, p = self.open([self.OK]); calls.fail['config'] = {'timeout': 0, 'error': 'cannot <save>', 'stderr': ''}
+        with mock.patch.object(w, 'recheck') as again:
+            p.list.setCurrentRow(0)
+            err = lambda: getattr(p, 'error', None)
+            self.assertTrue(until(lambda: err() is not None and 'Retry' in err().text(), 3000), 'no failure line with Retry under the list')
+            self.assertIn('cannot &lt;save&gt;', p.error.text())
+            r = self.row(p, 0); self.assertTrue(r.isEnabled()); self.assertEqual(r.detail.text(), self.OK['detail'])
+            self.assertEqual(z.currentId(), firstrun.PAGES.index('keys')); again.assert_not_called()
+            p.error.linkActivated.emit('retry')
+            self.assertEqual(calls.sent('config'), [['config', 'keys', self.OK['path'], '--json']] * 2)
+            b = self.browse(p)
+            with mock.patch.object(firstrun.QFileDialog, 'getOpenFileName', return_value=('/opt/nx2a-test/mine/prod.keys', '')): b.click()
+            self.assertTrue(until(lambda: b.isEnabled() and b.text() == 'Browse…', 3000)); again.assert_not_called()
+
+    def test_next_enabled(self):   # never blocking: whatever porter says of the keys, and while a save is pending
+        for st in ({'ok': False, 'detail': 'missing header_key', 'path': self.BAD['path']}, {'ok': True, 'detail': 'keys up to generation 19', 'path': self.OK['path']}):
+            with self.subTest(st['ok']):
+                w, calls, z, p = self.open([self.OK, self.BAD], **st); calls.hold.add('config')
+                self.assertTrue(z.button(QWizard.NextButton).isEnabled())
+                p.list.setCurrentRow(0); self.assertEqual(len(calls.sent('config')), 1)
+                self.assertTrue(z.button(QWizard.NextButton).isEnabled())
+                b = self.browse(p)
+                with mock.patch.object(firstrun.QFileDialog, 'getOpenFileName', return_value=('/opt/nx2a-test/mine/prod.keys', '')): b.click()
+                self.assertTrue(z.button(QWizard.NextButton).isEnabled()); self.assertTrue(p.isComplete())
+
 
 if __name__ == '__main__': unittest.main()
