@@ -114,6 +114,7 @@ class Errors(unittest.TestCase):
             w.setup.check()
             self.assertTrue(until(lambda: 'Retry' in w.setup.check_msg.text(), 10000))
         self.assertIn('ValueError: &lt;boom&gt;', w.setup.check_msg.text())
+        self.assertIn('nx2android failed', w.setup.check_msg.text()); self.assertNotIn('porter failed', w.setup.check_msg.text())   # UI-REVIEW top fix 2
         self.assertIn('href="retry"', w.setup.check_msg.text())
         ready.assert_called_with(False)
 
@@ -159,8 +160,8 @@ class Errors(unittest.TestCase):
     def test_devices_and_games(self):
         w = self.stand_in('--stderr', 'adb: <bad> cable', '--exit', '1')
         w.port.refresh_devices()
-        self.assertTrue(until(lambda: w.port.device.itemText(0).startswith('porter: '), 10000), w.port.device.itemText(0))
-        self.assertIn('adb: <bad> cable', w.port.device.itemText(0))
+        self.assertTrue(until(lambda: 'adb: <bad> cable' in w.port.device.itemText(0), 10000), w.port.device.itemText(0))
+        self.assertNotIn('porter', w.port.device.itemText(0))   # UI-REVIEW top fix 2: players never see the word porter
         self.assertIn('adb: <bad> cable', w.port.device.itemData(0, app.Qt.ToolTipRole) or '')
         self.assertEqual(w.port.device.itemData(0), '')
         self.assertTrue(hasattr(w.games, 'note'), 'GamesTab has no note')
@@ -171,7 +172,7 @@ class Errors(unittest.TestCase):
             w.setup.download()
             self.assertTrue(until(lambda: 'Retry' in w.setup.dl_step.text(), 10000), w.setup.dl_step.text())
         warn.assert_not_called()
-        self.assertIn('adb: &lt;bad&gt; cable', w.setup.dl_step.text())
+        self.assertIn('adb: &lt;bad&gt; cable', w.setup.dl_step.text()); self.assertNotIn('porter', w.setup.dl_step.text())
         with mock.patch.object(app, 'call_json') as call:
             w.setup.dl_step.linkActivated.emit('retry')
         self.assertEqual(call.call_count, 1)
@@ -355,6 +356,13 @@ class Close(Fake):
         with mock.patch.object(app, 'QMessageBox', side_effect=AssertionError('a dialog')): s.confirm_download([it], 0, None)
         self.assertIs(s.fetch.p, first); self.assertTrue(s.fetch.running()); self.assertEqual(s.dl_btn.text(), 'Cancel download')
 
+    def test_setup_finish_copy(self):   # UI-REVIEW top fix 2: a Prepare finished from the Setup tab reads the wizard's words; neither line says porter
+        w = self.window(); s = w.setup; runner.PORTER = ['-c', 'import sys; sys.exit(0)']
+        for args, line in ((['tools', '--prepare', '--progress', 'json'], firstrun.PREPARED), (['tools', '--download', '--progress', 'json'], 'the tools are ready')):
+            with self.subTest(line):
+                fin = QSignalSpy(s.fetch.finished); s.fetch.start(args); self.assertTrue(fin.wait(10000)); QTest.qWait(50)
+                self.assertEqual(s.dl_step.text(), line); self.assertNotIn('porter', s.dl_step.text())
+
     def test_download_failure_inline(self):
         runner.PORTER = [FAKE, '--']   # the Window's own one-shots
         w = self.window()
@@ -424,8 +432,10 @@ class Timeout(Fake):   # a one-shot that never answers is killed at its own limi
         with mock.patch.object(QMessageBox, 'critical') as box: gui.fatal('[RED] could not copy the engine')
         self.assertEqual(box.call_args[0][1:], ('nx2android', 'could not copy the engine'))
 
-    def test_default_limits(self):
-        self.assertEqual(runner.TIMEOUTS, {'devices': 45, 'doctor': 30, 'inspect': 60, 'profiles': 20, 'setup': 45, 'tools': 60})
+    def test_default_limits(self):   # WR-02: setup runs the NDK probe's two steps (probe.TIMEOUT each) and adb version (15 s); a run killed at the limit caches nothing
+        from porter import probe
+        self.assertEqual(runner.TIMEOUTS, {'devices': 45, 'doctor': 30, 'inspect': 60, 'profiles': 20, 'setup': 150, 'tools': 60})
+        self.assertGreater(runner.TIMEOUTS['setup'], 2 * probe.TIMEOUT + 15)
 
 
 class Downloads(unittest.TestCase):   # the Setup tab's confirm dialog: an untested fallback says so, and index strings are text, not markup
