@@ -160,9 +160,9 @@ def checks(cfg=None, keys=None):
 
 
 def require(cfg=None, keys=None, adb=False):
-    """The checked tools for a port: {'ndk', 'dotnet', 'adb'}; ToolError naming every missing requirement"""
+    """The checked tools for a port: {'ndk', 'dotnet', 'adb', 'notes'} (notes: every passing row's note, for the port's log); ToolError naming every missing requirement"""
     rows = checks(cfg, keys)
     bad = [r for r in rows if not r.ok and (r.required or (adb and r.name == 'adb'))]
     if bad: raise ToolError('missing requirements: ' + '; '.join(f'{r.name}: {r.detail}' + (f' ({r.fix})' if r.fix else '') for r in bad))
     by = {r.name: r for r in rows}
-    return {'ndk': Path(by['Android NDK'].path), 'dotnet': Path(by['.NET SDK'].path), 'adb': Path(by['adb'].path) if by['adb'].ok else None}
+    return {'ndk': Path(by['Android NDK'].path), 'dotnet': Path(by['.NET SDK'].path), 'adb': Path(by['adb'].path) if by['adb'].ok else None, 'notes': [r.note for r in rows if r.ok and r.note]}

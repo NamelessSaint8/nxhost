@@ -87,6 +87,7 @@ class Port:
         o.keys = Path(keys).expanduser().resolve()
         try: self.tools = toolchain.require(self.cfg, str(o.keys), adb=o.install)
         except toolchain.ToolError as e: raise BuildError(str(e)) from e
+        for n in self.tools['notes']: say(n)   # D-09: a community arm64 NDK's port says so in its log
         o.out = Path(o.out or self.cfg.get('out') or o.folder).expanduser().resolve()
         # every child gets this env and the process environment is never written (HARD-06). Windows resolves a bare program name through the parent's PATH, not the child's,
         # so dotnet always runs by absolute path: porter's own calls use self.tools['dotnet'], upstream's build_nx_extract looks it up in this env's PATH.
