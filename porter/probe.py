@@ -1,7 +1,7 @@
 # The compile probe every found NDK gets (D-11): clang --version, then compile and link a one-line C file for aarch64-linux-android29. It catches an NDK built for
 # another CPU (Exec format error), lost exec bits and macOS quarantine before a 20-minute port does. A pass is cached by clang's path, mtime and size in
 # <user dir>/probe.json; a failure is never cached, so a fixed NDK passes on the next check. No shell, a 60 s limit, run in a temp folder (never the bundle).
-import errno, json, os, re, subprocess, sys, tempfile
+import errno, json, os, re, shlex, subprocess, sys, tempfile
 from pathlib import Path
 
 from porter import hosttools
@@ -46,7 +46,9 @@ def probe(ndk):
             (Path(t) / 'probe.c').write_text(SOURCE + '\n')
             r = subprocess.run([str(c), '--target=aarch64-linux-android29', '-fuse-ld=lld', 'probe.c', '-o', 'probe'], cwd=t, capture_output=True, text=True, errors='replace', timeout=TIMEOUT)
     except PermissionError:
-        fix = f'chmod +x {c.parent}/*' + (f'; if it was downloaded in a browser: xattr -dr com.apple.quarantine {ndk}' if sys.platform == 'darwin' else '')
+        # quoted, the glob outside: porter's own NDK on a Mac lives under ~/Library/Application Support, whose space split the command (03-REVIEW WR-06)
+        xattr = f'; if it was downloaded in a browser: xattr -dr com.apple.quarantine {shlex.quote(str(ndk))}' if sys.platform == 'darwin' else ''
+        fix = f'chmod +x {shlex.quote(str(c.parent))}/*' + xattr
         return fail(f'cannot run {c}: not executable', fix)
     except subprocess.TimeoutExpired: return fail(f'{c} timed out after {TIMEOUT} s', 'run the check again; if it keeps timing out, use another copy of the NDK')
     except OSError as e:
@@ -55,7 +57,15 @@ def probe(ndk):
     if r.returncode: return fail('cannot link an Android program: ' + (r.stderr.strip().splitlines() or [f'exit code {r.returncode}'])[-1], 'install NDK r27c (an unmodified copy for this computer)')
     detail = f'{version} links an Android arm64 program'
     c2 = _load(); c2[key] = {'mtime': st.st_mtime_ns, 'size': st.st_size, 'version': version, 'detail': detail}
-    p = _cache(); tmp = p.with_suffix('.tmp'); tmp.write_text(json.dumps(c2, indent=1), encoding='utf-8'); tmp.replace(p)   # as config.save
+    # best-effort, through a temp file of this process's own: every finished download starts two `setup --json` runs probing the same new NDK, and with one
+    # shared temp name the second replace failed and that run answered an error (03-REVIEW WR-03). Unwritable costs a re-probe next time, nothing more
+    p, tmp = _cache(), None
+    try:
+        fd, tmp = tempfile.mkstemp(dir=p.parent, prefix='.probe-', suffix='.tmp')
+        with os.fdopen(fd, 'w', encoding='utf-8') as f: f.write(json.dumps(c2, indent=1))
+        os.replace(tmp, p)
+    except OSError:
+        if tmp: Path(tmp).unlink(missing_ok=True)
     return {'ok': True, 'detail': detail, 'version': version, 'fix': ''}
 
 
