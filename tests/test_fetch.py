@@ -219,4 +219,58 @@ class Unpack(unittest.TestCase):   # fetch._install on crafted archives: refused
         self.assertTrue((dest / 'dotnet').is_file()); self.assertTrue((dest / 'sdk' / 'x').is_file()); self.assertFalse((self.root / '.x.unpack').exists())
 
 
+class LinkRule(unittest.TestCase):   # fetch._link_refusal and fetch._top called directly, no disk, so it runs on every OS
+    def setUp(self):
+        from porter import fetch, pins
+        self.fetch, self.pins = fetch, pins
+
+    def test_top(self):
+        top = self.fetch._top
+        self.assertEqual(top(['top/a', 'top/b/c'], 'x'), 'top'); self.assertEqual(top(['top/a'], 'dotnet'), ''); self.assertEqual(top(['dotnet', 'sdk/x'], 'x'), '')
+        self.assertEqual(top(['tool'], 'x'), ''); self.assertEqual(top(['.', './sdk/x', './sdk/y'], 'x'), 'sdk')
+
+    def test_refusals(self):
+        chain = {f'l{k}': f'l{k + 1}' for k in range(41)} | {'l41': 'f'}   # 42 links: 41 substitutions resolving l0
+        for names, links, top, want in ((['top/up'], {'top/up': '../adb'}, 'top', 'top/up → ../adb leaves the installed folder'),
+                                        (['l'], {'l': '/etc'}, '', 'leaves the installed folder'), (['a', 'b'], {'a': 'b', 'b': 'a'}, '', 'more than 40 links'),
+                                        (['s'], {'s': 's'}, '', 'more than 40 links'), ([*chain, 'f'], chain, '', 'more than 40 links'),
+                                        (['d/x', 'd'], {'d': '.'}, '', 'member d/x is under link d'), (['A/', 'a'], {'a': 'x'}, '', 'shares its name'),
+                                        (['d', 'x'], {'d': 'sub', 'x': 'D/y'}, '', 'names link d in another case'), (['l'], {'l': 'café'}, '', 'not a plain ASCII path'),
+                                        (['l'], {'l': ''}, '', 'not a plain ASCII path'),
+                                        (['top/d1/d2/b', 'top/a'], {'top/d1/d2/b': '../..', 'top/a': 'd1/d2/b/../top/y'}, 'top', 'top/a')):
+            with self.subTest(want=want, links=list(links)[:2]): self.assertIn(want, self.fetch._link_refusal(names, links, top) or '')
+
+    def test_inside_passes(self):
+        chain = {f'l{k}': f'l{k + 1}' for k in range(40)} | {'l40': 'f'}   # 41 links: 40 substitutions resolving l0, the cap
+        folder = {'top/lib': 'lib64', 'top/inc/x.so': '../lib/libx.so', 'top/bin/clang': 'clang-18', 'top/bin/ld.lld': 'lld', 'top/bin/ld': 'ld.lld'}
+        for names, links, top in ((['top/lib/libc++.so', 'top/lib/libc++.so.1', 'top/shader/x/libc++.so'],
+                                   {'top/lib/libc++.so.1': 'libc++.so', 'top/shader/x/libc++.so': '../../lib/libc++.so'}, 'top'),   # the NDK's shader-tools shape
+                                  (['top/lib64/libx.so', 'top/bin/clang-18', 'top/bin/lld', *folder], folder, 'top'),
+                                  (['f', 'd', 'y'], {'d': '.', 'y': 'd/d/f'}, ''),   # a link to its own folder, and a path through it twice
+                                  ([*chain, 'f'], chain, '')):
+            with self.subTest(links=list(links)[:2]): self.assertIsNone(self.fetch._link_refusal(names, links, top))
+
+    def test_rooted_at_installed_folder(self):   # the root is the folder that is installed, not the unpack folder (CR-04)
+        args = (['top/up', 'top/x'], {'top/up': '../top/x'})
+        self.assertIn('leaves the installed folder', self.fetch._link_refusal(*args, 'top') or ''); self.assertIsNone(self.fetch._link_refusal(*args, ''))
+
+    def fixture(self): return json.loads((REPO / 'tests' / 'fixtures' / 'zip_links.json').read_text(encoding='utf-8'))
+
+    def test_pinned_archives_pass(self):   # the real link tables of every pinned zip, read once by devtools/zip_links.py
+        table, p = self.fixture(), self.pins
+        pinned = {Path(url).name: h for pin in (p.NDK, p.PLATFORM_TOOLS, p.DOTNET) for url, _, _, h in pin['files'].values() if url.endswith('.zip')}
+        self.assertEqual(pinned, {n: e['hash'] for n, e in table.items()}, 'a pin moved: run `python devtools/zip_links.py` to regenerate tests/fixtures/zip_links.json')
+        for name, e in table.items():
+            with self.subTest(name): self.assertIsNone(self.fetch._link_refusal(list(e['links']), e['links'], e['top']))
+        self.assertGreater(sum(len(e['links']) for e in table.values()), 0)
+
+    def test_real_links_one_level_up_refused(self):   # so test_pinned_archives_pass can fail on the real names
+        for name, e in self.fixture().items():
+            if not e['links']: continue
+            n = next(iter(e['links'])); depth = len(self.fetch._parts(n)) - 1 - (1 if e['top'] else 0)
+            with self.subTest(name):
+                self.assertIsNone(self.fetch._link_refusal([n], {n: '../' * depth + 'x'}, e['top']))
+                self.assertIn('leaves the installed folder', self.fetch._link_refusal([n], {n: '../' * (depth + 1) + 'x'}, e['top']) or '')
+
+
 if __name__ == '__main__': unittest.main()

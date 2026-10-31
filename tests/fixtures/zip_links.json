@@ -1,0 +1,111 @@
+{
+ "android-ndk-r27c-darwin.zip": {
+  "hash": "0217c10ffbec496bb9fbfbb3c6fc2477c6b77297",
+  "links": {
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/bin/clang": "clang-18",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/bin/clang++": "clang",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/bin/clang-cl": "clang",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/bin/ld": "ld.lld",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/bin/ld.lld": "lld",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/bin/ld64.lld": "lld",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/bin/lld-link": "lld",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-addr2line": "llvm-symbolizer",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-dlltool": "llvm-ar",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-lib": "llvm-ar",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ranlib": "llvm-ar",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-readelf": "llvm-readobj",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-strip": "llvm-objcopy",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-windres": "llvm-rc",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/bin/wasm-ld": "lld",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/lib/libxml2.dylib": "libxml2.2.dylib",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/lib/python3.11/site-packages/lldb/_lldb.cpython-311-darwin.so": "../../../liblldb.dylib",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/lib/python3.11/site-packages/lldb/lldb-argdumper": "../../../../bin/lldb-argdumper",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/python3/bin/python3": "python3.11",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/python3/bin/python3-intel64": "python3.11-intel64",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/python3/lib/pkgconfig/python3-embed.pc": "python-3.11-embed.pc",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/python3/lib/pkgconfig/python3.pc": "python-3.11.pc",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/darwin-x86_64/python3/share/man/man1/python3.1": "python3.11.1"
+  },
+  "members": 9177,
+  "top": "android-ndk-r27c",
+  "url": "https://dl.google.com/android/repository/android-ndk-r27c-darwin.zip"
+ },
+ "android-ndk-r27c-linux.zip": {
+  "hash": "090e8083a715fdb1a3e402d0763c388abb03fb4e",
+  "links": {
+   "android-ndk-r27c/shader-tools/linux-x86_64/libc++.so": "../../toolchains/llvm/prebuilt/linux-x86_64/lib/libc++.so",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/clang": "clang-18",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++": "clang",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/ld": "ld.lld",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/ld.lld": "lld",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/ld64.lld": "lld",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/lld-link": "lld",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-addr2line": "llvm-symbolizer",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-dlltool": "llvm-ar",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-lib": "llvm-ar",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib": "llvm-ar",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf": "llvm-readobj",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip": "llvm-objcopy",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-windres": "llvm-rc",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/wasm-ld": "lld",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/lib/i386-unknown-linux-gnu/libc++.so.1": "libc++.so",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/lib/i386-unknown-linux-gnu/libc++abi.so.1": "libc++abi.so",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/lib/libc++.a": "x86_64-unknown-linux-gnu/libc++.a",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/lib/libc++.so": "x86_64-unknown-linux-gnu/libc++.so",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/lib/libc++.so.1": "x86_64-unknown-linux-gnu/libc++.so.1",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/lib/libc++abi.a": "x86_64-unknown-linux-gnu/libc++abi.a",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/lib/libc++abi.so.1": "x86_64-unknown-linux-gnu/libc++abi.so.1",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/lib/libunwind.so": "x86_64-unknown-linux-gnu/libunwind.so",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/lib/libxml2.so": "libxml2.so.2",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/lib/python3.11/site-packages/lldb/_lldb.cpython-311-x86_64-linux-gnu.so": "../../../liblldb.so",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/lib/python3.11/site-packages/lldb/lldb-argdumper": "../../../../bin/lldb-argdumper",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/lib/x86_64-unknown-linux-gnu/libc++.so.1": "libc++.so",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/lib/x86_64-unknown-linux-gnu/libc++abi.so.1": "libc++abi.so",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/musl/lib/i686-unknown-linux-musl/libc++.so.1": "libc++.so",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/musl/lib/x86_64-unknown-linux-musl/libc++.so.1": "libc++.so",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/python3/bin/python3": "python3.11",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/python3/lib/libpython3.11.so": "libpython3.11.so.1.0",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/python3/lib/pkgconfig/python3-embed.pc": "python-3.11-embed.pc",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/python3/lib/pkgconfig/python3.pc": "python-3.11.pc",
+   "android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/python3/share/man/man1/python3.1": "python3.11.1"
+  },
+  "members": 9277,
+  "top": "android-ndk-r27c",
+  "url": "https://dl.google.com/android/repository/android-ndk-r27c-linux.zip"
+ },
+ "android-ndk-r27c-windows.zip": {
+  "hash": "ac5f7762764b1f15341094e148ad4f847d050c38",
+  "links": {},
+  "members": 8386,
+  "top": "android-ndk-r27c",
+  "url": "https://dl.google.com/android/repository/android-ndk-r27c-windows.zip"
+ },
+ "dotnet-sdk-10.0.403-win-x64.zip": {
+  "hash": "7a114c318fa7f1d9822991b534b2814d0e78386ceda816b371f5141acefe741d87ccb606ede06cadac8f9ac5070e32b708a67bbd1619ff5e5a7858a27874ef48",
+  "links": {},
+  "members": 5577,
+  "top": "",
+  "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.403/dotnet-sdk-10.0.403-win-x64.zip"
+ },
+ "platform-tools_r37.0.1-darwin.zip": {
+  "hash": "6ae73f4de6452dc57e62ec02b68eed92a4c21661",
+  "links": {},
+  "members": 14,
+  "top": "platform-tools",
+  "url": "https://dl.google.com/android/repository/platform-tools_r37.0.1-darwin.zip"
+ },
+ "platform-tools_r37.0.1-linux.zip": {
+  "hash": "477254aa5f903c15cf51001717bdf347fb6b53e0",
+  "links": {},
+  "members": 12,
+  "top": "platform-tools",
+  "url": "https://dl.google.com/android/repository/platform-tools_r37.0.1-linux.zip"
+ },
+ "platform-tools_r37.0.1-win.zip": {
+  "hash": "e03e78b1d80b396f1c3358e31251cb31740e1110",
+  "links": {},
+  "members": 15,
+  "top": "platform-tools",
+  "url": "https://dl.google.com/android/repository/platform-tools_r37.0.1-win.zip"
+ }
+}
