@@ -1,5 +1,6 @@
 # Downloading the toolchains a port needs, for a player who has none (`porter tools --download`, the Setup tab's Download button): the files pinned in
-# porter/pins.py (Android NDK r27c and platform-tools from Google, the .NET SDK 10 from Microsoft), each checked against its pinned hash. When a vendor no longer
+# porter/pins.py (Android NDK r27c and platform-tools from Google, the community r27c build on Linux arm64, the .NET SDK 10 from Microsoft), each checked against its
+# pinned hash; Linux arm64 gets no platform-tools (Google ships none: the distribution's adb). When a vendor no longer
 # serves a pinned file (404/410), platform-tools and .NET take the vendor's newest (same .NET major) checked against the vendor's listed hash, marked untested;
 # the NDK never falls back. Then unpacked into the player's nx2android folder (paths.player_tools()), where toolchain.find_* look, and the settings point at it.
 # The tool ships none of them: they come from their makers, under their licenses (LICENSES).
@@ -7,7 +8,7 @@ import hashlib, json, os, platform, shutil, stat, sys, tarfile, urllib.error, ur
 from dataclasses import dataclass
 from pathlib import Path
 
-from porter import config, pins, toolchain, tls
+from porter import config, hosttools, pins, toolchain, tls
 from porter.paths import player_tools
 from porter.upstream import BuildError, PROG
 
@@ -28,7 +29,7 @@ class Item:
     url: str
     size: int
     hash: str
-    algo: str      # 'sha1' / 'sha512'
+    algo: str      # 'sha1' / 'sha256' / 'sha512'
     folder: str    # under player_tools(): android-ndk-r27c, dotnet, platform-tools
     license: str
     untested: bool = False   # not the pinned file: the vendor's newest, or a host with no pinned row
@@ -45,6 +46,9 @@ def _head(url):   # the size a HEAD gives (0 when the server names none); a gone
 
 
 def _google_os(): return {'win32': 'windows', 'darwin': 'macosx'}.get(sys.platform, 'linux')
+
+
+def _ndk_host(): return 'linux-arm64' if hosttools.linux_arm64() else _google_os()   # pins.NDK's row: the community build on Linux arm64 (D-08)
 
 
 def _dotnet_rid():
@@ -78,20 +82,22 @@ def _dotnet():
 
 def _pinned(name):
     """(version, url, size, algo, hash) of the pinned file for this host, or None: no row (the index path, untested)"""
-    pin, host = {'Android NDK': (pins.NDK, _google_os()), 'adb': (pins.PLATFORM_TOOLS, _google_os()), '.NET SDK': (pins.DOTNET, _dotnet_rid())}[name]
+    pin, host = {'Android NDK': (pins.NDK, _ndk_host()), 'adb': (pins.PLATFORM_TOOLS, _google_os()), '.NET SDK': (pins.DOTNET, _dotnet_rid())}[name]
     row = pin['files'].get(host)
     return (pin['version'], *row) if row else None
 
 
 def missing(cfg=None):
-    """The doctor's rows a download can fix: NDK r27c, .NET SDK 10, adb"""
+    """The doctor's rows a download can fix: NDK r27c, .NET SDK 10, adb (not on Linux arm64: the setup row shows the distribution's install command, D-25)"""
     rows = {r.name: r for r in toolchain.checks(cfg)}
-    return [n for n in ('Android NDK', '.NET SDK', 'adb') if not rows[n].ok]
+    return [n for n in ('Android NDK', '.NET SDK', 'adb') if not rows[n].ok and not (n == 'adb' and hosttools.linux_arm64())]
 
 
 def plan(names=None):
     """The Items to download: the missing tools (or `names`), with their sizes. The pinned file first; the vendor's newest only when it is gone, marked untested"""
     names = missing() if names is None else names
+    if 'adb' in names and hosttools.linux_arm64():   # Google's linux platform-tools are x86-64 only
+        raise BuildError("Google ships no Android platform-tools for Linux arm64: install your distribution's adb package (Setup shows the command), then check again")
     out, index = [], None
     for n in names:
         if p := _pinned(n):
@@ -117,7 +123,8 @@ def _download(it, dest):   # to dest, counting bytes and hashing as it goes; a w
             f.write(chunk); h.update(chunk); done += len(chunk); PROG.set(done=done)
     if (got := h.hexdigest().lower()) != it.hash.lower():
         part.unlink(missing_ok=True)
-        raise BuildError(f'{Path(it.url).name}: its {it.algo} is {got}, not the expected {it.hash} (from {it.url}): try again, and report it if it repeats')
+        fix = 'wait for a pin bump of porter/pins.py, or point Setup at your own NDK (Use my own…)' if it.name == 'Android NDK' else 'try again, and report it if it repeats'
+        raise BuildError(f'{Path(it.url).name}: its {it.algo} is {got}, not the expected {it.hash} (from {it.url}): {fix}')
     part.replace(dest)
 
 
