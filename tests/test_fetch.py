@@ -210,6 +210,27 @@ class Unpack(unittest.TestCase):   # fetch._install on crafted archives: refused
             self.assertEqual((dest / 'bin' / 'tool').stat().st_mode & 0o777, 0o755)
             self.assertEqual(os.readlink(dest / 'lib' / 'libc++.so.1'), 'libc++.so'); self.assertTrue((dest / 'shader' / 'x' / 'libc++.so').resolve().is_file())
 
+    def test_failed_move_keeps_old_toolchain(self):   # WR-05: delete then replace left a half-deleted toolchain on Windows when a file was in use, and config still points at it
+        self.addCleanup(shutil.rmtree, self.root / '.x.old', True)
+        dest, old, unpack = self.root / 'x', self.root / '.x.old', self.root / '.x.unpack'
+        self.fetch._install(self.item, evil_zip(self.arcs / 'old.zip', [('top/old.txt', None, 0o644)]))
+        with self.assertRaises(self.BuildError): self.fetch._install(self.item, evil_zip(self.arcs / 'sib.zip', [('top/bin/tool', None, 0o755), ('top/up', '../adb', 0)]))
+        self.assertTrue((dest / 'old.txt').is_file())
+        new, replace = evil_zip(self.arcs / 'new.zip', [('top/new.txt', None, 0o644)]), Path.replace
+        def boom(p, target):
+            if Path(target) == dest and '.unpack' in str(p): raise OSError('in use')
+            return replace(p, target)
+        with mock.patch.object(self.fetch.Path, 'replace', boom), self.assertRaises(OSError): self.fetch._install(self.item, new)
+        self.assertTrue((dest / 'old.txt').is_file()); self.assertFalse(old.exists()); self.assertFalse(unpack.exists())
+        self.fetch._install(self.item, new)
+        self.assertTrue((dest / 'new.txt').is_file()); self.assertFalse((dest / 'old.txt').exists()); self.assertFalse(old.exists())
+
+    def test_cut_off_move_restored(self):   # WR-05: a move cut off between its two renames (SIGKILL, power loss) leaves only the aside copy, which the next install puts back
+        self.addCleanup(shutil.rmtree, self.root / '.x.old', True)
+        (self.root / '.x.old').mkdir(); (self.root / '.x.old' / 'old.txt').write_text('x')
+        with self.assertRaises(self.BuildError): self.fetch._install(self.item, evil_zip(self.arcs / 'sib.zip', [('top/bin/tool', None, 0o755), ('top/up', '../adb', 0)]))
+        self.assertTrue((self.root / 'x' / 'old.txt').is_file()); self.assertFalse((self.root / '.x.old').exists())
+
     def test_tar_refused(self):
         for members in ([('../x', tarfile.REGTYPE, '')], [('/abs', tarfile.REGTYPE, '')], [('l', tarfile.SYMTYPE, '/etc')], [('h', tarfile.LNKTYPE, '../outside')]):
             with self.subTest(members=members): self.refused(evil_tar(self.arcs / 'bad.tar.gz', [('ok', tarfile.REGTYPE, ''), *members]))
