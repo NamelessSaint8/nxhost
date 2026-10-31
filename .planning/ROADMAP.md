@@ -109,7 +109,7 @@ Plans:
   3. On Linux arm64, setup detects or downloads a community arm64 NDK r27c, checked by hash and a compile probe, and .NET 10, and the host build uses the NDK's `linux-arm64` folder.
   4. On Linux, setup shows the distro adb version and handles or refuses one without `push -Z`, with fix text. Connected devices show their adb state, and `unauthorized`, `offline` and `no permissions` each come with a one-line fix (the udev rules package for `no permissions`).
   5. Launched from Finder or a desktop menu with a minimal PATH, the app finds every tool by absolute path and a port runs.
-**Plans**: 11 plans
+**Plans**: 12 plans
 
 Plans:
 **Wave 1**
@@ -119,12 +119,13 @@ Plans:
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 03-03-PLAN.md — Community linux-arm64 NDK pin, no x86 platform-tools on arm64, Range resume and cancel-safe `.part`, `rate` on progress, macOS privacy message (TOOL-01, TOOL-02, FRUN-01)
 - [ ] 03-04-PLAN.md — NDK compile probe and community note, adb version/-Z/floor rows, distro adb command, build.py's linux-arm64 host folder (TOOL-01, TOOL-03)
-- [ ] 03-05-PLAN.md — gui/firstrun.py: banner, non-modal wizard, legal and prod.keys pages, Setup tab on setup --json with Run setup (FRUN-01, FRUN-02, FRUN-03)
+- [ ] 03-05-PLAN.md — gui/firstrun.py: banner, non-modal wizard, legal page and the other pages' step text, Setup tab on setup --json with Run setup (FRUN-01, FRUN-02, FRUN-03)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 03-06-PLAN.md — adb device states parsed whole, one-line distro-aware fixes in `devices --json`, `-Z` only for adb 30+ (DEV-01, TOOL-03)
-- [ ] 03-07-PLAN.md — The new shell (`python -m gui.shell`) beside today's window, reusing gui/firstrun.py (FRUN-02, FRUN-03)
+- [ ] 03-07-PLAN.md — The new shell (`python -m gui.shell`) beside today's window, reusing gui/firstrun.py; arch rules for both first-run views (FRUN-02, FRUN-03)
 - [ ] 03-08-PLAN.md — Bare-PATH bundle smoke, arm64 community NDK download and probe in the release workflow, pin watcher, release-check rows, INSTALL.md (TOOL-04, TOOL-01)
+- [ ] 03-12-PLAN.md — Wizard prod.keys page: found key files with porter's verdict and generation, Browse…, save through `config keys` and re-check (FRUN-01)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 - [ ] 03-09-PLAN.md — Tool facts in setup --json (sizes, sources, arm64 adb command), `tools --prepare` (Prepare .NET tools) (FRUN-01, TOOL-01, TOOL-02, TOOL-03)

@@ -489,18 +489,21 @@ The probe fails on a stub NDK. That is fine: D-19 checks that each row is *found
 | A7 | `clang --version` of the community build prints `Android (36531653132, +pgo, -bolt, +lto, +mlgo, based on r522817c) clang version 18.0.3 …` (vendor string found in the binary, `AndroidVersion.txt` says 18.0.3) | Pattern 7 / D-09 note | Low: the note shows whatever the probe reads. **The executor must run the probe on an arm64 host** |
 | A8 | Ubuntu's `dotnet` package lives in `/usr/lib/dotnet`, Fedora's in `/usr/lib64/dotnet` | Pattern 3 | Low: PATH covers them in a terminal; `--list-sdks` gives the root anyway |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Literal `rate` field (D-26)**
    - What we know: `progress` already has `eta`, `done`, `total`, `elapsed` [VERIFIED: nxnative/scripts/build_ipa_from_nsp.py:155-158]. Upstream's emitter builds a fixed dict.
    - Unclear: whether the developer wants a `rate` key in the protocol or only the speed on screen.
    - Recommendation: show `(total - done) / eta` in the GUI. If a field is required, add `'rate'` to `_json_progress` (one line in the subtree) and record it in `docs/ARCHITECTURE.md`. This one is reversible.
+   - **RESOLVED (03-03 Task 3):** D-26 asks porter for the field, so porter adds it: `porter/runlog.py`'s `_wrap` puts `rate` = round((total - done) / eta) on byte `progress` events that have an eta. No subtree edit; documented in `docs/ARCHITECTURE.md`.
 2. **Community probe on real arm64**
    - What we know: layout, revision, glibc 2.29, the alias links and the archive safety pass were all measured here.
    - Unclear: the actual `clang --version` line, and whether the link step succeeds on Ubuntu 24.04 arm64.
    - Recommendation: a CI step on `ubuntu-24.04-arm` in `fork-release.yml` (or a manual dispatch job): `porter tools --download --only ndk` then `porter setup --json`, asserting the NDK row is ok. Cost: 128 MB per run.
+   - **RESOLVED (03-08 Task 2):** the release workflow's linux-arm64 job runs `smoke_bundle.py --community-ndk`, which downloads the community NDK and checks that `setup --json`'s NDK row is ok with the community note. A tester UAT row covers a real machine (03-VALIDATION.md, Manual-Only). The full arm64 port parity check stays in Phase 6 (VER-02).
 3. **`tools --download` config writes**
    - Recommendation: keep `config.set_value` after install (today's behaviour). With D-16, `player_tools()` is found anyway, but the explicit config makes Setup's "source" read "downloaded" rather than a guess, and D-13 order puts configured first.
+   - **RESOLVED (03-03 Task 2):** kept. `fetch.download` still calls `config.set_value` after each install.
 
 ## Environment Availability
 
