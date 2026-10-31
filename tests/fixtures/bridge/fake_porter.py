@@ -1,6 +1,6 @@
 # Stands in for `python -m porter` in tests/test_bridge.py (runner.PORTER points at it): fake_porter.py [options] -- <porter arguments>.
 # A one-shot command (doctor, devices, profiles, tools, inspect, config, desktop-entry) prints [], and setup prints setup_ready.json (beside this script),
-# so a Window starts cleanly on a ready setup. --tree sets up the stop channel with
+# so a Window starts cleanly on a ready setup; `tools --download` and `tools --prepare` are long runs, like a port. --tree sets up the stop channel with
 # porter.procs.setup exactly as porter does, then holds a child (inside the run's tree) and a detached process (outside it) until it is stopped.
 #   --tree          the tree above; prints {"ev":"pids","child","detached"} and a stage event, then waits (a one-shot still answers [], so a Window starts)
 #   --hang          --tree for a one-shot too: it never answers (gui/runner.call_json's timeout)
@@ -34,7 +34,7 @@ def main():
     o, cmd = ap.parse_args(argv[:i] if i >= 0 else []), argv[i + 1:]
     if o.stderr: sys.stderr.buffer.write(o.stderr.encode().decode('unicode_escape').encode('latin-1') + b'\n'); sys.stderr.flush()   # raw bytes: a test's \xff
     if o.fixture: sys.stdout.buffer.write(Path(o.fixture).read_bytes()); sys.stdout.flush(); return o.exit
-    if cmd and cmd[0] in ONE_SHOT and not o.hang and not (cmd[0] == 'tools' and '--download' in cmd):
+    if cmd and cmd[0] in ONE_SHOT and not o.hang and not (cmd[0] == 'tools' and ('--download' in cmd or '--prepare' in cmd)):
         if not o.exit:
             if cmd[0] == 'setup': sys.stdout.buffer.write((Path(__file__).parent / 'setup_ready.json').read_bytes()); sys.stdout.flush()
             else: print('[]', flush=True)

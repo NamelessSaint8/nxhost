@@ -6,8 +6,8 @@ import html
 
 from PySide6.QtCore import QObject, Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QFontDatabase
-from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QSizePolicy, QTableWidgetItem, QToolBar, QVBoxLayout,
-                               QWidget, QWizard, QWizardPage)
+from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QHeaderView, QLabel, QListWidget, QListWidgetItem, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
+                               QTableWidget, QTableWidgetItem, QToolBar, QVBoxLayout, QWidget, QWizard, QWizardPage)
 
 from gui.runner import call_json
 
@@ -38,6 +38,24 @@ def size(b):
     for u, d in (('GB', 2**30), ('MB', 2**20), ('KB', 2**10)):
         if b >= d: return f'{b / d:.1f} {u}'
     return f'{b} B'
+
+
+def time_left(eta):   # D-26: porter's eta in s, rounded to whole minutes
+    if eta is None: return ''
+    if eta < 60: return 'less than a minute left'
+    m = round(eta / 60); return f'{m} min left' if m < 60 else f'{m // 60} h {m % 60} min left'
+
+
+def progress_line(ev, kn=''):   # `[k/n] <name> · <step> · <done> / <total> · <speed>/s · <time left>`, the parts porter did not send dropped; the tools page and the Setup tab
+    b, done, total = ev.get('unit') == 'B', ev.get('done'), ev.get('total')
+    line = ' · '.join(filter(None, (ev.get('name'), ev.get('step'), f'{size(done)} / {size(total)}' if b and done is not None and total else '',
+                                    f'{size(ev["rate"])}/s' if b and ev.get('rate') else '', time_left(ev.get('eta')))))
+    return ' '.join(filter(None, (kn, line)))
+
+
+def run_kind(fetch):   # what the window's fetch run does: 'prepare', 'download', or None when nothing runs
+    if not fetch.running() or fetch.p is None: return None
+    a = fetch.p.arguments(); return 'prepare' if '--prepare' in a else 'download' if '--download' in a else None
 
 
 def mono():   # commands, paths and hashes: the platform's fixed font at 9 pt, as the Port log
@@ -115,11 +133,13 @@ class Wizard(QWizard):   # non-modal, shown with show() and never exec(); Skip s
     def redraw(self, doc):
         for pg in self.pages.values(): pg.redraw(doc)
 
-    def moved(self, i):   # Back, Next or a jump: the device page polls only while it shows; on the done page Port a game, not Close setup, is the default
-        self.pages['device'].moved(i == PAGES.index('device'))
-        port = i == PAGES.index('done') and self.pages['done'].port.isVisibleTo(self.pages['done'])
-        self.setOption(QWizard.NoDefaultButton, port)   # else QWizard makes its Finish button the default again on every page switch
-        if port: self.pages['done'].port.setDefault(True)
+    def moved(self, i):   # Back, Next or a jump: the device page polls only while it shows
+        self.pages['device'].moved(i == PAGES.index('device')); self.primary(i)
+
+    def primary(self, i):   # a page's own primary button (Port a game, Download all missing), when it shows one, is the default rather than Next or Close setup
+        b = getattr(self.page(i), 'primary', lambda: None)()
+        self.setOption(QWizard.NoDefaultButton, b is not None)   # else QWizard makes its own button the default again on every page switch
+        if b: b.setDefault(True)
 
     def done(self, r):   # every way out (Skip setup, close box, Esc, Close setup) comes here
         self.pages['device'].stop(); super().done(r)
@@ -245,9 +265,96 @@ class KeysPage(Page):   # D-05/D-06: the files porter found with its verdict, an
         call_json(self, ['config', 'keys', path, '--json'], saved)
 
 
-class ToolsPage(StepPage):
+DOTNET_GUESS = 200 * 2**20   # .NET has no pinned size (porter/pins.py sends 0): about 200 MB
+
+
+class ToolsPage(StepPage):   # D-07, D-21, D-23..D-26: porter's tools rows; Download all missing and Cancel on the window's own fetch run, so its close guard covers it
     SID = 'tools'
-    def __init__(self): super().__init__('Tools for building the app')
+
+    def __init__(self):
+        super().__init__('Tools for building the app', stretch=False)
+        self.doc, self.hooked, self.mine, self.kn, self.errors, self.log, self.error = None, False, None, '', [], None, None
+        self.v.insertWidget(2, body('A port needs the Android NDK and the .NET SDK. adb is only needed to install on your device. Downloads go to your nx2android folder.'))
+        t = self.table = QTableWidget(0, 6); t.setHorizontalHeaderLabels(['', 'Tool', 'Version', 'Source', 'Size or note', '']); t.verticalHeader().setVisible(False)
+        t.setEditTriggers(QTableWidget.NoEditTriggers); t.setSelectionMode(QTableWidget.NoSelection)
+        for i in range(6): t.horizontalHeader().setSectionResizeMode(i, QHeaderView.Stretch if i == 1 else QHeaderView.ResizeToContents)
+        self.status = QLabel(); self.status.setWordWrap(True); self.plain = self.status.font(); self.status.linkActivated.connect(self.link)
+        self.bar = QProgressBar(); self.bar.setRange(0, 1000); self.bar.hide()
+        self.all_here = body('Every tool is here.')
+        self.dl = QPushButton(); self.dl.setMinimumHeight(36); f = self.dl.font(); f.setBold(True); self.dl.setFont(f); self.dl.clicked.connect(self.press)
+        row = QHBoxLayout(); row.setSpacing(8); row.addWidget(self.all_here, 1); row.addWidget(self.dl)
+        self.v.addWidget(t, 1); self.v.addWidget(self.status); self.v.addWidget(self.bar); self.v.addLayout(row)   # the table scrolls; the button row stays in view
+
+    def fetch(self): return self.wizard().win.fetch
+
+    def redraw(self, doc):
+        super().redraw(doc); self.doc = doc
+        if not self.hooked:   # once; a closed wizard's page is a deleted QObject, which Qt disconnects
+            self.hooked = True; self.fetch().event.connect(self.on_event); self.fetch().finished.connect(self.on_finished)
+        items = step(doc, 'tools').get('items') or []; t = self.table; t.setRowCount(len(items))
+        for i, it in enumerate(items):
+            mark, role = ('✓', 'ok') if it['ok'] else ('✗', 'bad') if it.get('required') else ('–', 'note')
+            d = it.get('download')
+            cells = (mark, it['name'], it.get('version') or '', it.get('source') or '', (size(d['size']) if d['size'] else 'about 200 MB') if d and not it['ok'] else '')
+            for c, text in enumerate(cells): t.setItem(i, c, QTableWidgetItem(text))
+            t.item(i, 0).setForeground(QColor(colour(self, role)))
+        t.resizeRowsToContents(); self.sync()
+
+    def total(self):   # the pinned sizes of what porter can download, .NET's 0 counted as about 200 MB
+        st = step(self.doc, 'tools'); can = st.get('downloadable') or []
+        sizes = [(it.get('download') or {}).get('size') or 0 for it in st.get('items') or [] if it['name'] in can]
+        guess = sum(not b for b in sizes); return ('about ' if guess else '') + size(sum(sizes) + guess * DOTNET_GUESS)
+
+    def sync(self):   # the primary button: Cancel while the window's fetch runs (whoever started it), else Download all missing while porter offers a download
+        f = self.fetch(); run, can = f.running(), self.doc and step(self.doc, 'tools').get('downloadable')
+        self.dl.setText(('Cancel .NET preparation' if run_kind(f) == 'prepare' else 'Cancel download') if run else f'Download all missing ({self.total()})')
+        self.dl.setVisible(bool(run or can)); self.all_here.setVisible(not run and not can); self.dl.setDefault(False)
+        z = self.wizard()
+        if z.currentPage() is self: z.primary(z.currentId())
+
+    def primary(self): return self.dl if self.dl.isVisibleTo(self) and not self.fetch().running() else None
+
+    def say(self, text, rich=False, font=None):
+        self.status.setTextFormat(Qt.RichText if rich else Qt.PlainText); self.status.setFont(font or self.plain); self.status.setText(text)
+
+    def press(self): (self.cancel if self.fetch().running() else self.download)()
+
+    def download(self): self.start(['tools', '--download', '--progress', 'json'], 'download')   # D-07: no license dialog, the legal notice covers them
+
+    def start(self, args, kind):
+        f = self.fetch()
+        if f.running(): return   # one run on the window's fetch at a time
+        self.mine, self.kn, self.errors, self.log, self.error = kind, '', [], None, None
+        self.say(''); self.bar.setRange(0, 0); self.bar.show(); f.start(args); self.sync()
+
+    def cancel(self): self.fetch().stop(); self.say('stopping…')   # "cancelled" only once finished says the tree is gone (Phase 1 D-05/D-09)
+
+    def on_event(self, ev):
+        e, f = ev.get('ev'), self.fetch(); self.sync()
+        if e in ('stage', 'progress'):
+            if e == 'stage': self.kn = f'[{ev["k"]}/{ev["n"]}]'
+            if f.stopping: return   # stopping… stays until finished
+            self.say(progress_line(ev, self.kn)); self.bar.show()
+            if e == 'progress' and ev.get('frac') is not None: self.bar.setRange(0, 1000); self.bar.setValue(int(ev['frac'] * 1000))
+            else: self.bar.setRange(0, 0)
+        elif e == 'say' and ev.get('msg', '').startswith('[RED] '): self.errors.append(ev['msg'].removeprefix('[RED] '))
+        elif e == 'log': self.log = ev.get('path')
+        elif e == 'error': self.error = ev; self.log = ev.get('log') or self.log
+
+    def on_finished(self, code):
+        kind, self.mine = self.mine, None; self.bar.hide(); self.sync()
+        if code == 130: self.say('cancelled. Download all missing resumes where it stopped.')
+        elif code == 0: self.say('')
+        else: self.failure(kind)
+        self.wizard().win.recheck()   # porter's verdict on each tool: what finished in a cancelled run shows ✓
+
+    def failure(self, kind):   # porter's cause, escaped, in the problem colour with Open log; a hash mismatch in the fixed font so both hashes read cleanly
+        msg = (self.error or {}).get('msg') or '\n'.join(self.errors) or 'the download failed'
+        text = html.escape(msg, quote=False).replace('\n', '<br>'); link = ' &nbsp;<a href="log">Open log</a>' if self.log else ''
+        self.say(f'<span style="color:{colour(self, "bad")}">{text}</span>{link}', True, mono() if 'not the expected' in msg else None)
+
+    def link(self, href):
+        if href == 'log' and self.log: QDesktopServices.openUrl(QUrl.fromLocalFile(self.log))
 
 
 def model(r):   # adb's `model:Lenovo_TB320FC device:…` as `Lenovo TB320FC`, else the serial
@@ -368,6 +475,8 @@ class DonePage(Page):   # D-28: what is ready, porter's notes, the games that pl
         def got(_obj, _code, fail):
             state(self.menu, self.menu, 'Add to app menu', True); self.menu_result.setText(cause(fail) if fail else 'Added to the app menu.')
         call_json(self, ['desktop-entry', '--install', '--json'], got)
+
+    def primary(self): return self.port if self.port.isVisibleTo(self) else None
 
     def port_a_game(self): z = self.wizard(); win = z.win; z.close(); win.port_a_game()
 
