@@ -4,7 +4,7 @@
 # serves a pinned file (404/410), platform-tools and .NET take the vendor's newest (same .NET major) checked against the vendor's listed hash, marked untested;
 # the NDK never falls back. Then unpacked into the player's nx2android folder (paths.player_tools()), where toolchain.find_* look, and the settings point at it.
 # The tool ships none of them: they come from their makers, under their licenses (LICENSES).
-import hashlib, json, os, platform, shutil, stat, sys, tarfile, urllib.error, urllib.request, xml.etree.ElementTree as ET, zipfile
+import hashlib, http.client, json, os, platform, shutil, stat, sys, tarfile, urllib.error, urllib.request, xml.etree.ElementTree as ET, zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -142,7 +142,7 @@ def _download(it, dest, retries=3):
         except urllib.error.HTTPError as e:
             if e.code != 416 or not have: raise
             break   # 416: the .part is whole already (or longer): the hash decides
-        except (urllib.error.URLError, OSError, TimeoutError) as e:
+        except (urllib.error.URLError, OSError, TimeoutError, http.client.HTTPException) as e:   # IncompleteRead is an HTTPException, not an OSError (03-REVIEW WR-01)
             failed += 1
             if failed >= retries: raise
             PROG.say(f'{name}: {e}, retry {failed}')   # explicit and logged, like Adb.run
