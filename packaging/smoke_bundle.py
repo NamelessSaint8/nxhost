@@ -1,5 +1,6 @@
 # Smoke test of a built bundle, run by the release workflow (fork-release.yml) and by hand:
 #   python packaging/smoke_bundle.py dist/nx2android-<version>-macos-arm64.dmg      (or an .app, or a bundle folder such as dist/nx2android)
+#   python packaging/smoke_bundle.py --community-ndk dist/nx2android               (Linux arm64 only: the community NDK downloads and passes its probe, TOOL-01)
 # It runs the frozen app from a read-only place (the DMG mounted read-only, or a chmod a-w copy) with a fresh NX2A_HOME, and fails unless doctor and
 # profiles answer, every tool is found with only PATH=/usr/bin:/bin (D-19: a Finder or app-menu launch, POSIX), the GUI starts offscreen (smoke_gui.py), the
 # bundle's files are unchanged afterwards (PKG-05: nothing is ever written into the bundle) and, on macOS, the signature still verifies.
@@ -66,8 +67,22 @@ def bare_env_check(exe, tmp, extra_env=None, home_nx=None):
         check(f'bare PATH: every tool row found ({cmd})', not lost, 'not found: ' + ', '.join(lost))
 
 
+def community_ndk(exe, env):
+    """TOOL-01 on a real arm64 runner: the frozen bundle downloads the pinned community NDK (its sha256 checked as a player's is) and setup's NDK row
+    is ok (the compile probe linked) with the community note. About 128 MB down, 1.2 GB unpacked."""
+    try: code = subprocess.run([str(exe), '-m', 'porter', 'tools', '--download', '--only', 'ndk', '--progress', 'lines'], env=env, cwd=env['NX2A_HOME'], timeout=1800).returncode
+    except subprocess.TimeoutExpired: code = 'timeout'
+    check('tools --download --only ndk', code == 0, f'exit {code}')
+    doc, code, err = porter(exe, env, 'setup', '--json')
+    try: row = next(i for s in doc['steps'] if s['id'] == 'tools' for i in s['items'] if i['name'] == 'Android NDK')
+    except (TypeError, KeyError, StopIteration): return check('setup --json has an Android NDK row', False, f'exit {code}: {err}')
+    check('the community NDK row is ok', row['ok'], f"{row['detail']}; {row['fix']}")
+    check('the NDK row carries the community note', 'community' in row.get('note', ''), row.get('note') or 'no note')
+
+
 def main(argv):
-    if len(argv) != 2: sys.exit('usage: python packaging/smoke_bundle.py <.dmg | .app | bundle folder>')
+    community = argv[1:2] == ['--community-ndk']; argv = argv[:1] + argv[1 + community:]
+    if len(argv) != 2: sys.exit('usage: python packaging/smoke_bundle.py [--community-ndk] <.dmg | .app | bundle folder>')
     src = Path(argv[1]).resolve(); tmp = Path(tempfile.mkdtemp(prefix='nx2a-smoke-')); mount = None
     try:
         if src.suffix == '.dmg':
@@ -84,6 +99,7 @@ def main(argv):
                 check(f'Qt plugin {pat}', any(root.rglob(f'PySide6/Qt/plugins/{pat}')), 'missing from the bundle')
         home = tmp / 'home'; home.mkdir()
         env = dict(os.environ, NX2A_HOME=str(home))
+        if community: community_ndk(exe, env); return 1 if FAILS else 0   # this mode only: the other checks ran in the step before
         before = listing(root)
         doc, code, err = porter(exe, env, 'doctor', '--json')
         check('doctor --json answers a JSON list', isinstance(doc, list) and code in (0, 1), f'exit {code}: {err}')

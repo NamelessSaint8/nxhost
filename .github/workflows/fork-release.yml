@@ -57,6 +57,9 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python packaging/smoke_bundle.py dist/nx2android
+      - name: Community NDK download and probe (linux-arm64)
+        if: matrix.target == 'linux-arm64'
+        run: python packaging/smoke_bundle.py --community-ndk dist/nx2android
       - name: glibc floor
         if: runner.os == 'Linux'
         env:
