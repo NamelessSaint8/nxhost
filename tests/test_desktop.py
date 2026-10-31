@@ -32,6 +32,7 @@ class Entry(unittest.TestCase):
         self.assertEqual(e['Exec'], r'"/opt/my apps/nx\\"2a\\$\\`x\\\\%%/nx2android"')
         self.assertEqual((e['TryExec'], e['Icon'], e['Terminal'], e['Categories'], e['Type']), (exe, '/u/nx2android.svg', 'false', 'Game;Utility;', 'Application'))
         self.assertTrue(desktop.entry(exe, 'i').startswith('[Desktop Entry]\n'))
+        with self.assertRaises(desktop.DesktopError): desktop.entry('/opt/a\nExec=evil', 'i')   # a line break would add keys of its own
 
     def test_install_writes_both(self):
         r = desktop.install(Path('/opt/a/nx2android'))

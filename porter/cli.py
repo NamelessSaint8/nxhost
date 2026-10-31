@@ -34,6 +34,7 @@ def _parser():
     t.add_argument('--progress', default='auto', choices=('auto', 'bar', 'lines', 'json', 'off'))
     c = sub.add_parser('config', help='show or change the saved settings'); c.add_argument('key', nargs='?'); c.add_argument('value', nargs='?')
     c.add_argument('--json', action='store_true')
+    de = sub.add_parser('desktop-entry', help='add the Linux bundle to the app menu (~/.local/share/applications)'); de.add_argument('--install', action='store_true'); de.add_argument('--json', action='store_true')
     su = sub.add_parser('setup', help='what setup still needs, for the first-run wizard (one JSON document with --json)'); su.add_argument('--json', action='store_true')
     return ap
 
@@ -53,6 +54,11 @@ def cmd_doctor(a):
 def cmd_setup(a):
     from porter import setup
     return setup.main(a)
+
+
+def cmd_desktop(a):
+    from porter import desktop
+    return desktop.main(a)
 
 
 def cmd_profiles(a):
@@ -184,4 +190,4 @@ def main(argv):
     if hasattr(sys.stdout, 'reconfigure'): sys.stdout.reconfigure(encoding='utf-8', errors='replace')   # game names and progress bars on a Windows console
     a = _parser().parse_args(argv)
     from porter import runlog
-    return runlog.run(a, {'doctor': cmd_doctor, 'profiles': cmd_profiles, 'inspect': cmd_inspect, 'port': cmd_port, 'install': cmd_install, 'devices': cmd_devices, 'tools': cmd_tools, 'config': cmd_config, 'setup': cmd_setup}[a.cmd])
+    return runlog.run(a, {'doctor': cmd_doctor, 'profiles': cmd_profiles, 'inspect': cmd_inspect, 'port': cmd_port, 'install': cmd_install, 'devices': cmd_devices, 'tools': cmd_tools, 'config': cmd_config, 'setup': cmd_setup, 'desktop-entry': cmd_desktop}[a.cmd])
