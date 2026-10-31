@@ -314,6 +314,7 @@ class ToolsPage(StepPage):   # D-07, D-21, D-23..D-26: porter's tools rows; Down
         super().redraw(doc); self.doc = doc
         if not self.hooked:   # once; a closed wizard's page is a deleted QObject, which Qt disconnects
             self.hooked = True; self.fetch().event.connect(self.on_event); self.fetch().finished.connect(self.on_finished)
+            self.fetch().started.connect(self.sync)   # a run the Setup tab starts turns this button into Cancel at once, not at porter's first event
         items = step(doc, 'tools').get('items') or []; t = self.table; t.setRowCount(len(items)); self.prep = None
         for i, it in enumerate(items):
             mark, role = ('✓', 'ok') if it['ok'] else ('✗', 'bad') if it.get('required') else ('–', 'note')

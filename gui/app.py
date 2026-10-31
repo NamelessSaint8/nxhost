@@ -278,7 +278,7 @@ class SetupTab(QWidget):
         dl = QHBoxLayout(); self.dl_btn = QPushButton('Download missing tools'); self.dl_btn.clicked.connect(self.download)
         self.dl_step = QLabel(''); self.dl_step.setWordWrap(True); self.dl_prog = QProgressBar(); self.dl_prog.setRange(0, 1000); self.dl_prog.setVisible(False)
         dl.addWidget(self.dl_btn); dl.addWidget(self.dl_step, 1); dl.addWidget(self.dl_prog, 1); gl.addLayout(dl)
-        self.fetch = Porter(self); self.fetch.event.connect(self.on_fetch); self.fetch.finished.connect(self.fetched)
+        self.fetch = Porter(self); self.fetch.event.connect(self.on_fetch); self.fetch.finished.connect(self.fetched); self.fetch.started.connect(self.show_run)
         self.dl_errors, self.dl_log, self.dl_error, self.dl_kn = [], None, None, ''; self.dl_step.linkActivated.connect(self.open_dl_log)
         v.addWidget(g)
         s = QGroupBox('Settings'); f = QFormLayout(s); self.edits = {}
@@ -289,7 +289,7 @@ class SetupTab(QWidget):
         row = QHBoxLayout(); save = QPushButton('Save and check'); save.clicked.connect(self.save); row.addStretch(1); row.addWidget(save)
         f.addRow('', row)
         v.addWidget(s); v.addStretch(1)
-        self.loaded = {}   # the config values last copied into the edits
+        self.loaded, self.checking, self.again = {}, False, False   # the config values last copied into the edits; a setup --json out, another asked meanwhile
         self.load()
 
     # ---- downloading the missing tools ----
@@ -299,6 +299,7 @@ class SetupTab(QWidget):
         call_json(self, ['tools', '--json'], self.confirm_download)
 
     def confirm_download(self, items, code, fail):
+        if self.fetch.running(): self.show_run(); return   # the wizard started a run while tools --json was answering: that run is the one to show and cancel
         self.dl_btn.setEnabled(True); self.dl_step.setText('')
         if fail: self.dl_step.setTextFormat(Qt.RichText); self.dl_step.setText(failed(fail)); return   # the real cause: a "check the connection" dialog hid a missing lz4
         if not items: QMessageBox.information(self, 'Download', 'Nothing to download: every tool is there.'); return
@@ -309,14 +310,17 @@ class SetupTab(QWidget):
                           QMessageBox.Yes | QMessageBox.No, self)
         box.setTextFormat(Qt.RichText)
         if box.exec() != QMessageBox.Yes: return
+        if self.fetch.running(): self.show_run(); return   # a run began while the dialog was open: Porter.start would refuse this one (WR-04)
         self.dl_btn.setEnabled(False); self.dl_prog.setVisible(True); self.dl_prog.setRange(0, 0); self.dl_errors, self.dl_log, self.dl_error = [], None, None
         self.dl_step.setTextFormat(Qt.PlainText)
         self.fetch.start(['tools', '--download', '--progress', 'json'])
 
-    def on_fetch(self, ev):
-        e = ev.get('ev')
-        if self.fetch.running():   # a run the wizard's tools page started shows here too; its button cancels it (D-21)
+    def show_run(self):   # from Porter.started and each event: a run the wizard's tools page started shows here too; its button cancels it (D-21)
+        if self.fetch.running():
             self.dl_btn.setText('Cancel .NET preparation' if firstrun.run_kind(self.fetch) == 'prepare' else 'Cancel download'); self.dl_btn.setEnabled(True); self.dl_prog.setVisible(True)
+
+    def on_fetch(self, ev):
+        e = ev.get('ev'); self.show_run()
         if e in ('stage', 'progress') and self.fetch.stopping: return   # stopping… stays until finished
         if e == 'stage': self.dl_kn = f'[{ev["k"]}/{ev["n"]}]'; self.dl_step.setTextFormat(Qt.PlainText); self.dl_step.setText(f'{self.dl_kn} {ev["name"]}'); self.dl_prog.setRange(0, 0)
         elif e == 'progress':
@@ -360,13 +364,16 @@ class SetupTab(QWidget):
             if e.text().strip() != self.loaded.get(k, ''): c[k] = e.text().strip()
         config.save(c); self.load()
 
+    # one setup --json at a time; one asked while it is out runs once after the answer (03-REVIEW WR-03: SetupTab.fetched and the wizard's
+    # ToolsPage.on_finished both re-check when a download ends, and the two runs probed the same new NDK at once)
     def check(self):
-        self.check_msg.setText('')   # a Retry link is gone before the new call
+        if self.checking: self.again = True; return
+        self.checking = True; self.check_msg.setText('')   # a Retry link is gone before the new call
         def got(doc, code, fail):   # setup --json exits 1 when not ready: its document is still the answer
-            self.table.setRowCount(0); self.check_msg.setText(failed(fail) if fail else '')
-            if fail: self.win.set_ready(False); return
-            firstrun.fill_checks(self.table, doc); self.table.resizeRowsToContents()
-            self.win.set_ready(bool(doc.get('ready')), doc)
+            self.checking = False; self.table.setRowCount(0); self.check_msg.setText(failed(fail) if fail else '')
+            if fail: self.win.set_ready(False)
+            else: firstrun.fill_checks(self.table, doc); self.table.resizeRowsToContents(); self.win.set_ready(bool(doc.get('ready')), doc)
+            if self.again: self.again = False; self.check()
         call_json(self, ['setup', '--json'], got)
 
 

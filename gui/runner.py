@@ -40,9 +40,11 @@ def _alive(pgid):
 
 
 class Porter(QObject):
-    """A long porter command (port, install) whose stdout is JSON events"""
+    """A long porter command (port, install, a tool download) whose stdout is JSON events. One run at a time: start() refuses a second while one runs
+    and returns False; started comes as a run begins, before any of its events, so every view of a shared runner shows it from its start"""
     event = Signal(dict)
     finished = Signal(int)
+    started = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -50,14 +52,17 @@ class Porter(QObject):
 
     def running(self): return not self.ended   # porter or (POSIX) anything left in its session; never stdin closed: porter takes EOF as a stop
 
-    def start(self, args):
+    def start(self, args):   # 03-REVIEW WR-04 / T-03-35: a second start replaced self.p and left the first run, and a Prepare's dotnet children, outside
+        # Cancel and the close guard
+        if self.running(): return False
         self.p = run = _process(self, args); self.buf, self.err, self.pgid, self.stopping, self.ended = b'', [], 0, False, False
         run.readyReadStandardOutput.connect(self._out)
         run.readyReadStandardError.connect(lambda: self.err.append(bytes(run.readAllStandardError()).decode('utf-8', 'replace')))
         run.started.connect(lambda: setattr(self, 'pgid', run.processId()))   # the session leader: its pid is the group's id
         run.errorOccurred.connect(lambda e: self._failed(run, e))
         run.finished.connect(lambda code, status: self._done(run, code, status))
-        run.start()
+        self.started.emit(); run.start()   # before run.start(): a failure to start brings finished, which must come after started
+        return True
 
     def _failed(self, run, e):   # FailedToStart brings no finished signal
         if e != QProcess.FailedToStart or run is not self.p or self.ended: return
