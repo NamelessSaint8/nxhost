@@ -23,8 +23,8 @@ HOME = tempfile.mkdtemp()
 if not (OLD or MISSING):
     from PySide6.QtCore import QSize, Qt, QTimer
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QWidget, QWizard
-    from gui import app, firstrun, shell
+    from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QScrollArea, QWidget, QWizard
+    from gui import app, firstrun, runner, shell
 APP = None
 
 
@@ -556,6 +556,113 @@ class Done(unittest.TestCase):   # the last page (D-20, D-28): a summary per ste
         w, calls, z, p = self.open(); b = z.button(QWizard.FinishButton)
         self.assertEqual(b.text(), 'Close setup'); b.click()
         self.assertTrue(until(lambda: not z.isVisible(), 1000)); self.assertIsNone(gate(self, w).wizard)
+
+
+MB = 2**20
+FAKE = str(FIXTURES / 'fake_porter.py')
+
+
+def gone(pid, s=5):   # the process has exited (tests/test_bridge.py's check)
+    end = time.time() + s
+    while time.time() < end:
+        if os.name == 'nt': here = str(pid) in __import__('subprocess').run(['tasklist', '/FI', f'PID eq {pid}', '/NH'], capture_output=True, text=True).stdout
+        else:
+            try: os.kill(pid, 0); here = True
+            except ProcessLookupError: here = False
+            except PermissionError: here = True
+        if not here: return True
+        time.sleep(0.1)
+    return False
+
+
+def reap(pid):
+    try: os.kill(pid, 9)
+    except OSError: pass
+
+
+class Progress(unittest.TestCase):   # D-26: the progress line both views show
+    EV = {'ev': 'progress', 'name': 'Android NDK r27c', 'step': 'downloading', 'done': 412 * MB, 'total': 781 * MB, 'unit': 'B', 'frac': 0.53, 'rate': int(6.1 * MB), 'eta': 61}
+
+    def test_line(self):
+        self.assertEqual(firstrun.progress_line(self.EV, '[2/3]'), '[2/3] Android NDK r27c · downloading · 412.0 MB / 781.0 MB · 6.1 MB/s · 1 min left')
+
+    def test_drops_empty(self):
+        ev = {k: v for k, v in self.EV.items() if k not in ('rate', 'eta')}
+        self.assertEqual(firstrun.progress_line(ev), 'Android NDK r27c · downloading · 412.0 MB / 781.0 MB')
+        self.assertEqual(firstrun.progress_line({'ev': 'progress', 'name': 'x', 'step': ''}, '[1/1]'), '[1/1] x')
+
+    def test_time_left(self):
+        for eta, want in ((None, ''), (30, 'less than a minute left'), (600, '10 min left'), (7500, '2 h 5 min left')):
+            with self.subTest(eta=eta): self.assertEqual(firstrun.time_left(eta), want)
+
+
+def tools_doc(**over):   # setup_missing.json with the NDK and .NET not found and porter offering both (a pinned NDK size, .NET's 0)
+    d = doc('setup_missing.json'); st = next(x for x in d['steps'] if x['id'] == 'tools'); ndk, net, adb = st['items']
+    ndk['download'] = {'version': 'r27c', 'size': 700 * MB}
+    net.update(ok=False, detail='not found', fix='Download missing tools, or set dotnet', path='', source='', version='', download={'version': '10.0', 'size': 0})
+    st['downloadable'] = ['Android NDK', '.NET SDK']
+    for k, v in over.items(): st[k] = v
+    return d
+
+
+def item(d, name): return next(it for it in next(x for x in d['steps'] if x['id'] == 'tools')['items'] if it['name'] == name)
+
+
+class Tools(unittest.TestCase):   # the tools page (D-07, D-21, D-23..D-26): Download all missing / Cancel on the window's own fetch run, Use my own…, Prepare .NET tools
+    def open(self, d=None):   # the wizard at the tools page over `d`
+        w, calls = launch(self, d or tools_doc()); z = firstrun.open_setup(w, 'tools'); p = z.page(firstrun.PAGES.index('tools'))
+        self.assertEqual(z.currentId(), firstrun.PAGES.index('tools'))
+        return w, calls, z, p
+
+    def stand_in(self, *opts):   # the window's long runs go to the stand-in porter
+        keep = runner.PORTER; self.addCleanup(setattr, runner, 'PORTER', keep); runner.PORTER = [FAKE, *opts, '--']
+
+    def finish(self, w):   # a run a test left going
+        if w.fetch.running(): w.fetch.stop(); until(lambda: not w.fetch.running(), 10000)
+
+    def test_download_starts_run(self):
+        w, calls, z, p = self.open()
+        self.assertTrue(p.dl.isVisibleTo(p)); self.assertRegex(p.dl.text(), r'^Download all missing \(about \d+\.\d (MB|GB)\)$')
+        self.assertTrue(p.dl.isDefault()); self.assertGreaterEqual(p.dl.minimumHeight(), 36); self.assertTrue(p.dl.font().bold())
+        with mock.patch.object(w.fetch, 'start') as start, mock.patch.object(app, 'QMessageBox', side_effect=AssertionError('a dialog')):
+            p.dl.click()
+        start.assert_called_once_with(['tools', '--download', '--progress', 'json'])
+        t = p.table; self.assertEqual(t.columnCount(), 6); self.assertEqual(t.rowCount(), 3)
+        self.assertEqual([t.item(i, 0).text() for i in range(3)], ['✗', '✗', '✓'])
+        self.assertEqual((t.item(0, 4).text(), t.item(1, 4).text(), t.item(2, 4).text()), ('700.0 MB', 'about 200 MB', ''))
+        self.assertEqual((t.item(2, 2).text(), t.item(2, 3).text()), ('36.0.0', 'PATH'))
+
+    def test_hidden_when_nothing(self):
+        w, calls, z, p = self.open(doc())
+        self.assertFalse(p.dl.isVisibleTo(p)); self.assertIn('Every tool is here.', shown(p))
+        w, calls, z, p = self.open(); self.assertNotIn('Every tool is here.', shown(p))
+
+    def test_cancel(self):   # a real stand-in run: Cancel stops its whole tree, "cancelled" only once it is gone
+        self.stand_in('--tree'); w, calls, z, p = self.open(); self.addCleanup(self.finish, w)
+        evs = []; w.fetch.event.connect(evs.append); p.dl.click()
+        self.assertTrue(until(lambda: any(e.get('ev') == 'pids' for e in evs), 10000))
+        pids = next(e for e in evs if e.get('ev') == 'pids'); self.addCleanup(reap, pids['detached']); self.addCleanup(reap, pids['child'])
+        self.assertEqual(p.dl.text(), 'Cancel download'); self.assertFalse(p.dl.isDefault())
+        self.assertIn('[1/1] waiting', p.status.text())
+        p.dl.click(); self.assertEqual(p.status.text(), 'stopping…')
+        self.assertTrue(until(lambda: not w.fetch.running(), 10000))
+        self.assertEqual(p.status.text(), 'cancelled. Download all missing resumes where it stopped.')
+        self.assertTrue(gone(pids['child'])); self.assertTrue(p.dl.text().startswith('Download all missing'))
+
+    def test_failure_inline(self):
+        w, calls, z, p = self.open(); log = os.path.join(HOME, 'tools.log')
+        with mock.patch.object(w.fetch, 'start'): p.dl.click()
+        w.fetch.event.emit({'ev': 'log', 'path': log}); w.fetch.event.emit({'ev': 'error', 'msg': 'bad <thing> & co', 'type': 'FetchError', 'log': log})
+        w.fetch.finished.emit(1); t = p.status.text()
+        self.assertIn('bad &lt;thing&gt; &amp; co', t); self.assertNotIn('<thing>', t); self.assertIn('<a href="log">Open log</a>', t)
+        self.assertIn(firstrun.colour(p, 'bad'), t); self.assertTrue(p.status.wordWrap())
+        self.assertNotEqual(p.status.font().family(), firstrun.mono().family())
+        with mock.patch.object(firstrun, 'QDesktopServices') as ds: p.status.linkActivated.emit('log')
+        self.assertEqual(Path(ds.openUrl.call_args[0][0].toLocalFile()), Path(log))
+        a, b = 'a' * 64, 'b' * 64; msg = f'android-ndk-r27c.zip: its sha256 is {a}, not the expected {b}'
+        with mock.patch.object(w.fetch, 'start'): p.dl.click()
+        w.fetch.event.emit({'ev': 'error', 'msg': msg, 'type': 'FetchError', 'log': log}); w.fetch.finished.emit(1)
+        self.assertIn(a, p.status.text()); self.assertIn(b, p.status.text()); self.assertEqual(p.status.font().family(), firstrun.mono().family())
 
 
 if __name__ == '__main__': unittest.main()

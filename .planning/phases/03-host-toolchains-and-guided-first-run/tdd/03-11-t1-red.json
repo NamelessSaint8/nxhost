@@ -1,0 +1,10 @@
+{
+ "command": "NO_COLOR=1 QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest tests.test_firstrun.Progress.test_line",
+ "exitCode": 1,
+ "output": "E\n======================================================================\nERROR: test_line (tests.test_firstrun.Progress.test_line)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/Volumes/Data/Dev/nx2android/tests/test_firstrun.py\", line 587, in test_line\n    self.assertEqual(firstrun.progress_line(self.EV, '[2/3]'), '[2/3] Android NDK r27c · downloading · 412.0 MB / 781.0 MB · 6.1 MB/s · 1 min left')\n                     ^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: module 'gui.firstrun' has no attribute 'progress_line'\n\n----------------------------------------------------------------------\nRan 1 test in 0.006s\n\nFAILED (errors=1)\n",
+ "targetTest": "test_line",
+ "targetFile": "tests/test_firstrun.py",
+ "expected": "progress_line builds '[2/3] name · step · done / total · speed/s · time left'",
+ "actual": "firstrun has no progress_line yet (AttributeError)",
+ "semanticAssessment": "Valid RED: test_line ran and errored because gui/firstrun.py has no progress_line yet, which is the planned behaviour being absent; the module and fixtures loaded (the other Progress and Tools tests error the same way on progress_line, time_left and ToolsPage.dl). Classifier: RED_EVIDENCE_OK."
+}
