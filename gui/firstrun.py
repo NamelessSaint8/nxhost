@@ -4,9 +4,9 @@
 # on_ready) and optionally `port_a_game()` can host it: today's gui/app.py Window and the new shell (gui/shell.py).
 import html
 
-from PySide6.QtCore import QObject, Qt
-from PySide6.QtGui import QColor, QFontDatabase
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QTableWidgetItem, QToolBar, QWidget
+from PySide6.QtCore import QObject, Qt, QUrl
+from PySide6.QtGui import QColor, QDesktopServices, QFontDatabase
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QScrollArea, QTableWidgetItem, QToolBar, QVBoxLayout, QWidget, QWizard, QWizardPage
 
 from gui.runner import call_json
 
@@ -72,8 +72,125 @@ def on_ready(win, doc):   # each setup --json answer: the banner names what port
     if first and first_open(doc): open_setup(win, 'legal')
 
 
-def open_setup(win, start=None):
-    win.first_run.start = start
+def open_setup(win, start=None):   # the wizard at `start`, else at the first step porter reports not ok (the done page when all are); one wizard at most (D-04)
+    g = win.first_run
+    if g.wizard: g.wizard.show(); g.wizard.raise_(); g.wizard.activateWindow(); return g.wizard
+    if g.doc is None: win.recheck(); return None   # no answer yet (the last call failed): ask again, the Setup tab shows the outcome
+    g.wizard = z = Wizard(win, g)
+    z.go(start or next((st['id'] for st in g.doc['steps'] if not st['ok']), 'done')); z.show()
+    return z
+
+
+def step(doc, sid): return next((st for st in doc['steps'] if st['id'] == sid), {'ok': True, 'detail': '', 'fix': ''})
+
+
+def body(text=''):   # a body label: plain text, word-wrapped
+    lab = QLabel(text); lab.setTextFormat(Qt.PlainText); lab.setWordWrap(True); return lab
+
+
+class Wizard(QWizard):   # non-modal, shown with show() and never exec(); Skip setup, the close box and Esc all just close it: no confirmation, no write
+    def __init__(self, win, gate):
+        super().__init__(win, Qt.Window); self.win, self.gate, self.jumping = win, gate, False
+        self.setWindowTitle('nx2android setup'); self.setWizardStyle(QWizard.ClassicStyle)   # Classic on every host: no Mac watermark, follows the palette
+        self.setOptions(QWizard.NoBackButtonOnStartPage | QWizard.HaveCustomButton1 | QWizard.NoCancelButton)
+        self.setButtonText(QWizard.CustomButton1, 'Skip setup'); self.setButtonText(QWizard.FinishButton, 'Close setup')
+        self.setButtonLayout([QWizard.CustomButton1, QWizard.Stretch, QWizard.BackButton, QWizard.NextButton, QWizard.FinishButton])
+        self.customButtonClicked.connect(lambda _which: self.close())
+        self.setMinimumSize(720, 560); self.resize(760, 600)
+        self.pages = {k: cls() for k, cls in zip(PAGES, (LegalPage, KeysPage, ToolsPage, DevicePage, DonePage))}
+        for i, k in enumerate(PAGES): self.setPage(i, self.pages[k])
+        self.redraw(gate.doc)
+
+    def go(self, start):   # QWizard's Back walks the visited pages, so reach `start` from the legal page through each one before it (D-04)
+        self.restart(); self.jumping = True
+        try:
+            for _ in range(PAGES.index(start)): self.next()
+        finally: self.jumping = False
+
+    def redraw(self, doc):
+        for pg in self.pages.values(): pg.redraw(doc)
+
+    def done(self, r):   # every way out (Skip setup, close box, Esc, Close setup) comes here
+        super().done(r)
+        if self.gate.wizard is self: self.gate.wizard = None
+        self.deleteLater()
+
+
+class Page(QWizardPage):   # its own heading label (no setTitle/setSubTitle: UI-SPEC Typography), 16 px margins; isComplete stays true (never blocking)
+    def __init__(self, heading):
+        super().__init__(); self.v = QVBoxLayout(self); self.v.setContentsMargins(16, 16, 16, 16); self.v.setSpacing(16)
+        self.head = QLabel(heading); self.head.setTextFormat(Qt.PlainText); f = self.head.font(); f.setPointSizeF(f.pointSizeF() + 4); f.setBold(True); self.head.setFont(f)
+        self.v.addWidget(self.head); self.v.addSpacing(8)   # 16 + 8: the 24 px gap under the heading
+
+    def redraw(self, doc): pass
+
+
+class LegalPage(Page):   # D-07: porter's notice and links; the GUI holds no notice text or version of its own
+    def __init__(self):
+        super().__init__('Before you start'); self.ok = False; self.doc = None
+        inner = QWidget(); iv = QVBoxLayout(inner); iv.setContentsMargins(0, 0, 0, 0); iv.setSpacing(8)
+        self.notice = body(); self.notice.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.links = QLabel(); self.links.setTextFormat(Qt.RichText); self.links.setWordWrap(True)
+        self.links.linkActivated.connect(lambda url: QDesktopServices.openUrl(QUrl(url)))
+        self.footer = body('Skip setup closes this window. It opens again next time until you accept.')
+        for x in (self.notice, self.links, self.footer): iv.addWidget(x)
+        iv.addStretch(1)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QScrollArea.NoFrame); scroll.setWidget(inner)
+        self.error = QLabel(); self.error.setTextFormat(Qt.RichText); self.error.setWordWrap(True); self.error.linkActivated.connect(lambda _link: self.save())
+        self.v.addWidget(scroll, 1); self.v.addWidget(self.error)
+
+    def redraw(self, doc):
+        self.doc = doc; lg = doc['legal']; e = lambda x: html.escape(str(x), quote=True)   # porter's names and URLs are text, not markup
+        self.notice.setText(lg['text'])
+        self.links.setText('<br>'.join(f'<a href="{e(url)}">{e(name)}</a>' for name, url in lg['links'].items()))
+        self.ok = step(doc, 'legal')['ok']; self.label()
+
+    def label(self): self.setButtonText(QWizard.NextButton, 'Next' if self.ok else 'Accept and continue')
+
+    def validatePage(self):   # Accept and continue: save first, move on once porter has it
+        if self.ok or self.wizard().jumping: return True
+        self.save(); return False
+
+    def save(self):
+        b = self.wizard().button(QWizard.NextButton); b.setEnabled(False); b.setText('saving…'); self.error.setText('')
+        call_json(self, ['config', 'legal', str(self.doc['legal']['version']), '--json'], self.saved)
+
+    def saved(self, obj, code, fail):
+        z = self.wizard(); b = z.button(QWizard.NextButton); b.setEnabled(True)
+        if fail: self.label(); self.error.setText(failed(fail)); return
+        self.ok = True; self.label(); z.win.recheck(); z.next()
+
+
+class StepPage(Page):   # porter's detail for its step, and the fix while it is not ok; 03-12, 03-11 and 03-10 add the controls
+    SID = ''
+
+    def __init__(self, heading):
+        super().__init__(heading); self.detail = body(); self.fix = body()
+        self.v.addWidget(self.detail); self.v.addWidget(self.fix); self.v.addStretch(1)
+
+    def redraw(self, doc):
+        st = step(doc, self.SID); self.detail.setText(st.get('detail') or ''); self.fix.setText(st.get('fix') or ''); self.fix.setVisible(not st['ok'] and bool(st.get('fix')))
+
+
+class KeysPage(StepPage):
+    SID = 'keys'
+    def __init__(self): super().__init__('Your prod.keys')
+
+
+class ToolsPage(StepPage):
+    SID = 'tools'
+    def __init__(self): super().__init__('Tools for building the app')
+
+
+class DevicePage(StepPage):
+    SID = 'device'
+    def __init__(self): super().__init__('Connect your Android device')
+
+
+class DonePage(Page):
+    def __init__(self): super().__init__('Setup is ready'); self.v.addStretch(1)
+
+    def redraw(self, doc): self.head.setText('Setup is ready' if doc['ready'] else 'Setup is not finished')
 
 
 def fill_checks(table, doc):   # the Setup tab's checklist: porter's check rows drawn as before (✓ / ✗ / –), then each soft note as a '!' row
