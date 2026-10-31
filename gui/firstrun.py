@@ -6,7 +6,8 @@ import html
 
 from PySide6.QtCore import QObject, Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QFontDatabase
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QScrollArea, QTableWidgetItem, QToolBar, QVBoxLayout, QWidget, QWizard, QWizardPage
+from PySide6.QtWidgets import (QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QSizePolicy, QTableWidgetItem, QToolBar, QVBoxLayout,
+                               QWidget, QWizard, QWizardPage)
 
 from gui.runner import call_json
 
@@ -172,9 +173,55 @@ class StepPage(Page):   # porter's detail for its step, and the fix while it is 
         st = step(doc, self.SID); self.detail.setText(st.get('detail') or ''); self.fix.setText(st.get('fix') or ''); self.fix.setVisible(not st['ok'] and bool(st.get('fix')))
 
 
-class KeysPage(StepPage):
-    SID = 'keys'
-    def __init__(self): super().__init__('Your prod.keys')
+class Elided(QLabel):   # a path in the fixed font, elided in the middle to the width it gets, the full path in the tooltip
+    def __init__(self, full):
+        super().__init__(full); self.full = full; self.setFont(mono()); self.setTextFormat(Qt.PlainText); self.setToolTip(full)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred); self.setMinimumWidth(80)
+
+    def resizeEvent(self, e): super().resizeEvent(e); self.setText(self.fontMetrics().elidedText(self.full, Qt.ElideMiddle, self.width()))
+
+
+class KeyRow(QWidget):   # one found file: ✓/✗ in its colour, the path, porter's detail; nothing else of the entry is read (D-06: never a key value)
+    def __init__(self, e):
+        super().__init__(); h = QHBoxLayout(self); h.setContentsMargins(8, 4, 8, 4); h.setSpacing(8); self.e = e
+        self.glyph = QLabel('✓' if e['ok'] else '✗'); self.glyph.setStyleSheet(f"color: {colour(self, 'ok' if e['ok'] else 'bad')}")
+        self.path = Elided(str(e['path'])); self.detail = QLabel(e.get('detail') or ''); self.detail.setTextFormat(Qt.PlainText)
+        h.addWidget(self.glyph); h.addWidget(self.path, 1); h.addWidget(self.detail)
+
+
+def state(src, txt, text, on):   # a saving source's look; a row may have been redrawn away meanwhile, and then there is nothing left to mark
+    try: txt.setText(text); src.setEnabled(on)
+    except RuntimeError: pass
+
+
+class KeysPage(Page):   # D-05/D-06: the files porter found with its verdict, and the result line for the configured file; porter reads the file, this page never does
+    def __init__(self):
+        super().__init__('Your prod.keys')
+        self.v.addWidget(body('nx2android reads your games with the keys from your own Switch. The file stays where it is; only its location is saved.'))
+        self.list = QListWidget(); self.list.itemSelectionChanged.connect(self.pick)   # selection, not current item: focusing the list must not save its first row
+        self.result = body()
+        self.v.addWidget(self.list, 1); self.v.addWidget(self.result)   # the list scrolls on its own, so the button row stays in view
+
+    def redraw(self, doc):
+        st = step(doc, 'keys'); found = st.get('found') or []
+        self.list.blockSignals(True); self.list.clear()
+        for e in found:
+            it = QListWidgetItem(self.list); r = KeyRow(e); it.setSizeHint(r.sizeHint()); self.list.setItemWidget(it, r)
+        self.list.blockSignals(False)
+        p = st.get('path') or ''; fix = st.get('fix') if not st['ok'] else ''
+        self.result.setText((f'{p}: ' if p else '') + (st.get('detail') or '') + (f'. {fix}' if fix else ''))   # Copywriting "Keys bad file": `<path>: <detail>. <fix>`
+
+    def pick(self):   # an ok row saves itself; a not-ok one only stays selected
+        r = next((self.list.itemWidget(it) for it in self.list.selectedItems()), None)
+        if r and r.e['ok']: self.save(str(r.e['path']), r, r.detail, r.e.get('detail') or '')
+
+    def save(self, path, src, txt, idle):   # the one place that sends config keys: its source (a row or Browse…) reads saving… and is disabled until porter answers
+        state(src, txt, 'saving…', False)
+
+        def saved(_obj, _code, fail):
+            state(src, txt, idle, True)
+            if not fail: self.wizard().win.recheck()   # the next setup answer redraws this page with porter's verdict
+        call_json(self, ['config', 'keys', path, '--json'], saved)
 
 
 class ToolsPage(StepPage):
