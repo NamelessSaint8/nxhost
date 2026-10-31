@@ -8,7 +8,7 @@ import errno, json, os, platform, re, sys, threading, time, traceback
 
 from porter import paths, procs, toolchain
 
-LONG = ('port', 'install')   # and tools --download
+LONG = ('port', 'install')   # and tools --download, tools --prepare
 MARKER, LOGS_KEPT = '.port-running', 30
 RED = re.compile(r'(?:\[\d\d:\d\d:\d\d\] )?\[RED\] (.*)', re.S)   # upstream's say() puts the clock first
 _lock = threading.Lock()   # PROG.say runs on other threads too (the stage pollers)
@@ -142,7 +142,7 @@ def _refuse(a, long):   # a Python whose tarfile filter can be bypassed: doctor 
 
 def run(a, fn):
     """Run one command; a long one inside its log"""
-    long = a.cmd in LONG or (a.cmd == 'tools' and getattr(a, 'download', False))
+    long = a.cmd in LONG or (a.cmd == 'tools' and (getattr(a, 'download', False) or getattr(a, 'prepare', False)))
     if a.cmd not in ('doctor', 'setup') and not toolchain.python_ok(): return _refuse(a, long)   # both show the red Python row instead of refusing
     note = procs.setup(a, cut_off)
     if not long:

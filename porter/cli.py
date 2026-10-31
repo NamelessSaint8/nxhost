@@ -30,6 +30,7 @@ def _parser():
     dv = sub.add_parser('devices', help='the devices adb sees'); dv.add_argument('--json', action='store_true')
     t = sub.add_parser('tools', help='list, or download, the missing tools (Android NDK, .NET SDK, platform-tools) from Google and Microsoft')
     t.add_argument('--download', action='store_true', help='download and unpack them into the nx2android folder (you accept their licenses)')
+    t.add_argument('--prepare', action='store_true', help='restore the .NET tools\' NuGet packages, check them against the pins and build the shader translator and nx_extract once, so the first port finds them ready')
     t.add_argument('--only', default='', help='these instead of the missing ones: ndk, dotnet, adb (comma-separated)'); t.add_argument('--json', action='store_true')
     t.add_argument('--progress', default='auto', choices=('auto', 'bar', 'lines', 'json', 'off'))
     c = sub.add_parser('config', help='show or change the saved settings'); c.add_argument('key', nargs='?'); c.add_argument('value', nargs='?')
@@ -154,6 +155,7 @@ def cmd_tools(a):
         msg = f'unknown tool {", ".join(bad)}: --only takes ndk, dotnet, adb'
         _print_json({'error': msg}) if a.json else print(msg, file=sys.stderr); return 2
     names = [known[n] for n in given] or None
+    if a.prepare: from porter import prepare; return _with_progress(a.progress, prepare.run)
     if a.download:
         def go():
             items = fetch.plan(names)
