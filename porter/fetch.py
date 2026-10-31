@@ -114,17 +114,40 @@ def plan(names=None):
     return out
 
 
-def _download(it, dest):   # to dest, counting bytes and hashing as it goes; a wrong checksum deletes the file
-    h, part = hashlib.new(it.algo), dest.with_suffix(dest.suffix + '.part')
-    with urllib.request.urlopen(urllib.request.Request(it.url, headers={'User-Agent': 'nx2android'}), timeout=120, context=tls.context()) as r, open(part, 'wb') as f:
-        total, done = int(r.headers.get('Content-Length') or it.size or 0), 0
-        PROG.set(step='downloading', done=0, total=total or None, unit='B')
-        while chunk := r.read(1 << 20):
-            f.write(chunk); h.update(chunk); done += len(chunk); PROG.set(done=done)
+def _download(it, dest, retries=3):
+    """To dest through dest.part, hashing as it goes (D-21, D-22). A .part already there (a dropped link, a Cancel, a restart) is hashed first and the rest asked
+    for with Range; only a 206 whose Content-Range starts at its size is appended to, so no other range is ever spliced in. A dropped link is retried, logged;
+    KeyboardInterrupt (Cancel) is never caught, so the .part stays for the next run. A wrong final hash deletes the .part and stops"""
+    part, name, failed = dest.with_suffix(dest.suffix + '.part'), Path(it.url).name, 0
+    while True:
+        have = part.stat().st_size if part.exists() else 0; h = hashlib.new(it.algo)
+        if have:
+            PROG.set(step='checking', done=0, total=have, unit='B')
+            with open(part, 'rb') as f:
+                while b := f.read(1 << 20): h.update(b)
+        hdr = {'User-Agent': 'nx2android', **({'Range': f'bytes={have}-'} if have else {})}
+        try:
+            with urllib.request.urlopen(urllib.request.Request(it.url, headers=hdr), timeout=120, context=tls.context()) as r:
+                st = getattr(r, 'status', 200)
+                if have and not (st == 206 and (r.headers.get('Content-Range') or '').startswith(f'bytes {have}-')):
+                    if st == 206: part.unlink(); continue   # another range than asked: asked again whole, never spliced
+                    have = 0; h = hashlib.new(it.algo)   # the server ignored Range: this answer is the whole file
+                total = have + int(r.headers.get('Content-Length') or 0) or it.size or None
+                PROG.set(step='downloading', done=have, total=total, unit='B')
+                with open(part, 'ab' if have else 'wb') as f:
+                    while chunk := r.read(1 << 20): f.write(chunk); h.update(chunk); have += len(chunk); PROG.set(done=have)
+            break
+        except urllib.error.HTTPError as e:
+            if e.code != 416 or not have: raise
+            break   # 416: the .part is whole already (or longer): the hash decides
+        except (urllib.error.URLError, OSError, TimeoutError) as e:
+            failed += 1
+            if failed >= retries: raise
+            PROG.say(f'{name}: {e}, retry {failed}')   # explicit and logged, like Adb.run
     if (got := h.hexdigest().lower()) != it.hash.lower():
         part.unlink(missing_ok=True)
         fix = 'wait for a pin bump of porter/pins.py, or point Setup at your own NDK (Use my own…)' if it.name == 'Android NDK' else 'try again, and report it if it repeats'
-        raise BuildError(f'{Path(it.url).name}: its {it.algo} is {got}, not the expected {it.hash} (from {it.url}): {fix}')
+        raise BuildError(f'{name}: its {it.algo} is {got}, not the expected {it.hash} (from {it.url}): {fix}')
     part.replace(dest)
 
 
@@ -230,8 +253,12 @@ def _install(it, arc):
 def download(items):
     """Download, check and unpack every Item; the settings then point at them. One stage per tool"""
     root = player_tools(); root.mkdir(parents=True, exist_ok=True)
+    keep = {Path(it.url).name + '.part' for it in items}
+    for p in root.glob('*.part'):   # another archive's leftover (a pin bump): this run's own parts stay for their resume
+        if p.name not in keep: p.unlink(missing_ok=True)
     need = sum(it.size + UNPACKED.get(it.name, 0) for it in items); free = shutil.disk_usage(root).free
-    if free < need: raise BuildError(f'{need / 2**30:.1f} GB needed on {root.anchor} for the tools, {free / 2**30:.1f} GB free')
+    if free < need: raise BuildError(f'{need / 2**30:.1f} GB needed in {root} (drive {root.anchor}) for the tools, {free / 2**30:.1f} GB free there: '
+                                     'free some space, or point NX2A_HOME or Use my own… elsewhere')
     PROG.plan(len(items))
     keys = {'Android NDK': ('ndk', ''), '.NET SDK': ('dotnet', f'dotnet{toolchain.EXE}'), 'adb': ('adb', f'adb{toolchain.EXE}')}
     for it in items:
