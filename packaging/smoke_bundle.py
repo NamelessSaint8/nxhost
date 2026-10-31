@@ -1,7 +1,8 @@
 # Smoke test of a built bundle, run by the release workflow (fork-release.yml) and by hand:
 #   python packaging/smoke_bundle.py dist/nx2android-<version>-macos-arm64.dmg      (or an .app, or a bundle folder such as dist/nx2android)
 # It runs the frozen app from a read-only place (the DMG mounted read-only, or a chmod a-w copy) with a fresh NX2A_HOME, and fails unless doctor and
-# profiles answer, the GUI starts offscreen (smoke_gui.py), the bundle's files are unchanged afterwards (PKG-05: nothing is ever written into the bundle) and, on macOS, the signature still verifies.
+# profiles answer, every tool is found with only PATH=/usr/bin:/bin (D-19: a Finder or app-menu launch, POSIX), the GUI starts offscreen (smoke_gui.py), the
+# bundle's files are unchanged afterwards (PKG-05: nothing is ever written into the bundle) and, on macOS, the signature still verifies.
 # Host Python, standard library only.
 import json, os, shutil, stat, subprocess, sys, tempfile
 from pathlib import Path
@@ -38,6 +39,33 @@ def porter(exe, env, *args):   # (stdout as JSON or None, exit code, stderr's la
     return doc, r.returncode, (r.stderr.strip().splitlines() or [''])[-1]
 
 
+TOOLS = ('Android NDK', '.NET SDK', 'adb')
+
+
+def stub(p, body):
+    p.parent.mkdir(parents=True, exist_ok=True); p.write_text(f'#!/bin/sh\n{body}\n'); p.chmod(0o755)
+
+
+def bare_env_check(exe, tmp, extra_env=None, home_nx=None):
+    """D-19: doctor and setup with PATH=/usr/bin:/bin, a fresh HOME and stand-in tools in known places that PATH cannot see; every tool row must have a path.
+    A stub NDK (source.properties only) is found but fails its probe: found, not ok, is what this checks."""
+    if os.name == 'nt': print('SKIP bare PATH: Windows has no bare-PATH launch (Explorer passes the user PATH)', flush=True); return
+    bare = Path(tmp) / 'bare'; sdk = bare / ('Library/Android/sdk' if sys.platform == 'darwin' else 'Android/Sdk')
+    stub(bare / '.dotnet' / 'dotnet', f"echo '10.0.403 [{bare / '.dotnet'}/sdk]'")
+    stub(sdk / 'platform-tools' / 'adb', "echo 'Version 36.0.0-0'")
+    ndk = sdk / 'ndk' / '27.2.12479018'; ndk.mkdir(parents=True, exist_ok=True); (ndk / 'source.properties').write_text('Pkg.Revision = 27.2.12479018\n')
+    nx = Path(home_nx or Path(tmp) / 'nx2a'); nx.mkdir(parents=True, exist_ok=True)
+    env = {'PATH': '/usr/bin:/bin', 'HOME': str(bare), 'NX2A_HOME': str(nx), **(extra_env or {})}
+    for cmd in ('doctor', 'setup'):
+        doc, code, err = porter(exe, env, cmd, '--json')
+        try: rows = doc if cmd == 'doctor' else next(s for s in doc['steps'] if s['id'] == 'tools')['items']
+        except (TypeError, KeyError, StopIteration): rows = None
+        if not isinstance(rows, list): check(f'bare PATH: every tool row found ({cmd})', False, f'no rows, exit {code}: {err}'); continue
+        got = {r['name']: r for r in rows if r.get('name') in TOOLS}
+        lost = [f"{n} ({got[n]['detail']})" if n in got else f'{n} (no row)' for n in TOOLS if not (n in got and got[n].get('path'))]
+        check(f'bare PATH: every tool row found ({cmd})', not lost, 'not found: ' + ', '.join(lost))
+
+
 def main(argv):
     if len(argv) != 2: sys.exit('usage: python packaging/smoke_bundle.py <.dmg | .app | bundle folder>')
     src = Path(argv[1]).resolve(); tmp = Path(tempfile.mkdtemp(prefix='nx2a-smoke-')); mount = None
@@ -61,6 +89,7 @@ def main(argv):
         check('doctor --json answers a JSON list', isinstance(doc, list) and code in (0, 1), f'exit {code}: {err}')
         doc, code, err = porter(exe, env, 'profiles', '--json')
         check('profiles --json lists the profiles', isinstance(doc, list) and len(doc) > 0 and code == 0, f'exit {code}: {err}')
+        bare_env_check(exe, tmp, home_nx=home)   # main's NX2A_HOME: the frozen engine copy is made once
         # the engine modules, capstone under the hardened runtime and an offscreen Window, which only the frozen (and maybe signed) app can show
         try:
             r = subprocess.run([str(exe), str(Path(__file__).resolve().parent / 'smoke_gui.py')], capture_output=True, text=True, timeout=90,
