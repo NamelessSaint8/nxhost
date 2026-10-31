@@ -195,6 +195,33 @@ class SetupTab(unittest.TestCase):
         w, _ = launch(self); w.setup.run_btn.click()
         z = wiz(self, w); self.assertTrue(z.isVisible()); self.assertEqual(z.currentId(), firstrun.PAGES.index('done'))
 
+    def written(self): self.addCleanup(lambda: app.config.path().unlink(missing_ok=True))   # the module's other tests start from no config.json
+
+    def rechecked(self, w, calls):   # w.recheck() and its setup --json answered
+        n = len(calls.sent('setup')); w.recheck()
+        self.assertTrue(until(lambda: len(calls.sent('setup')) > n, 3000)); QTest.qWait(50)
+
+    def test_wizard_save_kept(self):   # 03-VERIFICATION gap 1: what `porter config keys <path> --json` saved survives a re-check and Save and check
+        w, calls = launch(self); self.written(); keys = str(Path(HOME) / 'prod.keys')
+        app.config.set_value('keys', keys); n = len(calls.sent('setup')); w.recheck()
+        self.assertEqual(w.setup.edits['keys'].text(), keys)
+        self.assertTrue(until(lambda: len(calls.sent('setup')) > n, 3000)); QTest.qWait(50)
+        w.setup.save(); self.assertEqual(app.config.load()['keys'], keys)
+
+    def test_unsaved_edit_kept(self):   # a re-check refreshes the fields from config.json, except one the player is typing in
+        w, calls = launch(self); self.written(); out, ndk = str(Path(HOME) / 'out'), '/opt/nx2a-test/my-ndk'
+        w.setup.edits['out'].setText(out); app.config.set_value('ndk', ndk); self.rechecked(w, calls)
+        self.assertEqual((w.setup.edits['ndk'].text(), w.setup.edits['out'].text()), (ndk, out))
+        w.setup.save(); c = app.config.load(); self.assertEqual((c['ndk'], c['out']), (ndk, out))
+
+    def test_save_writes_changed_only(self):   # another writer's value (no re-check since) stays; a typed field and a field cleared on purpose are written
+        w, calls = launch(self); self.written(); s = w.setup
+        app.config.set_value('keys', str(Path(HOME) / 'prod.keys')); self.rechecked(w, calls)
+        app.config.set_value('dotnet', '/opt/nx2a-test/dotnet')
+        s.edits['device'].setText('SERIAL1'); s.edits['keys'].setText('')
+        s.save(); c = app.config.load()
+        self.assertEqual((c['dotnet'], c['device'], c['keys']), ('/opt/nx2a-test/dotnet', 'SERIAL1', ''))
+
 
 def wiz(test, w):
     z = gate(test, w).wizard; test.assertIsNotNone(z, 'no wizard is open'); return z
