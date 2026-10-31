@@ -6,7 +6,15 @@ findings:
   - id: CR-04
     severity: critical
     disposition: open
-    title: "Links are checked against the unpack folder, but a different tree is installed, so a link can leave the installed toolchain"
+    title: "Links are checked against the unpack folder, but a different tree is installed, so a link can leave the installed toolchain (resolved by 02-13)"
+  - id: WR-05
+    severity: warning
+    disposition: open
+    title: "Replacing an existing toolchain is not atomic (resolved by 02-13)"
+  - id: IN-06
+    severity: info
+    disposition: open
+    title: "Some hostile zips are refused with a raw OS error instead of the `refused` message (resolved by 02-13)"
   - id: WR-01
     severity: warning
     disposition: open
@@ -23,14 +31,26 @@ findings:
     severity: warning
     disposition: open
     title: "Linux arm64 gets the x86-64 NDK and platform-tools as \"pinned\" (carried forward)"
-  - id: WR-05
-    severity: warning
-    disposition: open
-    title: "Replacing an existing toolchain is not atomic (carried forward)"
   - id: WR-06
     severity: warning
     disposition: open
     title: "Moving the old data pack aside has no Windows retry, unlike `swap_in` (carried forward)"
+  - id: WR-07
+    severity: warning
+    disposition: open
+    title: "Normalization aliases on APFS bypass the \"no member under a link\" check"
+  - id: WR-08
+    severity: warning
+    disposition: open
+    title: "The WR-05 failure (a toolchain file in use on Windows) still ends in a raw traceback"
+  - id: WR-09
+    severity: warning
+    disposition: open
+    title: "`test_pinned_archives_pass` runs the rule on link names only, not the real member list"
+  - id: WR-10
+    severity: warning
+    disposition: open
+    title: "`zip_links.py` never checks that it read the pinned file"
   - id: IN-01
     severity: info
     disposition: open
@@ -51,22 +71,38 @@ findings:
     severity: info
     disposition: open
     title: "Stale reference to the deleted probe packer (carried forward)"
-  - id: IN-06
-    severity: info
-    disposition: open
-    title: "Some hostile zips are refused with a raw OS error instead of the `refused` message"
   - id: IN-07
     severity: info
     disposition: open
-    title: "The second reuse check runs after the restore and the NuGet check, not right after the lock"
+    title: "The second reuse check runs after the restore and the NuGet check, not right after the lock (carried forward)"
   - id: IN-08
     severity: info
     disposition: open
-    title: "Orphaned and unpruned translator folders"
+    title: "Orphaned and unpruned translator folders (carried forward)"
   - id: IN-09
     severity: info
     disposition: open
-    title: "`test_waiting_port_reuses_translator` depends on a 0.5 s window"
+    title: "`test_waiting_port_reuses_translator` depends on a 0.5 s window (carried forward)"
+  - id: IN-10
+    severity: info
+    disposition: open
+    title: "The link-table read is duplicated between the installer and the fixture generator"
+  - id: IN-11
+    severity: info
+    disposition: open
+    title: "The 40-hop cap is Linux's; macOS's MAXSYMLINKS is 32"
+  - id: IN-12
+    severity: info
+    disposition: open
+    title: "ARCHITECTURE.md says \"files first, links last\" for tar too"
+  - id: IN-13
+    severity: info
+    disposition: open
+    title: "Two link-escape tests are still skipped on Windows, though the rule now runs there"
+  - id: IN-14
+    severity: info
+    disposition: open
+    title: "`Remote.readinto` assumes the server returned exactly the requested range"
   - id: CR-01
     severity: critical
     disposition: open
@@ -79,9 +115,9 @@ findings:
     severity: critical
     disposition: open
     title: "Translator reuse check is outside the tools lock and is not repeated inside it; a waiting port rebuilds and deletes the translator another port is using"
-open: 19
-total: 19
-recorded: 2026-10-30T20:25:11.841Z
+open: 28
+total: 28
+recorded: 2026-10-31T02:11:06.286Z
 ---
 
 # Phase 02: Code Review Disposition
@@ -89,21 +125,30 @@ recorded: 2026-10-30T20:25:11.841Z
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
 | CR-04 | critical | open | - |
+| WR-05 | warning | open | - |
+| IN-06 | info | open | - |
 | WR-01 | warning | open | - |
 | WR-02 | warning | open | - |
 | WR-03 | warning | open | - |
 | WR-04 | warning | open | - |
-| WR-05 | warning | open | - |
 | WR-06 | warning | open | - |
+| WR-07 | warning | open | - |
+| WR-08 | warning | open | - |
+| WR-09 | warning | open | - |
+| WR-10 | warning | open | - |
 | IN-01 | info | open | - |
 | IN-02 | info | open | - |
 | IN-03 | info | open | - |
 | IN-04 | info | open | - |
 | IN-05 | info | open | - |
-| IN-06 | info | open | - |
 | IN-07 | info | open | - |
 | IN-08 | info | open | - |
 | IN-09 | info | open | - |
+| IN-10 | info | open | - |
+| IN-11 | info | open | - |
+| IN-12 | info | open | - |
+| IN-13 | info | open | - |
+| IN-14 | info | open | - |
 | CR-01 | critical | open | - (not in the current review) |
 | CR-02 | critical | open | - (not in the current review) |
 | CR-03 | critical | open | - (not in the current review) |
