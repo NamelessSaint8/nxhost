@@ -269,6 +269,10 @@ def full(start=0):   # the rest from the asked offset (a 206), or the whole file
     return b'HTTP/1.1 206 Partial Content\r\nContent-Range: bytes %d-%d/%d\r\nContent-Length: %d\r\nConnection: close\r\n\r\n' % (start, len(BODY) - 1, len(BODY), len(BODY) - start) + BODY[start:]
 
 
+def chunk_cut(start=0):   # a chunked 200 cut after one chunk of 3000 bytes, no terminating chunk: read() raises http.client.IncompleteRead
+    return b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n%x\r\n' % 3000 + BODY[:3000] + b'\r\n'
+
+
 class Loopback:   # a real 127.0.0.1 server: one planned answer (a function of the asked offset) per connection, each request's Range header recorded
     def __init__(self, *answers):
         self.answers, self.ranges = list(answers), []
@@ -306,6 +310,18 @@ class EarlyClose(unittest.TestCase):   # WR-01: a body cut short without an exce
         srv = self.get(short, full); self.fetch._download(self.item, self.dest)
         self.assertEqual(srv.ranges, [None, 'bytes=3000-']); self.assertEqual(self.dest.read_bytes(), BODY); self.assertFalse(self.part.exists())
         self.assertTrue(any('tool.zip' in m and f'3000 of {len(BODY)}' in m and 'retry 1' in m for m in self.said), self.said)
+
+    def test_chunked_cut_resumed(self):   # at 03-12's code IncompleteRead (an HTTPException, not an OSError) escaped _download
+        srv = self.get(chunk_cut, full); self.fetch._download(self.item, self.dest)
+        self.assertEqual(len(srv.ranges), 2); self.assertIsNone(srv.ranges[0]); self.assertEqual(self.dest.read_bytes(), BODY); self.assertFalse(self.part.exists())
+        self.assertTrue(any('retry 1' in m for m in self.said), self.said)
+
+    def test_short_answers_keep_part(self):   # three short answers (Range ignored): the connection error, the .part kept for the next run, no hash message
+        from porter.upstream import BuildError
+        srv = self.get(short, short, short)
+        with self.assertRaises(ConnectionResetError) as cm: self.fetch._download(self.item, self.dest)
+        self.assertNotIsInstance(cm.exception, BuildError); self.assertEqual(len(srv.ranges), 3)
+        self.assertTrue(self.part.stat().st_size); self.assertFalse(self.dest.exists()); self.assertFalse(any('not the expected' in m for m in self.said), self.said)
 
 
 def evil_zip(path, members):   # (name, link target or None, mode): a link is a member with S_IFLNK and its target as data
