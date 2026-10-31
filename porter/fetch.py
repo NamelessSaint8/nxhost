@@ -129,42 +129,84 @@ def _refuse_names(arc, names):
     if bad := next((n for n in names if _bad_name(n)), None): raise BuildError(f'{arc.name}: refused, member {bad} would land outside the unpack folder')
 
 
-def _unzip(arc, into):   # zipfile drops Unix modes and symlinks; the NDK and platform-tools need both outside Windows
+def _parts(n): return [p for p in n.split('/') if p not in ('', '.')]   # a member name's or link target's components: tar names start with ./, and the first is . itself
+
+
+def _top(names, folder):   # the one folder an archive is installed from, '' for none: its single top folder, never stripped for .NET (the archive is the folder)
+    ps = [p for p in map(_parts, names) if p]; firsts = {p[0] for p in ps}
+    return firsts.pop() if len(firsts) == 1 and folder != 'dotnet' and any(len(p) > 1 for p in ps) else ''
+
+
+def _link_refusal(names, links, top):
+    """Why the archive's links cannot be installed, or None. names: every member name; links: each link member's name -> its target. Every link is resolved in memory,
+    component by component, from the folder that is installed (the archive root less top), through any link it passes; the disk is never read, so member order (CR-01),
+    the move on install (CR-04) and Python's own loop handling (IN-06) cannot change the answer"""
+    for n, t in links.items():
+        # the default macOS volume is case-insensitive: names are compared casefolded, and that matches the disk only for plain ASCII
+        if not t or not _parts(n) or not (n + t).isascii() or not (n + t).isprintable(): return f'link {n} → {t!r} is not a plain ASCII path'
+        if t.startswith('/'): return f'link {n} → {t} leaves the installed folder'
+    full = lambda m: '/'.join(_parts(m)).casefold(); count, under = {}, {}
+    for m in names:
+        f = full(m); count[f] = count.get(f, 0) + 1; ps = f.split('/')
+        for k in range(1, len(ps)): under.setdefault('/'.join(ps[:k]), m)
+    for n in links:   # so links last is safe: no member is written through a link, and no link's folder passes through one
+        if count[full(n)] > 1: return f'link {n} shares its name with another member'
+        if full(n) in under: return f'member {under[full(n)]} is under link {n}'
+    s = 1 if top else 0
+    R = {'/'.join(_parts(n)[s:]): t for n, t in links.items()}; F = {k.casefold(): k for k in R}
+    for n, t in links.items():
+        stack, work, hops = _parts(n)[s:-1], _parts(t), 0
+        while work:
+            c = work.pop(0)
+            if c == '..':
+                if not stack: return f'link {n} → {t} leaves the installed folder'
+                stack.pop(); continue
+            p = '/'.join(stack + [c])
+            if p in R:   # 40 is Linux's MAXSYMLINKS; Path.resolve raised RuntimeError for a loop on 3.11/3.12 and accepted it on 3.13+ (IN-06)
+                hops += 1
+                if hops > 40: return f'link {n} → {t} runs through more than 40 links (a loop)'
+                work[:0] = _parts(R[p])   # relative to that link's folder, which is the stack
+            elif p.casefold() in F: return f'link {n} → {t} names link {F[p.casefold()]} in another case'
+            else: stack.append(c)
+    return None
+
+
+def _unzip(arc, into, folder):   # zipfile drops Unix modes and symlinks; the NDK and platform-tools need both outside Windows. Returns the folder to install
     with zipfile.ZipFile(arc) as z:
         infos = z.infolist(); PROG.set(step='unpacking', done=0, total=len(infos), unit='files')
-        _refuse_names(arc, (i.filename for i in infos))
-        link = lambda i: os.name != 'nt' and stat.S_ISLNK(i.external_attr >> 16)
+        names = [i.filename for i in infos]; _refuse_names(arc, names)
+        links = {i.filename: z.read(i).decode('utf-8', 'replace') for i in infos if stat.S_ISLNK(i.external_attr >> 16)}   # every OS: a bad byte is a refusal, not a crash
+        top = _top(names, folder)
+        if reason := _link_refusal(names, links, top): raise BuildError(f'{arc.name}: refused, {reason}')
+        link = lambda i: os.name != 'nt' and stat.S_ISLNK(i.external_attr >> 16)   # Windows writes a link as a plain file holding its target
         for k, info in enumerate(i for i in infos if not link(i)):
             mode = info.external_attr >> 16; p = Path(z.extract(info, into))
             if os.name != 'nt' and mode & 0o777 and not info.is_dir(): p.chmod(mode & 0o777)
             if k % 200 == 0: PROG.set(done=k)
-        root = into.resolve(); made = []   # both sides resolved: /tmp and /var are links on macOS
-        refuse = lambda name, target: BuildError(f'{arc.name}: refused, link {name} → {target} leaves the unpack folder')
         for info in filter(link, infos):   # links last, after every file: no file is ever written through a link
-            t, target = into / info.filename, z.read(info).decode()
-            if target.startswith('/') or not t.parent.resolve().is_relative_to(root): raise refuse(info.filename, target)   # its folder, through the links made so far
-            t.parent.mkdir(parents=True, exist_ok=True); t.unlink(missing_ok=True); os.symlink(target, t); made.append((info.filename, target))
-        # CR-01: a link resolved before a later link exists passes lexically (a -> d1/d2/b/../../../escaped, then d1/d2/b -> ../..),
-        # so every link is resolved once all of them exist
-        if bad := next(((n, tg) for n, tg in made if not (into / n).resolve().is_relative_to(root)), None): raise refuse(*bad)
+            t = into / info.filename; t.parent.mkdir(parents=True, exist_ok=True); os.symlink(links[info.filename], t)
+    return into / top
 
 
-def _untar(arc, into):   # the data filter, always: its bypasses fixed in 3.11.13 / 3.12.11 / 3.13.4 are why porter refuses older Pythons (runlog.run)
+def _untar(arc, into, folder):   # the data filter, always: its bypasses fixed in 3.11.13 / 3.12.11 / 3.13.4 are why porter refuses older Pythons (runlog.run)
     with tarfile.open(arc) as t:
-        PROG.set(step='unpacking'); _refuse_names(arc, t.getnames())   # the filter would strip a leading / and go on: the whole archive is refused instead
+        PROG.set(step='unpacking'); ms = t.getmembers(); names = [m.name for m in ms]
+        _refuse_names(arc, names)   # the filter would strip a leading / and go on: the whole archive is refused instead
+        top = _top(names, folder)
+        # symlinks get the zip rule; hard links stay with the data filter (a hard link shares content and points nowhere once made)
+        if reason := _link_refusal(names, {m.name: m.linkname for m in ms if m.issym()}, top): raise BuildError(f'{arc.name}: refused, {reason}')
         try: t.extractall(into, filter='data')
         except tarfile.FilterError as e: raise BuildError(f'{arc.name}: refused, {e}') from e
+    return into / top
 
 
 def _install(it, arc):
-    """Unpack arc into player_tools()/it.folder: an archive with one top folder (the NDK, platform-tools) gives that folder, one without (.NET) is the folder.
-    A refused or failed unpack removes its partial .unpack folder"""
+    """Unpack arc into player_tools()/it.folder: the folder installed is the one _unzip / _untar name from the archive's members (its single top folder, the NDK
+    and platform-tools, or the whole archive for .NET). A refused or failed unpack removes its partial .unpack folder"""
     root = player_tools(); tmp = root / f'.{it.folder}.unpack'
     shutil.rmtree(tmp, ignore_errors=True); tmp.mkdir(parents=True)
     try:
-        (_unzip if arc.suffix == '.zip' else _untar)(arc, tmp)
-        top = list(tmp.iterdir())
-        src = top[0] if len(top) == 1 and top[0].is_dir() and it.folder != 'dotnet' else tmp
+        src = (_unzip if arc.suffix == '.zip' else _untar)(arc, tmp, it.folder)
         dest = root / it.folder
         shutil.rmtree(dest, ignore_errors=True); src.replace(dest)
     except BaseException: shutil.rmtree(tmp, ignore_errors=True); raise
