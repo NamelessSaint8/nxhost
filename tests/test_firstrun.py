@@ -371,7 +371,7 @@ class Keys(unittest.TestCase):   # the prod.keys page (03-12, D-05/D-06): porter
                 self.assertTrue(z.button(QWizard.NextButton).isEnabled()); self.assertTrue(p.isComplete())
 
 
-STEPS = ('1. On the device, open Settings › About and tap Build number seven times. 2. Open Settings › System › Developer options and turn on USB debugging. '
+STEPS = ('1. On the device, open Settings › About and tap Build number seven times.\n2. Open Settings › System › Developer options and turn on USB debugging.\n'
          '3. Connect it by USB and tap Allow on the "Allow USB debugging?" prompt.')
 
 
@@ -456,6 +456,22 @@ class Device(unittest.TestCase):   # the device page (D-15, DEV-01): devices --j
     def test_instructions(self):
         w, calls, z, p = self.open()
         self.assertIn(STEPS, shown(p)); self.assertIn('Connect your Android device', shown(p))
+
+    def test_layout_without_device(self):   # UI-REVIEW top fix 1: no device, the labels keep their natural height and sit together under the heading
+        w, calls, z, p = self.open([], [dev('R5CT1', 'device')]); z.resize(760, 600)
+        self.assertTrue(until(lambda: p.empty.text().startswith('No device found yet'), 2000)); QTest.qWait(50)
+        self.assertLessEqual(p.head.geometry().top(), 24)
+        steps = next(l for l in p.findChildren(QLabel) if l.text().startswith('1. ')); self.assertTrue(steps.isVisibleTo(p))
+        for lab in (l for l in p.findChildren(QLabel) if l.isVisibleTo(p)):
+            natural = lab.heightForWidth(lab.width()) if lab.wordWrap() else lab.sizeHint().height()
+            with self.subTest(lab.text()[:30]): self.assertLessEqual(lab.height(), natural + 8)
+        self.assertEqual(p.v.stretch(p.v.count() - 1), 1)   # the spare height goes below the labels
+        self.assertTrue(until(lambda: p.list.isVisibleTo(p), 3000)); self.assertEqual(p.v.stretch(p.v.count() - 1), 0)   # and to the list once it shows
+
+    def test_ok_detail_hidden(self):   # an ok device step's detail is only the adb path: not shown; a not-ok one shows (Wizard.test_page_text)
+        w, calls, z, p = self.open()
+        self.assertEqual(firstrun.step(gate(self, w).doc, 'device')['detail'], '/opt/nx2a-test/platform-tools/adb')
+        self.assertFalse(p.detail.isVisibleTo(p)); self.assertNotIn('/opt/nx2a-test/platform-tools/adb', shown(p))
 
     def test_pick_saves(self):   # several devices ready: the selected one is saved; one: nothing to pick
         two = [dev('R5CT1', 'device'), dev('R5CT2', 'device'), dev('R5CT3', 'unauthorized', 'Unlock the device and tap Allow on the USB debugging prompt.')]
