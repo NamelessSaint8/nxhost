@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 03
 current_phase_name: Host Toolchains and Guided First Run
 status: executing
-stopped_at: Completed 03-05-PLAN.md
-last_updated: "2026-10-31T16:12:20.030Z"
+stopped_at: Completed 03-06-PLAN.md
+last_updated: "2026-10-31T16:19:14.851Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 03 execution started
-state_head: fc6f5afbd2ffa41f0778862c6e80bf19ddcad50d
+state_head: a25bdf4380946bf13778906e8f9eecadf160931a
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 35
-  completed_plans: 28
+  completed_plans: 29
   percent: 33
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-10-31)
 ## Current Position
 
 Phase: 03 (Host Toolchains and Guided First Run) — EXECUTING
-Plan: 6 of 12
+Plan: 7 of 12
 Status: Ready to execute
 Last activity: 2026-10-31 — Phase 03 execution started
 
@@ -85,6 +85,7 @@ Progress: [███░░░░░░░] 33%
 | Phase 03 P03 | 8 min | 3 tasks | 6 files |
 | Phase 03 P04 | 8min | 3 tasks | 11 files |
 | Phase 03 P05 | 8min | 2 tasks | 10 files |
+| Phase 03 P06 | 4 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -162,6 +163,9 @@ Recent decisions affecting current work:
 - [Phase 03]: TOOL-03 stays pending until 03-06 adds the udev fix
 - [Phase 03]: 03-05: the wizard reaches a later start page by walking next() from the legal page, so QWizard's Back still reaches earlier steps (D-04)
 - [Phase 03]: 03-05: every exit from the wizard goes through done(), which clears the gate and deletes it; Run/Continue setup with no setup answer asks porter again
+- [Phase 03]: devices() reads the lines after the List of devices attached header, so a daemon notice on stdout cannot shift the header into the rows
+- [Phase 03]: devices --json fix text comes only from porter literals chosen by state kind and os-release family; the plugdev user name from adb is never copied (T-03-21)
+- [Phase 03]: Push -Z is gated per Adb by a cached hosttools.push_flags: one adb version, asked only when pushing
 
 ### Pending Todos
 
@@ -186,6 +190,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-31T16:12:19.800Z
-Stopped at: Completed 03-05-PLAN.md
+Last session: 2026-10-31T16:19:14.643Z
+Stopped at: Completed 03-06-PLAN.md
 Resume file: None

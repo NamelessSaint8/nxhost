@@ -109,7 +109,7 @@ Plans:
   3. On Linux arm64, setup detects or downloads a community arm64 NDK r27c, checked by hash and a compile probe, and .NET 10, and the host build uses the NDK's `linux-arm64` folder.
   4. On Linux, setup shows the distro adb version and handles or refuses one without `push -Z`, with fix text. Connected devices show their adb state, and `unauthorized`, `offline` and `no permissions` each come with a one-line fix (the udev rules package for `no permissions`).
   5. Launched from Finder or a desktop menu with a minimal PATH, the app finds every tool by absolute path and a port runs.
-**Plans**: 5/12 plans executed
+**Plans**: 6/12 plans executed
 
 Plans:
 **Wave 1**
@@ -122,7 +122,7 @@ Plans:
 - [x] 03-05-PLAN.md — gui/firstrun.py: banner, non-modal wizard, legal page and the other pages' step text, Setup tab on setup --json with Run setup (FRUN-01, FRUN-02, FRUN-03)
 
 **Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 03-06-PLAN.md — adb device states parsed whole, one-line distro-aware fixes in `devices --json`, `-Z` only for adb 30+ (DEV-01, TOOL-03)
+- [x] 03-06-PLAN.md — adb device states parsed whole, one-line distro-aware fixes in `devices --json`, `-Z` only for adb 30+ (DEV-01, TOOL-03)
 - [ ] 03-07-PLAN.md — The new shell (`python -m gui.shell`) beside today's window, reusing gui/firstrun.py; arch rules for both first-run views (FRUN-02, FRUN-03)
 - [ ] 03-08-PLAN.md — Bare-PATH bundle smoke, arm64 community NDK download and probe in the release workflow, pin watcher, release-check rows, INSTALL.md (TOOL-04, TOOL-01)
 - [ ] 03-12-PLAN.md — Wizard prod.keys page: found key files with porter's verdict and generation, Browse…, save through `config keys` and re-check (FRUN-01)
@@ -180,7 +180,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 |-------|----------------|--------|-----------|
 | 1. Bridge, Bundles and CI | 10/10 | Complete    | 2026-10-30 |
 | 2. Porter Hardening | 13/13 | Complete    | 2026-10-31 |
-| 3. Host Toolchains and Guided First Run | 5/12 | In Progress | - |
+| 3. Host Toolchains and Guided First Run | 6/12 | In Progress | - |
 | 4. Game Library and Per-Game Settings | 0/TBD | Not started | - |
 | 5. Device Manager and Diagnostics | 0/TBD | Not started | - |
 | 6. Switch-Over and Tester Verification | 0/TBD | Not started | - |
