@@ -1,0 +1,195 @@
+{
+  "ready": true,
+  "legal": {
+    "version": 1,
+    "accepted": 1,
+    "text": "Use nx2android only with game dumps and prod.keys from a Switch you own. Nothing is uploaded: your games and keys stay on this computer and go only to your own Android device. The Android NDK, the .NET SDK and Android platform-tools are downloaded from Google and Microsoft and come under their makers' licenses:",
+    "links": {
+      "Android NDK": "https://developer.android.com/studio/terms",
+      "adb": "https://developer.android.com/studio/terms",
+      ".NET SDK": "https://github.com/dotnet/core/blob/main/license-information.md"
+    }
+  },
+  "steps": [
+    {
+      "id": "legal",
+      "ok": true,
+      "detail": "accepted",
+      "fix": ""
+    },
+    {
+      "id": "keys",
+      "ok": true,
+      "detail": "generation 19",
+      "generation": 19,
+      "missing": [],
+      "fix": "",
+      "path": "~/.switch/prod.keys",
+      "found": [
+        {
+          "path": "~/.switch/prod.keys",
+          "ok": true,
+          "detail": "generation 19",
+          "generation": 19,
+          "missing": []
+        }
+      ]
+    },
+    {
+      "id": "tools",
+      "ok": true,
+      "detail": "every tool is here",
+      "fix": "",
+      "items": [
+        {
+          "name": "Android NDK",
+          "ok": true,
+          "detail": "27.2.12479018 at /opt/nx2a-test/ndk/27.2.12479018",
+          "required": true,
+          "path": "/opt/nx2a-test/ndk/27.2.12479018",
+          "fix": "",
+          "source": "Android SDK",
+          "version": "27.2.12479018",
+          "note": ""
+        },
+        {
+          "name": ".NET SDK",
+          "ok": true,
+          "detail": "10.0.100 (/opt/nx2a-test/dotnet/dotnet)",
+          "required": true,
+          "path": "/opt/nx2a-test/dotnet/dotnet",
+          "fix": "",
+          "source": "PATH",
+          "version": "10.0.100",
+          "note": ""
+        },
+        {
+          "name": "adb",
+          "ok": true,
+          "detail": "/opt/nx2a-test/platform-tools/adb",
+          "required": false,
+          "path": "/opt/nx2a-test/platform-tools/adb",
+          "fix": "",
+          "source": "PATH",
+          "version": "36.0.0",
+          "note": ""
+        }
+      ],
+      "downloadable": []
+    },
+    {
+      "id": "device",
+      "ok": true,
+      "soft": true,
+      "detail": "/opt/nx2a-test/platform-tools/adb",
+      "fix": "",
+      "path": "/opt/nx2a-test/platform-tools/adb"
+    }
+  ],
+  "missing": [],
+  "notes": [],
+  "desktop": {
+    "offer": false
+  },
+  "checks": [
+    {
+      "name": "Python",
+      "ok": true,
+      "detail": "3.14.0 (/opt/nx2a-test/python/bin/python3)",
+      "required": true,
+      "path": "",
+      "fix": "",
+      "source": "",
+      "version": "",
+      "note": ""
+    },
+    {
+      "name": "Python modules",
+      "ok": true,
+      "detail": "lz4, capstone, zstd",
+      "required": true,
+      "path": "",
+      "fix": "",
+      "source": "",
+      "version": "",
+      "note": ""
+    },
+    {
+      "name": "Pillow",
+      "ok": true,
+      "detail": "the app icon from the game's icon",
+      "required": false,
+      "path": "",
+      "fix": "pip install pillow",
+      "source": "",
+      "version": "",
+      "note": ""
+    },
+    {
+      "name": "Android NDK",
+      "ok": true,
+      "detail": "27.2.12479018 at /opt/nx2a-test/ndk/27.2.12479018",
+      "required": true,
+      "path": "/opt/nx2a-test/ndk/27.2.12479018",
+      "fix": "",
+      "source": "Android SDK",
+      "version": "27.2.12479018",
+      "note": ""
+    },
+    {
+      "name": ".NET SDK",
+      "ok": true,
+      "detail": "10.0.100 (/opt/nx2a-test/dotnet/dotnet)",
+      "required": true,
+      "path": "/opt/nx2a-test/dotnet/dotnet",
+      "fix": "",
+      "source": "PATH",
+      "version": "10.0.100",
+      "note": ""
+    },
+    {
+      "name": "adb",
+      "ok": true,
+      "detail": "/opt/nx2a-test/platform-tools/adb",
+      "required": false,
+      "path": "/opt/nx2a-test/platform-tools/adb",
+      "fix": "",
+      "source": "PATH",
+      "version": "36.0.0",
+      "note": ""
+    },
+    {
+      "name": "prod.keys",
+      "ok": true,
+      "detail": "generation 19 (~/.switch/prod.keys)",
+      "required": true,
+      "path": "~/.switch/prod.keys",
+      "fix": "",
+      "source": "",
+      "version": "",
+      "note": ""
+    },
+    {
+      "name": "Signing key",
+      "ok": true,
+      "detail": "made on the first port: /opt/nx2a-test/user/signing-key.json",
+      "required": true,
+      "path": "",
+      "fix": "",
+      "source": "",
+      "version": "",
+      "note": ""
+    },
+    {
+      "name": "Disk space",
+      "ok": true,
+      "detail": "120 GB free on /",
+      "required": false,
+      "path": "",
+      "fix": "",
+      "source": "",
+      "version": "",
+      "note": ""
+    }
+  ]
+}

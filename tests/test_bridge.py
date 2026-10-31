@@ -393,7 +393,7 @@ class Timeout(Fake):   # a one-shot that never answers is killed at its own limi
         self.assertEqual(box.call_args[0][1:], ('nx2android', 'could not copy the engine'))
 
     def test_default_limits(self):
-        self.assertEqual(runner.TIMEOUTS, {'devices': 45, 'doctor': 30, 'inspect': 60, 'profiles': 20, 'tools': 60})
+        self.assertEqual(runner.TIMEOUTS, {'devices': 45, 'doctor': 30, 'inspect': 60, 'profiles': 20, 'setup': 45, 'tools': 60})
 
 
 class Downloads(unittest.TestCase):   # the Setup tab's confirm dialog: an untested fallback says so, and index strings are text, not markup
