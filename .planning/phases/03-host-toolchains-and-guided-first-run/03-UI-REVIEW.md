@@ -1,83 +1,101 @@
-# Phase 3 — UI Review
+# Phase 3 — UI Review (re-audit after gap closure 03-13..03-15)
 
 **Audited:** 2026-10-31
-**Baseline:** 03-UI-SPEC.md (approved)
-**Screenshots:** not captured with Playwright (desktop Qt app, no dev server). Offscreen renders (`QT_QPA_PLATFORM=offscreen`, Qt default fonts, Fusion light only) were taken through the `tests/test_firstrun.py` stand-in with `setup_missing.json`: main window plus banner, Setup tab, all five wizard pages, the tools page at its 720x560 minimum, and the shell. Colour and theme findings are approximate. Dark theme was not rendered.
+**Baseline:** 03-UI-SPEC.md (approved); previous review 15/24
+**Screenshots:** no Playwright run (desktop Qt app, no dev server). Offscreen renders (`QT_QPA_PLATFORM=offscreen`, Qt default style and fonts) through the `tests/test_firstrun.py` stand-in with `setup_missing.json`: main window plus banner, Setup tab, all five wizard pages, the tools page at 720x560, and the shell. A second pass applied a dark QPalette (Window `#202020`) to the main window, the Setup tab and every wizard page. Renders: `/private/tmp/claude-501/-Volumes-Data-Dev-nx2android/ef87d0b2-3303-461d-bdf9-90a67f7b2427/scratchpad/ui-shots-2/` (dark ones under `dark/`). Native-theme look on each host is still a human check.
 **Interaction captures:** off (workflow.ui_interaction_capture is false). The interaction findings come from reading the code.
 
 ---
 
 ## Pillar Scores
 
-| Pillar | Score | Key Finding |
-|--------|-------|-------------|
-| 1. Copywriting | 2/4 | The Setup tab still says "porter" and keeps its own idle and cancelled wording, so the same action has two names |
-| 2. Visuals | 2/4 | The device page spreads its few widgets down the whole page; the tools page repeats the same fact three times |
-| 3. Color | 2/4 | `fill_checks` and `failed()` hard-code `#ef6c00` and `#c62828`; the banner tint is chosen once and never follows a theme change |
-| 4. Typography | 3/4 | Download all missing is bold but not P+2; Accept and continue is QWizard's plain Next button |
-| 5. Spacing | 3/4 | The tokens are followed, but Download all missing stretches across the full width, and the device page stretch breaks the spacing rhythm |
-| 6. Experience Design | 3/4 | States are well covered. The Setup tab's cancel and finish wording does not match the wizard, and Back and Next keep their `&` mnemonics |
+| Pillar | Score | Was | Key Finding |
+|--------|-------|-----|-------------|
+| 1. Copywriting | 3/4 | 2 | "porter" is gone from the Setup tab's check line, download-list failure and device list. Still open: one action with two names, `about 200.0 MB`, and the lowercase keys line (all deferred on purpose) |
+| 2. Visuals | 3/4 | 2 | The device page now reads top-down with the spare space below. The tools page still states the missing NDK three times |
+| 3. Color | 3/4 | 2 | `firstrun.py` has no hex outside COLOUR, and the banner follows a dark palette. The Setup tab's download error (`app.py:342`) still hard-codes `#c62828` |
+| 4. Typography | 3/4 | 3 | Unchanged: Download all missing is bold at P, not P+2; Accept and continue is the plain QWizard Next |
+| 5. Spacing | 3/4 | 3 | The device page rhythm is fixed. Download all missing still stretches across the whole row |
+| 6. Experience Design | 3/4 | 3 | One run per runner and Cancel from the start (03-15) make the two download views agree. Back still shows `&Back`, and the two flows still have different names and pre-steps |
 
-**Overall: 15/24**
+**Overall: 18/24** (was 15/24, +3)
+
+---
+
+## Status of the previous findings
+
+**Fixed (confirmed in code and renders)**
+- Top fix 1, device page layout: `wiz-device.png` shows the heading at the top margin, three numbered lines, the empty line, and the free space below. The ok step's adb path is hidden (03-14 Task 2).
+- Top fix 3, COLOUR table: `fill_checks` and `failed()` go through `colour()`, `#ef6c00` is gone from `firstrun.py`, and the banner and its `!` restyle on `PaletteChange`. In the dark render the banner is a dark amber bar with light text and the glyphs stay readable (`dark/main-missing.png`, `dark/wiz-done.png`) (03-14 Task 3).
+- Top fix 2, in part: the Setup tab's check line, its download-list failure and the Port tab's device item use `firstrun.failed`/`firstrun.cause`. A Prepare finished from the Setup tab reads `.NET tools are ready.` (03-15 Task 3).
+
+**Deferred on purpose (03-15-PLAN findings ledger, 03-REVIEW-DISPOSITION.md). They are still visible, so they still count against the score.**
+- `Download missing tools` vs `Download all missing`, and the Setup tab's plain `cancelled` (`app.py:275, 278, 309, 335, 338`). This is upstream's name, and the rename is planned for Phase 6's copy pass.
+- The Port tab card and the Games note still say porter (`app.py:33-38`, which are upstream's `cause`/`failed`). Phase 4 replaces that view.
+- The keys result line starts lowercase: `not set. Choose your prod.keys…` (`dark/wiz-keys.png`).
+- `about 200.0 MB` (`firstrun.py:41`, `.1f`).
+- The tools page repeats the fact three times, and the NDK size cell is empty (`wiz-tools-min.png`).
+- Download all missing is not P+2; Accept and continue is unstyled; the done page's adb path is not Mono; Download all missing fills the row.
+- `&Back`/`&Next` mnemonics: `Wizard.__init__` never sets the Back text (`firstrun.py:129` sets only CustomButton1 and Finish).
+- The glyph colours of KeyRow, DeviceRow and Line are set when the row is built. They are rebuilt on the next answer.
+- The done page has no primary action in the shell (expected until Phase 4).
+- The Setup tab's `reading the download lists…` pre-step.
+
+**New in this audit**
+- WARNING: `app.py:342` writes the Setup tab's download failure in a hard-coded `<span style="color:#c62828">`. It was not routed through `colour()` the way the check line was, so a failed download on a dark theme shows light-only red at about 3:1. This is a hook-sized fix inside the Setup tab, which is the scope 03-15 already touched.
+- INFO: `app.py:19, 131-137, 194, 218` (the status colours of the Port and Games views, the log and the stage glyphs) still use light-only hex values. They are upstream's Port view, which Phase 4 replaces, so they are outside this phase's contract and are listed here only so they are not lost.
 
 ---
 
 ## Top 3 Priority Fixes
 
-1. **The device page layout falls apart when no device is connected** (BLOCKER-adjacent WARNING). In `wiz-device.png` the heading sits about 70 px down, and four lines float with gaps of about 90 px between them. The page detail shows only a bare adb path (`/opt/.../adb`), which means nothing to a player. Cause: `DevicePage` builds with `stretch=False`, the list gets stretch 1, and then `self.list.hide()` leaves the free space to be shared among all the labels (`gui/firstrun.py:760-764`). Fix: add `self.v.addStretch(1)` after `self.error` and toggle it against the list (or keep the list visible with a placeholder item), and hide `self.detail` when the step is ok. Also put the three steps on separate lines (`\n`) so they read as a numbered list.
-2. **The Setup tab breaks the copy contract** (WARNING). `gui/app.py:33-38` `cause`/`failed` show "porter didn't answer" and "porter failed" in the Setup tab's `check_msg`, which is exactly the launch failure path in Launch 8. `app.py:151` shows `porter: <cause>` in the device combo. `app.py:331` says `cancelled` and `the tools are ready` where the spec says `cancelled. Download all missing resumes where it stopped.` and `.NET tools are ready.`. The idle button reads `Download missing tools` (`app.py:278, 330`) while the wizard says `Download all missing (<size>)`. Fix: point `SetupTab.check` at `firstrun.failed` (a hook-line change, as `fill_checks` already is), and reuse the wizard's strings for the finished and idle labels.
-3. **Colours bypass the `COLOUR` table** (WARNING). `fill_checks` (`gui/firstrun.py:866`) still draws optional-missing rows in `#ef6c00` (3.08:1, which the spec explicitly replaced) and uses the light-only `#2e7d32` and `#c62828`. `firstrun.failed()` (`:368`) hard-codes `#c62828`, so the error is red on dark backgrounds at about 3:1. The banner stylesheet (`:410`) and its `!` are set once in `attach`, so a light or dark switch while the app runs leaves a cream bar on a dark window. Fix: use `colour(table, 'ok'|'bad'|'note')` in `fill_checks`, pass a widget into `failed()` for `colour(w,'bad')`, and reapply the banner style in `on_ready` (or on `QEvent.PaletteChange`).
+1. **The tools page says the same thing three times, and its total reads `about 200.0 MB`** (WARNING). Players read `missing: Android NDK`, then `Download missing tools, or choose your own`, then the row's `Download missing tools, or set the NDK folder`. Two of those name a button that is not on the page. Fix: hide `StepPage.detail`/`fix` on `ToolsPage` (the table carries them), and format `size()` with `:.0f` at 10 or more of a unit.
+2. **The Setup tab's download error ignores the COLOUR table** (WARNING). It is unreadable red on a dark theme. Fix: build the `app.py:342` span with `firstrun.colour(self, 'bad')`, or route it through `firstrun.failed`-style escaping.
+3. **The wizard chrome breaks two contract rules at once** (WARNING). `< &Back` shows its mnemonic, and `Download all missing` is a bold, full-width P button, not a right-aligned P+2 primary. Fix: in `Wizard.__init__` add `setButtonText(QWizard.BackButton, 'Back')`. In `ToolsPage`, end the button row with `addStretch(1)` before the button and apply the same font as `DonePage.port`.
+
+(Phase 6 copy pass, already planned: rename `Download missing tools` to the wizard's name across porter fix text, README and the Setup tab.)
 
 ---
 
 ## Detailed Findings
 
-### Pillar 1: Copywriting (2/4)
-- WARNING: "porter" is visible to players through `gui/app.py` `cause`/`failed` (lines 33-38), which the Setup tab uses on a failed `setup --json`, and through `app.py:151` (`'porter: ' + cause(fail)`). The spec forbids it: "Players never see the word porter".
-- WARNING: The same action has two names. The Setup tab says `Download missing tools` and its help paragraph uses **Download missing tools**, while the wizard says `Download all missing (…)`. Porter's own fix text also says "Download missing tools, or set the NDK folder" (tools page, `setup_missing.json`).
-- WARNING: The Setup tab's finish copy is `cancelled` / `the tools are ready` (`app.py:331`), not the contract's strings.
-- WARNING: The keys result line reads `not set. Choose your prod.keys (dumped from your own Switch).`, starting with a lowercase word and no subject (`firstrun.py:582`, `wiz-keys.png`). Prefix it with `prod.keys: `, or capitalise it when there is no path.
-- WARNING: The tools total reads `about 200.0 MB` (`size()` with `.1f`). "about 200 MB" is the contract's wording for .NET.
-- Device steps are one run-on paragraph (`firstrun.py:761`), so the "three numbered instructions" are hard to scan.
-- PASS: The headings, Accept and continue, Skip setup, Close setup, Skip: install later, Every tool is here, the keys body and empty state, the device empty state and No device yet all match the contract word for word.
+### Pillar 1: Copywriting (3/4)
+- PASS: No "porter" appears on the Setup tab or in the device list (`app.py:150` comment, `firstrun.cause`). The Prepare done line is `firstrun.PREPARED` (`app.py:338`).
+- PASS: The device steps are three numbered lines (`wiz-device.png`) and match the contract.
+- WARNING (deferred): One action has two names. The Setup tab and porter's row fix say `Download missing tools`, and the wizard says `Download all missing`.
+- WARNING (deferred): The keys line is lowercase and has no subject. The total reads `about 200.0 MB`.
+- WARNING (deferred, outside this phase's screens): the Port card still shows `porter failed` / `porter didn't answer` (`app.py:33-38`).
 
-### Pillar 2: Visuals (2/4)
-- WARNING: The device page with no device has its heading offset and large blank bands between the labels (see Fix 1).
-- WARNING: The tools page repeats one fact three times. The step detail says `missing: Android NDK`, the step fix says `Download missing tools, or choose your own`, and the row fix says `Download missing tools, or set the NDK folder`, all above or inside the table (`wiz-tools-min.png`). `StepPage` shows the detail and fix for the tools page even though the table already carries them. Hide `detail`/`fix` on `ToolsPage`, or keep only the summary.
-- WARNING: The NDK row's `Size or note` cell is empty while a download is offered. The column header promises a size, and the fixture's NDK has no `download`, yet the total still counts it as "about 200 MB". Check that `total()` and the cell agree.
-- On the done page, `Port a game` is the clear focal point and the glyph column scans well. PASS.
-- In the banner, `!`, the text and Continue setup sit on one line and the tint stands apart from the tab chrome. PASS.
+### Pillar 2: Visuals (3/4)
+- PASS: The device page now has a clear top-down order.
+- PASS: The done page keeps `Port a game` as its focal point in both themes.
+- WARNING: The tools page repeats the missing tool three times, and the NDK size cell is empty while the total counts 200 MB.
 
-### Pillar 3: Color (2/4)
-- WARNING: `#ef6c00`, `#2e7d32` and `#c62828` are hard-coded in `fill_checks` (`firstrun.py:866`), which goes against the Color section's "note #9a5b00 replaces #ef6c00".
-- WARNING: `failed()` (`firstrun.py:368`) uses a light-only red, and every Retry error in the wizard uses it.
-- WARNING: The banner and `!` colours are fixed at `attach` time (`firstrun.py:410-412`), and so are the glyph colours of `KeyRow`/`DeviceRow`/`Line`, chosen at construction. Only the Line rows are rebuilt on redraw.
-- The accent is limited to the default button, the progress bar and list selection, as the contract says. Links use the palette Link colour. PASS.
-- The theme risk is still the spec's open assumption (lightness < 128). Rendering in dark theme is a human check.
+### Pillar 3: Color (3/4)
+- PASS: `firstrun.py` has no hex literal outside the COLOUR table and its comment. The dark render confirms the banner, the `!` and the glyphs adapt.
+- WARNING: `app.py:342` hard-codes `#c62828` on the Setup tab's download failure.
+- INFO (deferred): The row glyph colours are set at build time, and the Port and Games views use upstream's light-only hex values.
+- The accent stays on the default button, the progress bar and the selection. PASS.
 
 ### Pillar 4: Typography (3/4)
-- WARNING: `ToolsPage.dl` is bold at P, not P+2 (`firstrun.py:630`), but `DonePage.port` is P+2 (`:826`). The two primary buttons do not match.
-- WARNING: `Accept and continue` is QWizard's Next button: no bold, no P+2, and no 36 px minimum height (`wiz-legal.png`), although the contract lists it as a primary action.
-- The page headings are P+4 bold, and Mono is the 9 pt system fixed font for paths, commands and adb state. Only two weights are used. PASS.
-- Minor: the done page's `adb: /opt/.../adb` path is in the Body font, not Mono.
+- WARNING (deferred): `ToolsPage.dl` is bold P, while `DonePage.port` is P+2 (the dark render shows the size gap). `Accept and continue` is unstyled.
+- PASS: The headings are P+4 bold and the paths are Mono. Two weights are used.
 
 ### Pillar 5: Spacing (3/4)
-- Margins are 16, page spacing 16 plus 8 under the heading (24), 16 plus 16 above the done row (32), the banner is (16,8,16,8), and the rows use 8 and 4. All match the scale. PASS.
-- WARNING: `Download all missing` fills the full row width when `all_here` is hidden, because the stretch belongs to the hidden label (`firstrun.py:631`). The row should end in `addStretch` with the button on the right, as the done page does.
-- WARNING: The device page spacing (Fix 1).
-- The tools page at 720x560 keeps the button row in view and the table scrolls. PASS (backstop check done offscreen).
+- PASS: The device page's labels sit at their natural height, and the trailing stretch takes the rest (`setStretch(self.v.count() - 1, …)`).
+- PASS: The tokens are 16/8/4, and the banner is (16,8,16,8).
+- WARNING (deferred): `Download all missing` spans the full 700 px row (`wiz-tools-min.png`, `dark/wiz-tools.png`).
 
 ### Pillar 6: Experience Design (3/4)
-- PASS: There is one wizard at most, the device poll is chained (no stacking), the saving… states disable their source, Retry links are present, Next never blocks, and the close guard covers the fetch.
-- WARNING: `< Back` / `Next >` show QWizard's mnemonic underline (`&Back`) in every render, against the "no `&`" rule. Set the button text with `setButtonText(QWizard.BackButton, 'Back')` and do the same for Next.
-- WARNING: The Setup tab's download row and the wizard can drive the same `fetch`. The Setup tab finishes with different copy, and its `dl_btn` is disabled during `reading the download lists…`, which is a second pre-step the wizard does not have. The two flows behave differently.
-- WARNING: When the shell (`gui/shell.py`) is not ready, `DonePage` shows no Port a game, so the page has no primary action. That is expected for Phase 4, but the done page then ends on Close setup alone.
+- PASS: `Porter.start` refuses a second run and emits `started`, so both download buttons show Cancel from the first moment. `setup --json` runs one at a time with a 150 s limit. The wizard starts no Prepare while the window is quitting. The Setup tab saves only the fields the player changed, so a wizard save survives a re-check (CR-01).
+- WARNING (deferred): `< &Back` / `&Next >` show their mnemonics.
+- WARNING (deferred): The Setup tab and the wizard still differ in naming, cancelled copy and the download-list pre-step.
 - Registry audit: not applicable (no shadcn).
 
 ---
 
 ## Files Audited
-- gui/firstrun.py, gui/shell.py, gui/app.py (hook lines 1-40, 260-440), gui/runner.py (call_json use)
-- tests/test_firstrun.py (harness), tests/fixtures/bridge/setup_missing.json, fake_porter.py
-- .planning/phases/03-host-toolchains-and-guided-first-run/03-UI-SPEC.md
-- Offscreen renders: /private/tmp/claude-501/-Volumes-Data-Dev-nx2android/ef87d0b2-3303-461d-bdf9-90a67f7b2427/scratchpad/ui-shots/*.png
+- gui/firstrun.py, gui/app.py, gui/shell.py, gui/runner.py
+- tests/test_firstrun.py (harness), tests/fixtures/bridge/setup_missing.json
+- 03-UI-SPEC.md, the previous 03-UI-REVIEW.md, 03-14-SUMMARY.md, 03-15-SUMMARY.md, the 03-15-PLAN.md findings ledger, 03-REVIEW-DISPOSITION.md
+- Renders: `/private/tmp/claude-501/-Volumes-Data-Dev-nx2android/ef87d0b2-3303-461d-bdf9-90a67f7b2427/scratchpad/ui-shots-2/*.png` and `.../ui-shots-2/dark/*.png`; render script `.../scratchpad/shoot2.py` (wraps `.../scratchpad/shoot.py`)
