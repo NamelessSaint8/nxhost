@@ -109,12 +109,12 @@ Plans:
   3. On Linux arm64, setup detects or downloads a community arm64 NDK r27c, checked by hash and a compile probe, and .NET 10, and the host build uses the NDK's `linux-arm64` folder.
   4. On Linux, setup shows the distro adb version and handles or refuses one without `push -Z`, with fix text. Connected devices show their adb state, and `unauthorized`, `offline` and `no permissions` each come with a one-line fix (the udev rules package for `no permissions`).
   5. Launched from Finder or a desktop menu with a minimal PATH, the app finds every tool by absolute path and a port runs.
-**Plans**: 1/12 plans executed
+**Plans**: 2/12 plans executed
 
 Plans:
 **Wave 1**
 - [x] 03-01-PLAN.md — `porter setup --json` readiness document, legal notice record, prod.keys check and emulator folders, `config --json`, Linux `desktop-entry` (FRUN-01, FRUN-02, FRUN-03, TOOL-04)
-- [ ] 03-02-PLAN.md — Known places for a bare PATH, source labels, dotnet's real root and the dotnet child env, adb version parsing (TOOL-04, TOOL-02, TOOL-03)
+- [x] 03-02-PLAN.md — Known places for a bare PATH, source labels, dotnet's real root and the dotnet child env, adb version parsing (TOOL-04, TOOL-02, TOOL-03)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 03-03-PLAN.md — Community linux-arm64 NDK pin, no x86 platform-tools on arm64, Range resume and cancel-safe `.part`, `rate` on progress, macOS privacy message (TOOL-01, TOOL-02, FRUN-01)
@@ -180,7 +180,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 |-------|----------------|--------|-----------|
 | 1. Bridge, Bundles and CI | 10/10 | Complete    | 2026-10-30 |
 | 2. Porter Hardening | 13/13 | Complete    | 2026-10-31 |
-| 3. Host Toolchains and Guided First Run | 1/12 | In Progress | - |
+| 3. Host Toolchains and Guided First Run | 2/12 | In Progress | - |
 | 4. Game Library and Per-Game Settings | 0/TBD | Not started | - |
 | 5. Device Manager and Diagnostics | 0/TBD | Not started | - |
 | 6. Switch-Over and Tester Verification | 0/TBD | Not started | - |
