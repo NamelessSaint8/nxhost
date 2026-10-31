@@ -6,7 +6,7 @@ import glob, importlib.util, json, os, re, shutil, subprocess, sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from porter import config, hosttools, probe
+from porter import config, distro, hosttools, probe
 from porter.paths import LOCAL_TOOLS, player_tools, signing_key
 
 NDK_REVISION = '27.2.12479018'   # r27c: the NDK the Android host is built and tested with
@@ -138,9 +138,15 @@ def checks(cfg=None, keys=None):
     good = [s for s in sdks if int(s.split('.')[0]) >= DOTNET_MAJOR]
     out.append(Check('.NET SDK', bool(good), (f'{", ".join(sdks) or "no SDK"} ({dn})' if dn else 'dotnet not found'), path=str(dn or ''), fix='' if good else f'Download missing tools, or install the .NET SDK {DOTNET_MAJOR} (dotnet.microsoft.com)',
                      source=hosttools.source_of(dn, cfg, 'dotnet', _sdk_roots()) if dn else '', version=max(good, key=lambda s: tuple(map(int, s.split('.'))), default='')))
-    adb = find_adb(cfg)
-    out.append(Check('adb', bool(adb), str(adb) if adb else 'not found: the tool cannot install on a device (the APK and data pack are still made)', required=False, path=str(adb or ''),
-                     fix='' if adb else 'Download missing tools, or install Android platform-tools'))
+    adb = find_adb(cfg)   # soft (D-03): without it the APK and data pack are still made
+    if not adb: out.append(Check('adb', False, 'not found: the tool cannot install on a device (the APK and data pack are still made)', required=False, fix=distro.adb_hint()))
+    else:   # D-12: an adb before 30.0.0 has no push compression, so it pushes without -Z; one below protocol 1.0.39 lacks what porter uses
+        v = hosttools.adb_version(adb) or {}; ver = v.get('version') or ''
+        too_old = v.get('protocol') is not None and v['protocol'] < hosttools.ADB_MIN_PROTOCOL
+        out.append(Check('adb', not too_old, f'adb {ver} at {adb} is too old for nx2android' if too_old else str(adb), required=False, path=str(adb),
+                         fix='install a newer adb from your distribution' + ('' if hosttools.linux_arm64() else ', or Download missing tools') if too_old else '',
+                         source=hosttools.source_of(adb, cfg, 'adb', _sdk_roots()), version=ver,
+                         note=f'adb {ver}: pushes without -Z (it has no push compression to turn off)' if v.get('major') is not None and v['major'] < hosttools.ADB_Z_MAJOR else ''))
     k = keys or cfg.get('keys')
     out.append(Check('prod.keys', bool(k) and Path(k).is_file(), k if k and Path(k).is_file() else (f'no such file: {k}' if k else 'not set'), path=k or '',
                      fix='' if k and Path(k).is_file() else 'dump prod.keys from your own Switch and set its path'))
