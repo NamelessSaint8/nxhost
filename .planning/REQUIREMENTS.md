@@ -50,9 +50,9 @@ Requirements for the cross-platform GUI milestone. Each maps to a roadmap phase.
 
 ### Guided first run
 
-- [ ] **FRUN-01**: User on first launch is walked through the legal notice, prod.keys (validated, key generation shown), toolchain downloads (progress, cancel, resume, hash check) and connecting a first device
-- [ ] **FRUN-02**: User can skip the wizard; a banner names what is missing until setup is complete, and setup can be reopened later
-- [ ] **FRUN-03**: User's readiness state comes from porter (`setup --json`) on every launch; the GUI stores none of it
+- [x] **FRUN-01**: User on first launch is walked through the legal notice, prod.keys (validated, key generation shown), toolchain downloads (progress, cancel, resume, hash check) and connecting a first device
+- [x] **FRUN-02**: User can skip the wizard; a banner names what is missing until setup is complete, and setup can be reopened later
+- [x] **FRUN-03**: User's readiness state comes from porter (`setup --json`) on every launch; the GUI stores none of it
 
 ### Diagnostics
 
@@ -193,9 +193,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SET-03 | Phase 4 | Pending |
 | SET-04 | Phase 4 | Pending |
 | SET-05 | Phase 4 | Pending |
-| FRUN-01 | Phase 3 | Pending |
-| FRUN-02 | Phase 3 | Pending |
-| FRUN-03 | Phase 3 | Pending |
+| FRUN-01 | Phase 3 | Complete |
+| FRUN-02 | Phase 3 | Complete |
+| FRUN-03 | Phase 3 | Complete |
 | DIAG-01 | Phase 5 | Pending |
 | PKG-01 | Phase 1 | Complete |
 | PKG-02 | Phase 1 | Complete |

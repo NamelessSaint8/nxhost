@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 03
 current_phase_name: Host Toolchains and Guided First Run
 status: executing
-stopped_at: Completed 03-04-PLAN.md
-last_updated: "2026-10-31T16:01:12.102Z"
+stopped_at: Completed 03-05-PLAN.md
+last_updated: "2026-10-31T16:12:20.030Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 03 execution started
-state_head: 702ab81466b2d3db877efdc6e2b03d087722472a
+state_head: fc6f5afbd2ffa41f0778862c6e80bf19ddcad50d
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 35
-  completed_plans: 27
+  completed_plans: 28
   percent: 33
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-10-31)
 ## Current Position
 
 Phase: 03 (Host Toolchains and Guided First Run) — EXECUTING
-Plan: 5 of 12
+Plan: 6 of 12
 Status: Ready to execute
 Last activity: 2026-10-31 — Phase 03 execution started
 
@@ -84,6 +84,7 @@ Progress: [███░░░░░░░] 33%
 | Phase 03 P02 | 15min | 3 tasks | 6 files |
 | Phase 03 P03 | 8 min | 3 tasks | 6 files |
 | Phase 03 P04 | 8min | 3 tasks | 11 files |
+| Phase 03 P05 | 8min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -159,6 +160,8 @@ Recent decisions affecting current work:
 - [Phase 03]: build.py copies probe.host_folder's arm64 rule, held equal by a source-text test
 - [Phase 03]: require() returns every passing row's note and Port.run says each in the port log (community NDK, adb without -Z)
 - [Phase 03]: TOOL-03 stays pending until 03-06 adds the udev fix
+- [Phase 03]: 03-05: the wizard reaches a later start page by walking next() from the legal page, so QWizard's Back still reaches earlier steps (D-04)
+- [Phase 03]: 03-05: every exit from the wizard goes through done(), which clears the gate and deletes it; Run/Continue setup with no setup answer asks porter again
 
 ### Pending Todos
 
@@ -183,6 +186,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-31T16:01:11.904Z
-Stopped at: Completed 03-04-PLAN.md
+Last session: 2026-10-31T16:12:19.800Z
+Stopped at: Completed 03-05-PLAN.md
 Resume file: None
