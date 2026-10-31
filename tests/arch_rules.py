@@ -103,12 +103,31 @@ check('gui/ holds no pipeline logic', not bad, '; '.join(bad))
 runner = (R / 'gui/runner.py').read_text(encoding='utf-8')
 check("gui/runner.py drives 'python -m porter'", "'-m', 'porter'" in runner or '"-m", "porter"' in runner)
 
+# 5b. First-run views (FRUN-03): readiness lives in porter, so gui/firstrun.py and the new shell reach it only through gui/runner.py and keep nothing on disk
+def outside(path, allowed):   # path's imports that are neither the standard library, PySide6 nor one of `allowed` (dotted; `from gui import x` counts as gui.x)
+    try: t = ast.parse((R / path).read_text(encoding='utf-8'))
+    except SyntaxError as e: return [f'<syntax error {e}>']
+    out = []
+    for n in ast.walk(t):
+        if isinstance(n, ast.Import): mods = [a.name for a in n.names]
+        elif isinstance(n, ast.ImportFrom): mods = [f'gui.{a.name}' for a in n.names] if n.module == 'gui' and not n.level else ['.' * n.level + (n.module or '')]
+        else: continue
+        out += [m for m in mods if m.split('.')[0] not in sys.stdlib_module_names | {'PySide6'} and m not in allowed]
+    return out
+WRITES = re.compile(r'\bopen\(|\.write_text\(|\.write_bytes\(|QSettings')   # \b: firstrun's first_open( is no open(
+def writes(path): return sorted(set(WRITES.findall(strip_py((R / path).read_text(encoding='utf-8')))))
+for f, allowed, name in (('gui/firstrun.py', {'gui.runner'}, 'gui/firstrun.py imports only gui.runner, PySide6 and the standard library, and writes no file'),
+                         ('gui/shell.py', {'gui.runner', 'gui.firstrun'}, 'gui/shell.py imports only gui.runner, gui.firstrun, PySide6 and the standard library, and writes no file')):
+    bad = outside(f, allowed) + writes(f)
+    check(name, not bad, ', '.join(bad))
+
 # 6. CLI covers what the GUI does: every porter subcommand the GUI runs exists in cli.py
 cli = (R / 'porter/cli.py').read_text(encoding='utf-8')
-subs = set(re.findall(r"add_parser\('([a-z]+)'", cli))
+subs = set(re.findall(r"add_parser\('([a-z-]+)'", cli))
 gui_calls = set()
 for f in guif: gui_calls |= set(re.findall(r"\[\s*'(doctor|profiles|inspect|port|install|devices|tools|config)'", (R / f).read_text(encoding='utf-8')))
 gui_calls |= set(re.findall(r"call_json\(\s*\[?\s*'([a-z]+)'", ''.join((R / f).read_text(encoding='utf-8') for f in guif)))
+gui_calls |= set(re.findall(r"call_json\([^,()\[]*,\s*\['([a-z-]+)'", ''.join((R / f).read_text(encoding='utf-8') for f in guif)))   # call_json(<owner>, ['<cmd>', …: setup, config, desktop-entry
 check('every GUI action is a CLI subcommand', gui_calls <= subs, f'GUI uses {sorted(gui_calls)}; CLI has {sorted(subs)}')
 
 # 7. Stages: the documented ones are the pipeline's, in order
