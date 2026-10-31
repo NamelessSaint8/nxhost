@@ -5,15 +5,15 @@ titles: json
 findings:
   - id: CR-04
     severity: critical
-    disposition: open
+    disposition: fixed
     title: "Links are checked against the unpack folder, but a different tree is installed, so a link can leave the installed toolchain (resolved by 02-13)"
   - id: WR-05
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "Replacing an existing toolchain is not atomic (resolved by 02-13)"
   - id: IN-06
     severity: info
-    disposition: open
+    disposition: fixed
     title: "Some hostile zips are refused with a raw OS error instead of the `refused` message (resolved by 02-13)"
   - id: WR-01
     severity: warning
@@ -105,28 +105,28 @@ findings:
     title: "`Remote.readinto` assumes the server returned exactly the requested range"
   - id: CR-01
     severity: critical
-    disposition: open
+    disposition: fixed
     title: "Zip symlink check depends on link order; a later link turns an accepted link into an escape"
   - id: CR-02
     severity: critical
-    disposition: open
+    disposition: fixed
     title: "Windows lock holder lookup reads into the locked byte; the second porter crashes, and `wait=True` never waits"
   - id: CR-03
     severity: critical
-    disposition: open
+    disposition: fixed
     title: "Translator reuse check is outside the tools lock and is not repeated inside it; a waiting port rebuilds and deletes the translator another port is using"
-open: 28
+open: 22
 total: 28
-recorded: 2026-10-31T02:11:06.286Z
+recorded: 2026-10-31T02:11:41.174Z
 ---
 
 # Phase 02: Code Review Disposition
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| CR-04 | critical | open | - |
-| WR-05 | warning | open | - |
-| IN-06 | info | open | - |
+| CR-04 | critical | fixed | 02-13, a5e1836 (re-review 5aadf77: resolved) |
+| WR-05 | warning | fixed | 02-13, e7a6874 (re-review 5aadf77: resolved) |
+| IN-06 | info | fixed | 02-13, a5e1836 (re-review 5aadf77: resolved) |
 | WR-01 | warning | open | - |
 | WR-02 | warning | open | - |
 | WR-03 | warning | open | - |
@@ -149,9 +149,9 @@ recorded: 2026-10-31T02:11:06.286Z
 | IN-12 | info | open | - |
 | IN-13 | info | open | - |
 | IN-14 | info | open | - |
-| CR-01 | critical | open | - (not in the current review) |
-| CR-02 | critical | open | - (not in the current review) |
-| CR-03 | critical | open | - (not in the current review) |
+| CR-01 | critical | fixed | 02-11, verified in e482289 (not in the current review) |
+| CR-02 | critical | fixed | 02-12, verified in e482289 (not in the current review) |
+| CR-03 | critical | fixed | 02-12, verified in e482289 (not in the current review) |
 
 Dispositions: `open` (recorded, not yet triaged), `fixed`, `skipped`, `deferred`.
 Set `deferred` by hand and put the reason in the Source cell; both are preserved. A `|` in the reason is kept as prose and escaped on the next run.
