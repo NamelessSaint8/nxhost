@@ -159,6 +159,14 @@ class Release(unittest.TestCase):   # fork-release.yml: who can start it, where 
             self.assertEqual(co['with'].get('fetch-depth'), 0, n)   # git describe and the merge base need the history
         self.assertTrue(self.ran('upstream-diff', 'shirai91/nx2android') and self.ran('upstream-diff', 'git diff --stat FETCH_HEAD...HEAD -- nxnative/'))
 
+    def test_community_ndk_step(self):   # TOOL-01: the community NDK downloads through the frozen bundle and passes its probe on a real arm64 runner
+        b = self.job('build')
+        st = [s for s in b['steps'] if 'smoke_bundle.py --community-ndk dist/nx2android' in s.get('run', '')]
+        self.assertEqual(len(st), 1)
+        self.assertIn('matrix.target', st[0].get('if', '')); self.assertIn('linux-arm64', st[0]['if'])
+        smoke = next(i for i, s in enumerate(b['steps']) if s.get('run', '').strip() == 'python packaging/smoke_bundle.py dist/nx2android')
+        self.assertGreater(b['steps'].index(st[0]), smoke)
+
     def test_release_checks_four_assets(self):
         steps = self.job('release')['steps']
         count = next(i for i, s in enumerate(steps) if all(a in s.get('run', '') for a in ('windows-x64.zip', 'macos-arm64.dmg', 'linux-x64.tar.gz', 'linux-arm64.tar.gz')))

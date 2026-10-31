@@ -1,13 +1,16 @@
 # packaging/build_bundle.py and packaging/glibc_floor.py: the asset names of the four bundles (D-10), the host-to-target mapping, which nxnative files
 # a bundle carries, the engine id porter/paths.py keys its copy by, the glibc floor of a Linux bundle, and smoke_bundle.py's bare-PATH tool check (D-19),
 # run here on the dev porter so fork-ci catches a regression on every push. Stdlib only: nothing here runs PyInstaller.
-import contextlib, io, os, shutil, sys, tempfile, unittest
+import contextlib, importlib.util, io, os, shutil, sys, tempfile, unittest
 from pathlib import Path
 from unittest import mock
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / 'packaging'))
 import build_bundle, glibc_floor, smoke_bundle   # noqa: E402
+from porter import pins   # noqa: E402
+_spec = importlib.util.spec_from_file_location('ndk_pin', REPO / 'devtools' / 'ndk_pin.py'); ndk_pin = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(ndk_pin)
 
 
 class Names(unittest.TestCase):
@@ -92,6 +95,23 @@ class BareEnv(unittest.TestCase):   # a Finder or app-menu launch: PATH=/usr/bin
         with mock.patch.object(smoke_bundle.os, 'name', 'nt'): out = self.run_check(ran)
         ran.assert_not_called(); self.assertEqual(smoke_bundle.FAILS, [])
         self.assertIn('SKIP bare PATH', out)
+
+
+class NdkPin(unittest.TestCase):   # devtools/ndk_pin.py: the community asset is re-uploaded in place at times (RESEARCH Pitfall 1)
+    row = pins.NDK['files']['linux-arm64']
+    def release(self, size=None, digest=None): return {'assets': [{'name': ndk_pin.ASSET, 'size': size or self.row[1], 'digest': digest or 'sha256:' + self.row[3]}]}
+
+    def test_match(self): self.assertEqual(ndk_pin.compare(self.release(), self.row), [])
+
+    def test_drift(self):
+        d = ndk_pin.compare(self.release(size=1, digest='sha256:' + 'ab' * 32), self.row)
+        self.assertEqual(len(d), 2, d)
+        self.assertIn(str(self.row[1]), d[0]); self.assertIn('1', d[0])
+        self.assertIn(self.row[3], d[1]); self.assertIn('ab' * 32, d[1])
+
+    def test_missing_asset(self):
+        d = ndk_pin.compare({'assets': [{'name': 'other.tar.xz', 'size': 1, 'digest': 'sha256:00'}]}, self.row)
+        self.assertEqual(len(d), 1); self.assertIn(ndk_pin.ASSET, d[0])
 
 
 if __name__ == '__main__':
