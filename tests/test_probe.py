@@ -8,7 +8,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 os.environ['NX2A_HOME'] = tempfile.mkdtemp()   # before porter is imported: no test touches the developer's settings or probe cache
 
-from porter import probe, toolchain   # noqa: E402
+from porter import distro, probe, toolchain   # noqa: E402
 
 VERSION = 'Android (12470979, +pgo, +bolt, +lto, +mlgo, based on r522817c) clang version 18.0.3 (https://android.googlesource.com/toolchain/llvm-project)\nTarget: x86_64\n'
 
@@ -110,6 +110,22 @@ class Rows(unittest.TestCase):   # the rows `doctor --json` and the setup screen
             self.assertTrue(r.ok); self.assertEqual(r.version, toolchain.NDK_REVISION); self.assertEqual(r.source, 'configured'); self.assertEqual(r.note, '')
             with mock.patch.object(probe, 'probe', return_value=bad): r = self.row('Android NDK', {'ndk': str(d)})
             self.assertFalse(r.ok); self.assertTrue(r.required); self.assertTrue(r.detail.endswith(bad['detail'])); self.assertEqual(r.fix, bad['fix'])
+
+    def test_adb_version_row(self):
+        a = self.t / 'adb'; a.write_bytes(b''); a.chmod(0o755)
+        def row(v, arm=False, found=True):
+            with mock.patch.object(toolchain, 'find_adb', return_value=a if found else None), mock.patch.object(toolchain.hosttools, 'adb_version', return_value=v), \
+                 mock.patch.object(toolchain.hosttools, 'linux_arm64', return_value=arm), mock.patch.object(distro.platform, 'freedesktop_os_release', return_value={'ID': 'ubuntu'}):
+                return self.row('adb'), distro.adb_hint()
+        r, _ = row({'version': '36.0.0-13206524', 'major': 36, 'protocol': 41})
+        self.assertTrue(r.ok); self.assertEqual(r.version, '36.0.0-13206524'); self.assertEqual(r.note, ''); self.assertTrue(r.source); self.assertFalse(r.required)
+        r, _ = row({'version': '29.0.6', 'major': 29, 'protocol': 41})
+        self.assertTrue(r.ok); self.assertEqual(r.note, 'adb 29.0.6: pushes without -Z (it has no push compression to turn off)')
+        for arm in (False, True):
+            r, _ = row({'version': '28.0.2', 'major': 28, 'protocol': 38}, arm)
+            self.assertFalse(r.ok); self.assertIn('too old', r.detail); self.assertIn('newer adb from your distribution', r.fix); self.assertEqual('Download missing tools' in r.fix, not arm)
+        r, hint = row(None, True, found=False)
+        self.assertFalse(r.ok); self.assertEqual(r.fix, hint); self.assertEqual(hint, 'Run sudo apt install adb, then press Re-check.')
 
 
 if __name__ == '__main__':
