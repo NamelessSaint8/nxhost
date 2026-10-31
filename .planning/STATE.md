@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 03
 current_phase_name: Host Toolchains and Guided First Run
 status: executing
-stopped_at: Completed 03-03-PLAN.md
-last_updated: "2026-10-31T15:50:26.885Z"
+stopped_at: Completed 03-04-PLAN.md
+last_updated: "2026-10-31T16:01:12.102Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 03 execution started
-state_head: 5864a0b6c4c7aba07cba652c83dfcfe3b53cb300
+state_head: 702ab81466b2d3db877efdc6e2b03d087722472a
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 35
-  completed_plans: 26
+  completed_plans: 27
   percent: 33
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-10-31)
 ## Current Position
 
 Phase: 03 (Host Toolchains and Guided First Run) — EXECUTING
-Plan: 4 of 12
+Plan: 5 of 12
 Status: Ready to execute
 Last activity: 2026-10-31 — Phase 03 execution started
 
@@ -83,6 +83,7 @@ Progress: [███░░░░░░░] 33%
 | Phase 03 P01 | 8 min | 3 tasks | 10 files |
 | Phase 03 P02 | 15min | 3 tasks | 6 files |
 | Phase 03 P03 | 8 min | 3 tasks | 6 files |
+| Phase 03 P04 | 8min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -154,6 +155,10 @@ Recent decisions affecting current work:
 - [Phase 03]: childenv.dotnet is the one env builder for dotnet children; Port.run uses it and Prepare (03-09) must too
 - [Phase 03]: 03-03: a 206 for another offset discards the .part and re-requests without Range; only a 206 whose Content-Range starts at the part size is appended
 - [Phase 03]: 03-03: rate (bytes/s) is added to unit-B progress events in runlog._wrap from upstream's eta, never in the engine subtree
+- [Phase 03]: NDK rows are green only after a compile probe links an aarch64-linux-android29 program; only passes are cached in probe.json
+- [Phase 03]: build.py copies probe.host_folder's arm64 rule, held equal by a source-text test
+- [Phase 03]: require() returns every passing row's note and Port.run says each in the port log (community NDK, adb without -Z)
+- [Phase 03]: TOOL-03 stays pending until 03-06 adds the udev fix
 
 ### Pending Todos
 
@@ -178,6 +183,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-31T15:50:26.688Z
-Stopped at: Completed 03-03-PLAN.md
+Last session: 2026-10-31T16:01:11.904Z
+Stopped at: Completed 03-04-PLAN.md
 Resume file: None
