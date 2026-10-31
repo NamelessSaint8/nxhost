@@ -40,5 +40,31 @@ class AdbCommand(unittest.TestCase):
         with mock.patch.object(distro.hosttools, 'linux_arm64', return_value=False): self.assertEqual(distro.adb_hint(), 'Download missing tools, or install Android platform-tools')
 
 
+class DeviceFix(unittest.TestCase):   # DEV-01 / D-14: one line per adb state, the udev package by distribution for `no permissions`
+    NOPERM = 'no permissions (missing udev rules? user is in the plugdev group); see [http://developer.android.com/tools/device.html]'
+    NOGROUP = 'no permissions (user bob is not in the plugdev group); see [http://developer.android.com/tools/device.html]'
+
+    def test_fixes(self):
+        for st, want in (('unauthorized', 'Unlock the device and tap Allow on the USB debugging prompt.'),
+                         ('offline', 'Unplug the cable and plug it in again, or try another cable or USB port.'),
+                         ('authorizing', 'Wait a moment.'), ('connecting', 'Wait a moment.'), ('device', ''), ('sideload', ''), ('', '')):
+            with self.subTest(st): self.assertEqual(distro.device_fix(st, {}), want)
+
+    def test_no_permissions_per_distro(self):
+        self.assertEqual(distro.device_fix(self.NOPERM, {'ID': 'ubuntu'}),
+                         'Run sudo apt install android-sdk-platform-tools-common, then unplug the device and plug it in again.')
+        self.assertIn('sudo dnf install android-tools', distro.device_fix(self.NOPERM, {'ID': 'fedora'}))
+        self.assertIn('sudo pacman -S android-udev', distro.device_fix(self.NOPERM, {'ID': 'arch'}))
+        g = distro.device_fix(self.NOPERM, {'ID': 'gentoo'})
+        for cmd in ('sudo apt install android-sdk-platform-tools-common', 'sudo dnf install android-tools', 'sudo pacman -S android-udev'): self.assertIn(cmd, g)
+        for osr in ({'ID': 'gentoo'}, {'ID': 'ubuntu'}): self.assertNotIn('plugdev', distro.device_fix(self.NOPERM, osr))
+        f = distro.device_fix(self.NOGROUP, {'ID': 'ubuntu'})
+        self.assertIn('sudo usermod -aG plugdev $USER', f); self.assertIn('log out', f); self.assertNotIn('bob', f)
+
+    def test_kind(self):
+        for st, want in ((self.NOPERM, 'no permissions'), (self.NOGROUP, 'no permissions'), ('unauthorized', 'unauthorized'), ('device', 'device'), ('offline', 'offline')):
+            with self.subTest(st): self.assertEqual(distro.state_kind(st), want)
+
+
 if __name__ == '__main__':
     unittest.main()

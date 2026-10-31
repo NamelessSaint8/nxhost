@@ -116,4 +116,64 @@ class Install(unittest.TestCase):
         self.assertIn('--replace-signer', str(e.exception)); self.assertEqual(calls, [['install', '-r', 'a.apk']])
 
 
+DEVICES = ('List of devices attached\n'
+           'R5CT1234               device usb:1-1 product:x model:Pixel_8 device:shiba transport_id:3\n'
+           'emulator-5554          offline\n'
+           'ABC                    unauthorized usb:1-2 transport_id:4\n'
+           '(no serial number)     no permissions (missing udev rules? user is in the plugdev group); see [http://developer.android.com/tools/device.html] usb:1-3 transport_id:5\n'
+           'XYZ                    authorizing\n'
+           'QRS                    connecting\n\n')
+NOPERM = 'no permissions (missing udev rules? user is in the plugdev group); see [http://developer.android.com/tools/device.html]'
+
+
+class Devices(unittest.TestCase):   # DEV-01: every `adb devices -l` line read whole (RESEARCH Pattern 5: ln.split() turned the no-permissions line into state 'no')
+    def devices(self, out=DEVICES, calls=None):
+        with mock.patch.object(adb.subprocess, 'run', fake({'devices -l': out}, [] if calls is None else calls)): return adb.Adb('adb', log=lambda m: None).devices()
+
+    def cli(self, calls, exe='adb'):
+        import contextlib, io, json
+        from argparse import Namespace
+        from porter import cli, toolchain
+        buf = io.StringIO()
+        with mock.patch.object(toolchain, 'find_adb', return_value=exe), mock.patch.object(adb.subprocess, 'run', fake({'devices -l': DEVICES}, calls)), \
+                contextlib.redirect_stdout(buf):
+            rc = cli.cmd_devices(Namespace(json=True))
+        return rc, json.loads(buf.getvalue())
+
+    def test_states(self):
+        rows = self.devices()
+        self.assertEqual([r[0] for r in rows], ['R5CT1234', 'emulator-5554', 'ABC', '(no serial number)', 'XYZ', 'QRS'])
+        self.assertEqual([r[1] for r in rows], ['device', 'offline', 'unauthorized', NOPERM, 'authorizing', 'connecting'])
+        self.assertEqual(rows[0][2], 'model:Pixel_8 device:shiba'); self.assertEqual(rows[2][2], '')
+
+    def test_pick_unchanged(self):
+        with mock.patch.object(adb.subprocess, 'run', fake({'devices -l': DEVICES}, [])):
+            a = adb.Adb('adb', log=lambda m: None); self.assertEqual(a.pick(), 'R5CT1234'); self.assertEqual(a.serial, 'R5CT1234')
+
+    def test_cli_json(self):
+        from porter import distro
+        rc, rows = self.cli([])
+        self.assertEqual(rc, 0)
+        for r in rows: self.assertEqual(set(r), {'serial', 'state', 'info', 'detail', 'fix'})
+        np = rows[3]
+        self.assertEqual((np['serial'], np['state'], np['detail']), ('(no serial number)', 'no permissions', NOPERM))
+        self.assertEqual(np['fix'], distro.device_fix(NOPERM)); self.assertTrue(np['fix'])
+        self.assertEqual((rows[0]['state'], rows[0]['fix'], rows[0]['info']), ('device', '', 'model:Pixel_8 device:shiba'))
+        self.assertEqual(rows[2]['fix'], distro.device_fix('unauthorized'))
+
+    def test_cli_no_adb(self):
+        from porter import distro
+        rc, doc = self.cli([], exe=None)
+        self.assertEqual(rc, 1); self.assertIn(distro.adb_hint(), doc['error'])
+
+    def test_never_restarts_server(self):   # porter lists devices and names the fix; restarting adb disconnects the player's other adb tools
+        calls = []
+        self.devices(calls=calls)
+        with mock.patch.object(adb.subprocess, 'run', fake({'devices -l': DEVICES}, calls)): adb.Adb('adb', log=lambda m: None).pick()
+        self.cli(calls)
+        self.assertTrue(calls)
+        for c in calls:
+            self.assertNotIn('kill-server', c); self.assertNotIn('reconnect', c); self.assertNotEqual(c[0], 'sudo')
+
+
 if __name__ == '__main__': unittest.main()
