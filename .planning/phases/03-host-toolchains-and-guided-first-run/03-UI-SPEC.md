@@ -135,8 +135,8 @@ Define these once in `gui/firstrun.py` as `COLOUR = {'ok': ('#2e7d32', '#81c784'
 8. `setup --json` fails or times out → no wizard, no banner. The Setup tab's `check_msg` shows `failed(fail)` with Retry, and `win.set_ready(False)` is still called (keeps `tests/test_bridge.py:110-118`).
 
 ### Wizard buttons
-- Bottom row, left to right: **Skip setup** (custom button 1), stretch, **Back**, **Next** (or the page's own primary label), Finish only on the done page, labelled **Close**.
-- **Skip setup** and the window close box do the same thing: close the wizard. No confirmation, no flag. A running download keeps running: it is `win.setup.fetch` (RESEARCH Pattern 8), so the Setup tab keeps its progress and Cancel, and the close guard still covers it.
+- Bottom row, left to right: **Skip setup** (custom button 1), stretch, **Back**, **Next** (or the page's own primary label), Finish only on the done page, labelled **Close setup**.
+- **Skip setup** and the window close box do the same thing: close the wizard. No confirmation, no flag. A running download keeps running: it is `win.setup.fetch` (RESEARCH Pattern 8), so the Setup tab keeps its progress and its **Cancel download** button, and the close guard still covers it.
 - Keyboard: Enter presses the page's default button, Esc closes the wizard (same as Skip setup), Tab order follows reading order. Every button has a mnemonic-free plain label (no `&`).
 
 ### Page 1: legal (D-07)
@@ -157,9 +157,9 @@ Define these once in `gui/firstrun.py` as `COLOUR = {'ok': ('#2e7d32', '#81c784'
   - `fix` of a not-ok row is a second line, Body, with any command in Mono and selectable (`Qt.TextSelectableByMouse`).
   - Action column: **Use my own…** on a missing or not-ok row (folder picker for the NDK, file picker for dotnet and adb) → `config <key> <path> --json` → `setup --json` → the row redraws with porter's verdict. On Linux arm64 with no adb: the row's fix is the distro command, and the action column holds **Copy command**, **Re-check** and **Use my own…** (D-25).
 - **Download all missing** (default, primary, with the total size in its label) runs `win.setup.fetch.start(['tools', '--download', '--progress', 'json'])`. It is hidden when `steps[tools].downloadable` is empty. The vendor-license dialog is gone (D-07): one press starts the download.
-- While running, the button becomes **Cancel** (not default, not accent), calling `fetch.stop()`. The status line reads `stopping…` until `finished`, then `cancelled. Download all missing resumes where it stopped.` (Phase 1 D-05/D-09 semantics).
+- While running, the button becomes **Cancel download** (not default, not accent, the same label as the Setup tab's button for the same action), calling `fetch.stop()`. The status line reads `stopping…` until `finished`, then `cancelled. Download all missing resumes where it stopped.` (Phase 1 D-05/D-09 semantics).
 - Progress line (Body, word-wrapped, under the table): `[k/n] <name> · <step> · <done> / <total> · <speed>/s · <time left>`. Built with today's `size()`. Speed is `(total - done) / eta` in the GUI (RESEARCH Open Question 1, no protocol change). Time left is `less than a minute left`, `N min left`, or `N h M min left`. Parts with no data are dropped (`' · '.join(filter(None, …))`, UI review Copywriting finding). The bar shows the current file (`frac`), and `[k/n]` shows the batch.
-- When the download run ends with `0` and .NET is ok, **Prepare .NET tools** starts automatically on the same `fetch` with the same progress line and Cancel. When .NET was already there, the row's action column has a **Prepare .NET tools** button instead. A failed Prepare is a note row with porter's fix, never a blocker (D-24).
+- When the download run ends with `0` and .NET is ok, **Prepare .NET tools** starts automatically on the same `fetch` with the same progress line; the button reads **Cancel .NET preparation** while it runs and calls `fetch.stop()`. When .NET was already there, the row's action column has a **Prepare .NET tools** button instead. A failed Prepare is a note row with porter's fix, never a blocker (D-24).
 - Failure: the status line turns into the cause in the problem colour plus `Open log` (today's `fetched()` pattern), escaped, word-wrapped. Hash mismatches show porter's text with both hashes unchanged, in Mono.
 
 ### Page 4: device (D-14, D-15, DEV-01)
@@ -173,12 +173,12 @@ Define these once in `gui/firstrun.py` as `COLOUR = {'ok': ('#2e7d32', '#81c784'
 - Summary list, one row per step with its glyph and `detail`, then each `notes` entry with `!`.
 - **Games that play today**: names from `profiles --json` where `status` is `playable`, sorted, plain list.
 - Linux only, and only when porter reports the bundle as frozen: **Add to app menu** → `call_json(['desktop-entry', '--install', '--json'])` → the line `Added to the app menu.` or the failure cause. Nothing is written until pressed.
-- **Port a game** (default, primary) closes the wizard, switches to the Port tab and calls `PortTab.pick_folder()`. **Close** just closes it.
+- **Port a game** (default, primary) closes the wizard, switches to the Port tab and calls `PortTab.pick_folder()`. **Close setup** just closes it.
 
 ### Setup tab additions (D-04, D-21, D-26)
 - `SetupTab.check` reads `setup --json` and renders `doc['checks']` with today's code.
 - **Run setup** button at the right of the Requirements group's first row: opens the wizard at the first not-ok step (same as Continue setup).
-- Download row: `dl_btn` reads **Cancel download** while `fetch.running()` and calls `fetch.stop()`. `dl_step.setWordWrap(True)`. The progress text uses the same format as the tools page. These close UI review Top fix 3.
+- Download row: `dl_btn` reads **Cancel download** while a download runs and **Cancel .NET preparation** while Prepare .NET tools runs (the same labels as the tools page), and calls `fetch.stop()`. `dl_step.setWordWrap(True)`. The progress text uses the same format as the tools page. These close UI review Top fix 3.
 - Soft notes (no adb, no authorized device) show as a `!` row in the checklist and never trigger the banner.
 
 ---
@@ -220,12 +220,15 @@ Plain English. Players never see the word "porter": use "nx2android" (UI review 
 | Add to app menu result | Added to the app menu. |
 | Banner | Setup is not finished: missing `<items>`. **[Continue setup]** |
 | Setup tab button | Run setup |
-| Setup tab cancel | Cancel download |
+| Setup tab cancel | Cancel download (during a download), Cancel .NET preparation (during Prepare .NET tools) |
+| Tools page cancel (replaces Download all missing while it runs) | Cancel download (the same label as the Setup tab) |
+| Tools page cancel during Prepare .NET tools | Cancel .NET preparation (the same label as the Setup tab) |
+| Done page close button (QWizard Finish) | Close setup |
 | Empty state heading | No device found yet. (device page; the other empty states are the keys and tools rows above) |
 | Empty state body | Looking again every few seconds… (with the three device steps above it as the next step) |
 | Error state (one-shot) | `<cause>` + Retry, where the cause is never "porter …": `nx2android didn't answer in <N> s` / `nx2android gave no answer` / the error porter printed. The wizard reuses `failed()`/`cause()` with the word changed in the wizard's own copy of the helper, so `gui/app.py` is not edited for it |
 | Error state (download) | `<porter's error>` + Open log. A hash mismatch keeps porter's text: both hashes named, and "wait for a pin bump or point Setup at your own NDK" |
-| Destructive confirmation | none in this phase. Cancel keeps the `.part` (no data lost), Use my own… only changes a saved path, and the existing "Stop and quit" close dialog is unchanged |
+| Destructive confirmation | none in this phase. Cancel download keeps the `.part` (no data lost), Use my own… only changes a saved path, and the existing "Stop and quit" close dialog is unchanged |
 
 Never in any copy: links to keys or firmware, a firmware step, or key values.
 
