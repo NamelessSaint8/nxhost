@@ -147,8 +147,8 @@ class PortTab(QWidget):
         cur = self.device.currentData() or config.load().get('device')
         def got(rows, code, fail):
             self.device.clear()
-            if fail:   # the cause in the combo, stderr as its tooltip; the Refresh button beside it is the retry
-                self.device.addItem('porter: ' + cause(fail), ''); self.device.setItemData(0, fail['stderr'] or cause(fail), Qt.ToolTipRole); return
+            if fail:   # the cause in the combo (players never see the word porter: UI-SPEC Copywriting), stderr as its tooltip; the Refresh button beside it is the retry
+                self.device.addItem(firstrun.cause(fail), ''); self.device.setItemData(0, fail['stderr'] or cause(fail), Qt.ToolTipRole); return
             for r in rows or []:
                 if r['state'] == 'device': self.device.addItem(f'{r["serial"]}  {r["info"]}', r['serial'])
             if not self.device.count(): self.device.addItem('no device connected', '')
@@ -301,7 +301,7 @@ class SetupTab(QWidget):
     def confirm_download(self, items, code, fail):
         if self.fetch.running(): self.show_run(); return   # the wizard started a run while tools --json was answering: that run is the one to show and cancel
         self.dl_btn.setEnabled(True); self.dl_step.setText('')
-        if fail: self.dl_step.setTextFormat(Qt.RichText); self.dl_step.setText(failed(fail)); return   # the real cause: a "check the connection" dialog hid a missing lz4
+        if fail: self.dl_step.setTextFormat(Qt.RichText); self.dl_step.setText(firstrun.failed(fail)); return   # nx2android's wording (UI-REVIEW top fix 2); the real cause: a "check the connection" dialog hid a missing lz4
         if not items: QMessageBox.information(self, 'Download', 'Nothing to download: every tool is there.'); return
         e = lambda x: html.escape(str(x), quote=True)   # index strings are text; quote=True for the href
         rows = ''.join(f'<li><b>{e(it["name"])}</b> {e(it["version"])}{" (untested)" if it.get("untested") else ""}, {size(it["size"])}, from {e(it["url"].split("/")[2])}'
@@ -333,7 +333,9 @@ class SetupTab(QWidget):
 
     def fetched(self, code):
         self.dl_btn.setEnabled(True); self.dl_btn.setText('Download missing tools'); self.dl_prog.setVisible(False); self.dl_kn = ''
-        if code in (0, 130): self.dl_step.setText('the tools are ready' if code == 0 else 'cancelled')
+        if code in (0, 130):   # a Prepare's done line is the wizard's (UI-REVIEW top fix 2); fetch.p is None when finished comes with no run
+            prep = self.fetch.p is not None and '--prepare' in self.fetch.p.arguments()
+            self.dl_step.setText('cancelled' if code else firstrun.PREPARED if prep else 'the tools are ready')
         else:   # the cause inline, escaped like the Port tab's log pane, with the saved log one click away (no dialog)
             msg = (self.dl_error or {}).get('msg') or '\n'.join(self.dl_errors) or 'the download failed'
             self.dl_step.setTextFormat(Qt.RichText)
@@ -370,7 +372,7 @@ class SetupTab(QWidget):
         if self.checking: self.again = True; return
         self.checking = True; self.check_msg.setText('')   # a Retry link is gone before the new call
         def got(doc, code, fail):   # setup --json exits 1 when not ready: its document is still the answer
-            self.checking = False; self.table.setRowCount(0); self.check_msg.setText(failed(fail) if fail else '')
+            self.checking = False; self.table.setRowCount(0); self.check_msg.setText(firstrun.failed(fail) if fail else '')   # players never see the word porter
             if fail: self.win.set_ready(False)
             else: firstrun.fill_checks(self.table, doc); self.table.resizeRowsToContents(); self.win.set_ready(bool(doc.get('ready')), doc)
             if self.again: self.again = False; self.check()

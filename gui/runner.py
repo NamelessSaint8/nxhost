@@ -14,8 +14,9 @@ GRACE_MS = 5000   # D-05: about 5 s between the stop request and the force kill
 # D-03: each one-shot's limit in s, after which its tree is killed: devices because adb stalls on a bad cable (above porter's own adb limits,
 # start-server 10 s and devices -l 30 s, so porter reports adb's error itself: WR-05), inspect because a large XCI's headers
 # on a slow disk take time, tools because it reads the vendors' download lists over the network, setup because it runs every check doctor does
-# (dotnet --list-sdks, the NDK probe) on every launch
-TIMEOUTS = {'devices': 45, 'doctor': 30, 'inspect': 60, 'profiles': 20, 'setup': 45, 'tools': 60}
+# on every launch: the NDK probe (porter/probe.py, two steps of up to 60 s each on a first run from a cold disk) plus adb version (15 s), and a killed run
+# caches nothing, so at 45 s a slow host (an SD-card arm64 board) never got an answer (03-REVIEW WR-02); doctor stays 30 s because neither window calls it
+TIMEOUTS = {'devices': 45, 'doctor': 30, 'inspect': 60, 'profiles': 20, 'setup': 150, 'tools': 60}
 
 
 def _env():
