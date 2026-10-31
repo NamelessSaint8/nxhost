@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 03
 current_phase_name: Host Toolchains and Guided First Run
 status: executing
-stopped_at: Completed 03-11-PLAN.md
-last_updated: "2026-10-31T18:24:18.450Z"
+stopped_at: Completed 03-13-PLAN.md
+last_updated: "2026-10-31T18:32:24.997Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 03 execution started
-state_head: 8039cdb425a8309bb43a894517d5a72f8399e7ed
+state_head: 5c5f31241842d3ff4dc073a4981cd91915a58ab7
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 38
-  completed_plans: 35
+  completed_plans: 36
   percent: 33
 ---
 
@@ -27,8 +27,8 @@ See: .planning/PROJECT.md (updated 2026-10-31)
 
 ## Current Position
 
-Phase: 03 (Host Toolchains and Guided First Run) — READY TO EXECUTE
-Plan: 12 of 12
+Phase: 03 (Host Toolchains and Guided First Run) — EXECUTING
+Plan: 14 of 15
 Status: Ready to execute
 Last activity: 2026-10-31 — Phase 03 execution started
 
@@ -92,6 +92,7 @@ Progress: [███░░░░░░░] 33%
 | Phase 03 P09 | 15min | 2 tasks | 7 files |
 | Phase 03 P10 | 8 min | 2 tasks | 2 files |
 | Phase 03 P11 | 10min | 3 tasks | 5 files |
+| Phase 03 P13 | 3 min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -186,6 +187,8 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-11: the progress line's speed is porter's rate; [k/n] joined with a space, the other parts with ' · '
 - [Phase 03]: 03-11: the Prepare .NET tools chain follows only a download the tools page started; a failed Prepare is a note, never a blocker
 - [Phase 03]: 03-11: Wizard.primary(i) makes a page's own primary button (done, tools) the default instead of QWizard's Next
+- [Phase 03]: 03-13: _download treats a body shorter than have + Content-Length as a dropped link (retried ConnectionResetError); http.client.HTTPException is retried too
+- [Phase 03]: 03-13: the probe cache is best-effort (per-process mkstemp + os.replace, OSError swallowed); only passes are cached
 
 ### Pending Todos
 
@@ -210,6 +213,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-31T17:16:54.161Z
-Stopped at: Completed 03-11-PLAN.md
+Last session: 2026-10-31T18:32:24.741Z
+Stopped at: Completed 03-13-PLAN.md
 Resume file: None
