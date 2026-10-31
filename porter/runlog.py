@@ -4,7 +4,7 @@
 # A one-shot --json command that crashes answers {"error": "<Type>: <message>"} on stdout instead of a bare traceback. A port's build folder holds a marker
 # while it runs that names the stage it is in, so the next port of a game that was cut off says where; the reuse keys, written last and whole, decide what runs again (D-09).
 # Every command but doctor refuses a Python without the CVE-2025-4517 tarfile fix (toolchain.python_ok, D-13), with one message in the CLI, the JSON and the log.
-import json, os, platform, re, sys, threading, time, traceback
+import errno, json, os, platform, re, sys, threading, time, traceback
 
 from porter import paths, procs, toolchain
 
@@ -113,10 +113,20 @@ def _wrap(prog, nsp):
 
     def _json(obj):
         if obj.get('ev') == 'result': obj = {**obj, 'log': str(S['path'])}
+        # D-26: bytes per second at upstream's last-minute rate, added here so the engine subtree's emitter is not edited
+        if obj.get('ev') == 'progress' and obj.get('unit') == 'B' and obj.get('eta') and obj.get('total') and obj.get('done') is not None:
+            obj = {**obj, 'rate': round((obj['total'] - obj['done']) / obj['eta'])}
         orig['_json'](obj)
 
     prog.stage, prog.end, prog.say, prog._json = stage, end, say, _json
     return lambda: [prog.__dict__.pop(n, None) for n in orig]   # the class's methods again (tests run several commands in one process)
+
+
+def _explain(e):   # D-17: a macOS privacy denial is EPERM, not EACCES (RESEARCH Pitfall 10); the purpose strings ship in packaging/nx2android.spec
+    if sys.platform == 'darwin' and isinstance(e, PermissionError) and e.errno == errno.EPERM:
+        return (f"macOS did not let nx2android open {e.filename or 'the game folder'}: allow nx2android in System Settings › Privacy & Security › Files and Folders "
+                '(or Full Disk Access), then try again')
+    return None
 
 
 def _refuse(a, long):   # a Python whose tarfile filter can be bypassed: doctor still runs and shows the red row
@@ -139,7 +149,7 @@ def run(a, fn):
         if not getattr(a, 'json', False): return fn(a)
         try: return fn(a)
         except Exception as e:   # a missing lz4 used to look like a network failure to the GUI
-            traceback.print_exc(); print(json.dumps({'error': f'{type(e).__name__}: {e}'}, ensure_ascii=False), flush=True); return 1
+            traceback.print_exc(); print(json.dumps({'error': _explain(e) or f'{type(e).__name__}: {e}'}, ensure_ascii=False), flush=True); return 1
     reset(); p = _open(a)
     if note: _w(note)
     _event(a, {'ev': 'log', 'path': str(p)})   # first, so a run that dies at once still names its log
@@ -150,9 +160,9 @@ def run(a, fn):
         try: code = fn(a)
         except KeyboardInterrupt: code = 130   # a stop before _with_progress took over
     except Exception as e:
-        _w(traceback.format_exc().rstrip())
-        _event(a, {'ev': 'error', 'msg': str(e), 'type': type(e).__name__, 'log': str(p)})
-        _unmark(); _close(f'[RED] {type(e).__name__}: {e}'); unwrap()
+        _w(traceback.format_exc().rstrip()); msg = _explain(e)
+        _event(a, {'ev': 'error', 'msg': msg or str(e), 'type': type(e).__name__, 'log': str(p)})
+        _unmark(); _close(f'[RED] {msg or f"{type(e).__name__}: {e}"}'); unwrap()
         raise
     unwrap()
     if code != 130: _unmark()
