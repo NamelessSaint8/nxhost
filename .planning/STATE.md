@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 03
 current_phase_name: Host Toolchains and Guided First Run
 status: executing
-stopped_at: Completed 03-08-PLAN.md
-last_updated: "2026-10-31T16:34:20.285Z"
+stopped_at: Completed 03-12-PLAN.md
+last_updated: "2026-10-31T16:44:31.310Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 03 execution started
-state_head: d7b76d7748b6c052225b93c896775702a9431b71
+state_head: e15d9a0f4e5d3a9208ae96d0ef28a8cba64c5aa1
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 35
-  completed_plans: 31
+  completed_plans: 32
   percent: 33
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-10-31)
 ## Current Position
 
 Phase: 03 (Host Toolchains and Guided First Run) — EXECUTING
-Plan: 9 of 12
+Plan: 10 of 12
 Status: Ready to execute
 Last activity: 2026-10-31 — Phase 03 execution started
 
@@ -88,6 +88,7 @@ Progress: [███░░░░░░░] 33%
 | Phase 03 P06 | 4 min | 2 tasks | 6 files |
 | Phase 03 P07 | 3 min | 2 tasks | 4 files |
 | Phase 03 P08 | 25min | 3 tasks | 7 files |
+| Phase 03 P12 | 6min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -173,6 +174,7 @@ Recent decisions affecting current work:
 - [Phase 03]: smoke_bundle.py bare_env_check runs frozen in fork-release and unfrozen in the suite; a missing tool row fails naming it (D-19)
 - [Phase 03]: The linux-arm64 release job downloads the community NDK through the frozen bundle and requires an ok NDK row with the community note (TOOL-01)
 - [Phase 03]: The D-10 fallback NDK recipe uses a bin/clang wrapper passing -resource-dir and --sysroot in a linux-arm64 host folder, documented only
+- [Phase 03]: 03-12: the keys page saves on itemSelectionChanged, not currentItemChanged, so focusing the list never saves its first row
 
 ### Pending Todos
 
@@ -197,6 +199,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-31T16:34:20.049Z
-Stopped at: Completed 03-08-PLAN.md
+Last session: 2026-10-31T16:44:31.060Z
+Stopped at: Completed 03-12-PLAN.md
 Resume file: None
