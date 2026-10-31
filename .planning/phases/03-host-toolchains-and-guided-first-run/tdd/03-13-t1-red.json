@@ -1,0 +1,10 @@
+{
+ "command": "/Volumes/Data/Dev/nx2android/.venv/bin/python -m unittest tests.test_fetch.EarlyClose",
+ "exitCode": 1,
+ "output": "E\n======================================================================\nERROR: test_clean_close_resumed (tests.test_fetch.EarlyClose.test_clean_close_resumed)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/private/tmp/claude-501/-Volumes-Data-Dev-nx2android/ef87d0b2-3303-461d-bdf9-90a67f7b2427/scratchpad/wt-t1/tests/test_fetch.py\", line 306, in test_clean_close_resumed\n    srv = self.get(short, full); self.fetch._download(self.item, self.dest)\n                                 ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^\n  File \"/private/tmp/claude-501/-Volumes-Data-Dev-nx2android/ef87d0b2-3303-461d-bdf9-90a67f7b2427/scratchpad/wt-t1/porter/fetch.py\", line 150, in _download\n    raise BuildError(f'{name}: its {it.algo} is {got}, not the expected {it.hash} (from {it.url}): {fix}')\nbuild_ipa_from_nsp.BuildError: tool.zip: its sha256 is 8238f003ad1a7f56965542e097622333a1e90eb52301496c34fe39ab34c2e9e6, not the expected e96760a87768717bcebcfd25ddc7d46b4dbc95a4b0014def080c08539f7d90d0 (from http://127.0.0.1:49533/x/tool.zip): try again, and report it if it repeats\n\n----------------------------------------------------------------------\nRan 1 test in 0.083s\n\nFAILED (errors=1)\n",
+ "targetTest": "tests.test_fetch.EarlyClose.test_clean_close_resumed",
+ "targetFile": "tests/test_fetch.py",
+ "expected": "two requests (None, bytes=3000-), dest holds BODY, the .part gone, a say line naming 3000 of 10240 and retry 1",
+ "actual": "one request, a sha256 BuildError raised from _download, the .part deleted",
+ "semanticAssessment": "Recorded after GREEN by re-running the test at RED commit 0ba1a26 in a temporary worktree (the record was not persisted before GREEN). The target ran over the real loopback socket and errored with the sha256 BuildError from _download: the 300-of-1000 failure 03-VERIFICATION gap 2 reported, not a fixture or import fault. 1 test ran."
+}
