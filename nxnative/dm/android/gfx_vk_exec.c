@@ -1507,6 +1507,52 @@ static void copy_t2t(const p_copy_t2t *c) {
     }
     vk_img_barrier_all(cb);
 }
+// nvnCommandBufferDrawTexture: a rectangle of one texture into each bound colour target. Skyrim draws its menu and its movie frames this way (Streets of Rage 4's movie frames on
+// the Metal backend); without it its first frame was the clear colour alone. The source view and the target view give the levels and layers; the destination rectangle is in
+// pixels (either corner order) and the source in texels. Replayed as a blit: scaling and format conversion work, the sampler's filter becomes linear (nearest at 1:1) and the
+// source's mirroring, a channel mask other than all four or blending is reported and not applied.
+static void draw_tex(const p_draw_tex *c) {
+    if (g_rc_skip || !S.rt_n) return;
+    int tid = (int)(c->h & 0xfffff), sid = (int)(c->h >> 20);
+    const view_t *sv = NULL; const tex_t *st = NULL; vkimg_t *s = tid ? vk_tex_by_id(tid, &sv, &st) : NULL;
+    if (!s || !(s->aspect & VK_IMAGE_ASPECT_COLOR_BIT)) { VKRED_ONCE(122, "DrawTexture: texture handle %#llx has no colour texture", (unsigned long long)c->h); return; }
+    if (!sid || !vk_samp_by_id(sid)) { VKRED_ONCE(123, "DrawTexture: sampler handle %#llx has no sampler", (unsigned long long)c->h); return; }
+    float sx0 = fminf(c->s.x0, c->s.x1), sx1 = fmaxf(c->s.x0, c->s.x1), sy0 = fminf(c->s.y0, c->s.y1), sy1 = fmaxf(c->s.y0, c->s.y1);
+    if (sx1 <= sx0 || sy1 <= sy0) return;
+    if (c->s.x1 < c->s.x0 || c->s.y1 < c->s.y0) VKRED_ONCE(124, "DrawTexture of a mirrored source region: not mirrored");
+    vk_end_pass();
+    VkCommandBuffer cb = vk_cmd(); vk_tex_prepare(cb, s);
+    int drawn = 0;
+    for (int k = 0; k < S.rt_n && k < 8; k++) {
+        if (!S.rt_has_col[k]) continue;
+        uint32_t wm = (S.chmask.mask >> (4 * k)) & 0xf; if (!wm) continue;
+        if ((S.color.blend_en >> k) & 1) VKRED_ONCE(125, "DrawTexture with blending on: drawn without it");
+        if (wm != 0xf) VKRED_ONCE(126, "DrawTexture with channel mask %#x: all four channels are written", wm);
+        vkimg_t *d = vk_tex(&S.rt_col[k]); if (!d || !(d->aspect & VK_IMAGE_ASPECT_COLOR_BIT)) continue;
+        VkImageSubresourceLayers ss = sub_of(s, sv, sv != NULL, 0), ds = sub_of(d, S.rt_has_cview[k] ? &S.rt_cview[k] : NULL, S.rt_has_cview[k], 0);
+        if (ss.mipLevel >= s->levels || ds.mipLevel >= d->levels) continue;
+        int32_t sw = (int32_t)(s->w >> ss.mipLevel ? s->w >> ss.mipLevel : 1), sh = (int32_t)(s->h >> ss.mipLevel ? s->h >> ss.mipLevel : 1);
+        int32_t dw = (int32_t)(d->w >> ds.mipLevel ? d->w >> ds.mipLevel : 1), dh = (int32_t)(d->h >> ds.mipLevel ? d->h >> ds.mipLevel : 1);
+        float x0 = fminf(c->d.x0, c->d.x1), x1 = fmaxf(c->d.x0, c->d.x1), y0 = fminf(c->d.y0, c->d.y1), y1 = fmaxf(c->d.y0, c->d.y1);
+        if (S.sc_set) { x0 = fmaxf(x0, (float)S.sc.x); y0 = fmaxf(y0, (float)S.sc.y); x1 = fminf(x1, (float)(S.sc.x + S.sc.w)); y1 = fminf(y1, (float)(S.sc.y + S.sc.h)); }
+        x0 = fmaxf(x0, 0); y0 = fmaxf(y0, 0); x1 = fminf(x1, (float)dw); y1 = fminf(y1, (float)dh);
+        int32_t dx0 = (int32_t)ceilf(x0 - 0.5f), dy0 = (int32_t)ceilf(y0 - 0.5f), dx1 = (int32_t)ceilf(x1 - 0.5f), dy1 = (int32_t)ceilf(y1 - 0.5f);   // pixels whose centres are inside
+        if (dx1 <= dx0 || dy1 <= dy0) continue;
+        VkFormatProperties sf, df; vkGetPhysicalDeviceFormatProperties(V.pd, s->fmt, &sf); vkGetPhysicalDeviceFormatProperties(V.pd, d->fmt, &df);
+        if (!(sf.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT) || !(df.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT)) { VKRED_ONCE(127, "DrawTexture between formats %d -> %d that cannot be blitted: skipped", s->fmt, d->fmt); continue; }
+        VkFilter flt = (dx1 - dx0 == (int32_t)(sx1 - sx0) && dy1 - dy0 == (int32_t)(sy1 - sy0)) ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+        if (flt == VK_FILTER_LINEAR && !(sf.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) flt = VK_FILTER_NEAREST;
+        VkImageBlit r = {ss, {{(int32_t)floorf(sx0), (int32_t)floorf(sy0), 0}, {(int32_t)ceilf(sx1), (int32_t)ceilf(sy1), 1}},
+                         ds, {{dx0, dy0, 0}, {dx1, dy1, 1}}};
+        if (r.srcOffsets[0].x < 0) r.srcOffsets[0].x = 0; if (r.srcOffsets[0].y < 0) r.srcOffsets[0].y = 0;   // Vulkan refuses a region outside either image
+        if (r.srcOffsets[1].x > sw) r.srcOffsets[1].x = sw; if (r.srcOffsets[1].y > sh) r.srcOffsets[1].y = sh;
+        if (r.srcOffsets[0].x >= r.srcOffsets[1].x || r.srcOffsets[0].y >= r.srcOffsets[1].y) continue;
+        vk_tex_prepare(cb, d); vk_img_barrier_all(cb);
+        vkCmdBlitImage(cb, s->img, VK_IMAGE_LAYOUT_GENERAL, d->img, VK_IMAGE_LAYOUT_GENERAL, 1, &r, flt);
+        d->gpu_w = 1; drawn++;
+    }
+    if (drawn) vk_img_barrier_all(cb);
+}
 static void clear_tex(const p_clear_tex *c) {
     vk_end_pass();
     vkimg_t *im = vk_tex(c->tex); if (!im) return;
@@ -1645,8 +1691,8 @@ static void exec_ops(const uint8_t *p) {
             break; }
         case OP_BIND_VATTR: { const p_bind_vattr *v = (const p_bind_vattr *)a; memset(S.vattr, 0, sizeof S.vattr); for (int i = 0; i < v->n && i < 16; i++) S.vattr[v->first + i] = v->st[i]; break; }
         case OP_BIND_VSTREAM: { const p_bind_vstream *v = (const p_bind_vstream *)a; for (int i = 0; i < v->n && v->first + i < 16; i++) S.vstream[v->first + i] = v->st[i]; break; }
-        case OP_BIND_VBUF: { const p_bind_vbuf *v = (const p_bind_vbuf *)a; for (int i = 0; i < v->n && v->first + i < 16; i++) S.vbuf[v->first + i] = v->r[i]; break; }
-        case OP_BIND_UBO: { const p_bind_buf *b = (const p_bind_buf *)a; if (b->stage >= 0 && b->stage < 6 && b->index >= 0 && b->index < 16 && memcmp(&S.ubo[b->stage][b->index], b, sizeof *b)) { S.ubo[b->stage][b->index] = *b; g_ubo_gen[b->stage]++; } break; }
+        case OP_BIND_VBUF: case OP_BIND_VBUF1: { p_bind_vbuf tmp; const p_bind_vbuf *v = vbuf_rec(h.op, a, &tmp); for (int i = 0; i < v->n && v->first + i < 16; i++) S.vbuf[v->first + i] = v->r[i]; break; }   // VBUF1: the 24-byte binding of a game that sizes its heaps by GetCommandMemoryUsed (Skyrim)
+        case OP_BIND_UBO: case OP_BIND_UBO_SMALL: { p_bind_buf tmp; const p_bind_buf *b = bind_buf_rec(h.op, a, &tmp); if (b->stage >= 0 && b->stage < 6 && b->index >= 0 && b->index < 16 && memcmp(&S.ubo[b->stage][b->index], b, sizeof *b)) { S.ubo[b->stage][b->index] = *b; g_ubo_gen[b->stage]++; } break; }
         case OP_BIND_SSBO: { const p_bind_buf *b = (const p_bind_buf *)a; if (b->stage >= 0 && b->stage < 6 && b->index >= 0 && b->index < 16 && memcmp(&S.ssbo[b->stage][b->index], b, sizeof *b)) { S.ssbo[b->stage][b->index] = *b; g_bind_gen[b->stage]++; } break; }
         case OP_BIND_TEX: case OP_BIND_SAMP: case OP_BIND_IMG: case OP_BIND_TEX1: bind_handles_rec(h.op, a); break;
         case OP_STENCIL: { const p_stencil *s = (const p_stencil *)a;
@@ -1659,6 +1705,7 @@ static void exec_ops(const uint8_t *p) {
         case OP_PRIM_RESTART: S.prim_restart = ((const p_prim_restart *)a)->on; break;
         case OP_DRAW: { if (g_rc_skip) break; p_draw t; draw(draw_rec(a, h.size, &t)); break; }
         case OP_DRAW_IDX: { if (g_rc_skip) break; p_draw_idx t; draw_idx(draw_idx_rec(a, h.size, &t)); break; }
+        case OP_DRAW_TEX: draw_tex((const p_draw_tex *)a); break;
         case OP_DISPATCH: dispatch((const p_dispatch *)a); break;
         case OP_BARRIER:   // the pass ends at every barrier: kept across XC3's fragment- and primitive-order barriers (0x1 0x2 0x4) its characters drew torn in some frames
             if (g_x_listpasses) VKLOG("    barrier %#x", *(const int32_t *)a);
@@ -1673,7 +1720,7 @@ static void exec_ops(const uint8_t *p) {
         case OP_TF_BIND: { const p_tf_bind *b = (const p_tf_bind *)a; if (b->index >= 0 && b->index < 4) g_tf[b->index] = *b; break; }
         case OP_TF_STATE: if (!V.has_xfb) VKRED_ONCE(80, "transform feedback: the device has none, its draws write nothing"); tf_state((const p_tf_state *)a); break;
         case OP_VP_SWIZZLE: { const p_vp_swizzle *b = (const p_vp_swizzle *)a; memcpy(S.vp_sw[b->first], b->sw, 4 * (size_t)b->n); break; }
-        default: VKRED_ONCE(82, "unknown record op %u", h.op); break;
+        default: { static uint64_t seen; if (h.op < 64 && !(seen >> h.op & 1)) { seen |= 1ull << h.op; VKLOG("[RED] [vk] unknown record op %u", h.op); } break; }   // each op named once, not the first only: a new game then lists all the records it uses that this layer does not know
         }
         p += h.size;
     }
