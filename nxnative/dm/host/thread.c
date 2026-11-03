@@ -11,6 +11,7 @@ static pthread_key_t g_keyown;   // raw pointers of the TLS block / thread-local
 static pthread_once_t g_keyown_once = PTHREAD_ONCE_INIT;
 static void own_free(void *p) { void **own = p; free(own[0]); free(own[1]); free(own); }
 static void own_key_init(void) { if (pthread_key_create(&g_keyown, own_free)) die("cannot create the free key for thread-local blocks"); }
+extern void dm_gate(void);            // entry.S: common gate entry
 void guest_thread_init(void) {
     dm_tsd_set(g_keygate, (void *)dm_gate);
     dm_tsd_set(g_key18, 0);

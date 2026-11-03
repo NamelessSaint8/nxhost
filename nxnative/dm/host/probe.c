@@ -129,11 +129,11 @@ static int probe_hit(ucontext_t *uc) {   // Registered by probe_install with the
         probe_dump_once();
         flockfile(stderr);   // One block per hit when threads hit at once
         { extern uint64_t g_t0_ns; uint64_t now_ns(void); uint32_t thr_cur_handle(void); fprintf(stderr, "[dm] PROBE %s #%u [%.4fs] F=%llu T=%x", g_probe[i].name, ++g_probe[i].hits, (now_ns() - g_t0_ns) / 1e9, (unsigned long long)frame, thr_cur_handle()); }
-        for (int r = 0; r < 8; r++) { uint64_t v = DM_UC_SS(uc).__x[r]; fprintf(stderr, " x%d=%#llx", r, v); probe_str(v); }
-        for (int r = 19; r < 24; r++) fprintf(stderr, " x%d=%#llx", r, DM_UC_SS(uc).__x[r]);
-        if (getenv("DM_PROBE_ALL")) for (int r = 8; r < 19; r++) fprintf(stderr, " x%d=%#llx", r, DM_UC_SS(uc).__x[r]);   // also print x8–x18
-        fprintf(stderr, " lr=%#llx", DM_UC_SS(uc).__lr);
-        { uint64_t x8 = DM_UC_SS(uc).__x[8]; Dl_info di; fprintf(stderr, " x8=%#llx", x8);   // x8: indirect call targets are often here (probe placed before blr x8)
+        for (int r = 0; r < 8; r++) { uint64_t v = DM_UC_SS(uc)->__x[r]; fprintf(stderr, " x%d=%#llx", r, v); probe_str(v); }
+        for (int r = 19; r < 24; r++) fprintf(stderr, " x%d=%#llx", r, DM_UC_SS(uc)->__x[r]);
+        if (getenv("DM_PROBE_ALL")) for (int r = 8; r < 19; r++) fprintf(stderr, " x%d=%#llx", r, DM_UC_SS(uc)->__x[r]);   // also print x8–x18
+        fprintf(stderr, " lr=%#llx", DM_UC_SS(uc)->__lr);
+        { uint64_t x8 = DM_UC_SS(uc)->__x[8]; Dl_info di; fprintf(stderr, " x8=%#llx", x8);   // x8: indirect call targets are often here (probe placed before blr x8)
           if (dladdr((void *)x8, &di) && di.dli_sname) fprintf(stderr, " (%s+%#lx)", di.dli_sname, (unsigned long)(x8 - (uint64_t)di.dli_saddr)); }
         if (g_probe[i].dump >= 0) {
             uint8_t b[16]; vm_size_t got = 0;
