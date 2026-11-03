@@ -9,6 +9,14 @@ def _parser():
     d = sub.add_parser('doctor', help='check the tools a port needs'); d.add_argument('--json', action='store_true'); d.add_argument('-k', '--keys')
     p = sub.add_parser('profiles', help='list the games the tool can port'); p.add_argument('--all', action='store_true', help='also the iOS profiles not ported to Android'); p.add_argument('--json', action='store_true')
     i = sub.add_parser('inspect', help='what a game folder holds and whether it can be ported'); i.add_argument('folder'); i.add_argument('--title-id', default='', help='the game to look at when the folder holds several'); i.add_argument('--json', action='store_true')
+    tr = sub.add_parser('triage', help='boot a built game on a device N times and read every log (the bring-up loop)')
+    tr.add_argument('folder', help='the game folder (its <title ID>_build is what gets booted)')
+    tr.add_argument('--device', default='', help="an adb serial, or '' for the first attached")
+    tr.add_argument('--runs', type=int, default=3)
+    tr.add_argument('--secs', type=int, default=45)
+    tr.add_argument('--title-id', default='')
+    tr.add_argument('--json', action='store_true')
+    tr.set_defaults(func=cmd_triage)
     po = sub.add_parser('port', help='make the APK and the data pack (and install them)')
     po.add_argument('folder', help='the game\'s folder: its base game NSP / XCI, updates and DLC')
     po.add_argument('-k', '--keys', help='prod.keys (default: the configured one)')
@@ -43,6 +51,12 @@ def _parser():
 
 
 def _print_json(obj): print(json.dumps(obj, ensure_ascii=False, indent=2))
+
+
+def cmd_triage(a):
+    from porter import triage
+    r = triage.triage(a.folder, a.device, a.runs, a.secs, a.title_id)
+    if a.json: _print_json(r)
 
 
 def cmd_doctor(a):
@@ -197,4 +211,4 @@ def main(argv):
     if hasattr(sys.stdout, 'reconfigure'): sys.stdout.reconfigure(encoding='utf-8', errors='replace')   # game names and progress bars on a Windows console
     a = _parser().parse_args(argv)
     from porter import runlog
-    return runlog.run(a, {'doctor': cmd_doctor, 'profiles': cmd_profiles, 'inspect': cmd_inspect, 'port': cmd_port, 'install': cmd_install, 'devices': cmd_devices, 'tools': cmd_tools, 'config': cmd_config, 'setup': cmd_setup, 'desktop-entry': cmd_desktop}[a.cmd])
+    return runlog.run(a, {'doctor': cmd_doctor, 'profiles': cmd_profiles, 'inspect': cmd_inspect, 'triage': cmd_triage, 'port': cmd_port, 'install': cmd_install, 'devices': cmd_devices, 'tools': cmd_tools, 'config': cmd_config, 'setup': cmd_setup, 'desktop-entry': cmd_desktop}[a.cmd])
