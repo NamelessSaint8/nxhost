@@ -758,8 +758,13 @@ static VkPipeline build_pipeline(const pkey *k, VkPipelineLayout layout, vkshade
     VkStencilOpState sf = {sop(k->sfail[0]), sop(k->szpass[0]), sop(k->szfail[0]), cmpop(k->sf[0]), 0xff, 0xff, 0}, sb = {sop(k->sfail[1]), sop(k->szpass[1]), sop(k->szfail[1]), cmpop(k->sf[1]), 0xff, 0xff, 0};
     VkPipelineDepthStencilStateCreateInfo ds = {VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO, NULL, 0, k->dt, k->dt && k->dw, cmpop(k->df), 0, k->st, sf, sb, 0, 1};
     VkPipelineColorBlendAttachmentState cba[8];
-    for (uint32_t i = 0; i < k->ncol; i++) cba[i] = (VkPipelineColorBlendAttachmentState){(k->blend_en >> i) & 1, bfac(k->bl[i].src), bfac(k->bl[i].dst), bop(k->bl[i].eq),
-        bfac(k->bl[i].srca), bfac(k->bl[i].dsta), bop(k->bl[i].eqa), k->wmask[i]};
+    // Two live A/B switches for a material that draws but never reaches the target (Skyrim's actor skin: armour, hair and eyes draw, the skin does not):
+    // DM_VK_NOBLEND=1 turns blending off for every attachment, DM_VK_NOWMASK=1 forces the colour write mask to all four bits. Each read at use, so a DM_CTL
+    // env line flips it in a running game and the player can say whether the missing material appears
+    const char *nb = getenv("DM_VK_NOBLEND"), *nw = getenv("DM_VK_NOWMASK");   // read per pipeline build (pipelines are keyed and reused, so this is rare)
+    int noblend = nb && atoi(nb) != 0, nowmask = nw && atoi(nw) != 0;
+    for (uint32_t i = 0; i < k->ncol; i++) cba[i] = (VkPipelineColorBlendAttachmentState){noblend ? 0 : ((k->blend_en >> i) & 1), bfac(k->bl[i].src), bfac(k->bl[i].dst), bop(k->bl[i].eq),
+        bfac(k->bl[i].srca), bfac(k->bl[i].dsta), bop(k->bl[i].eqa), nowmask ? 0xf : k->wmask[i]};
     VkPipelineColorBlendStateCreateInfo cb = {VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, NULL, 0, k->logic_en, (VkLogicOp)k->logic_op, k->ncol, cba, {0, 0, 0, 0}};
     VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_BLEND_CONSTANTS, VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
                             VK_DYNAMIC_STATE_STENCIL_WRITE_MASK, VK_DYNAMIC_STATE_STENCIL_REFERENCE, VK_DYNAMIC_STATE_DEPTH_BIAS, VK_DYNAMIC_STATE_LINE_WIDTH};

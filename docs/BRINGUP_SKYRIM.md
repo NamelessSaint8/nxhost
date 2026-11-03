@@ -35,7 +35,11 @@ Reported by the player, 2026-11-03: eyes and mouths render, but no skin — face
 - **Not the fragment-depth variant** (`DM_VK_FDZ=0` live: the picture is unchanged and the skin stays missing) and **not the one swizzled texture** (`(1 1 1 2)`, and views do apply the component mapping).
 - **Not a stage misclassification.** Every key Skyrim binds has the stage the bundle gives it, and it binds one shader per stage — `mask 0x1` with a vertex key, `mask 0x2` with a fragment key, both applied (`progbind … -> vertex bound pixel bound`).
 
-So the skin draws run and their pixels do not arrive. The next probe is the *pipeline* of an actor draw against a working one (eyes/mouth): bind a log of each distinct pipeline's state — blend and its source/dest, the colour write mask, cull, depth test/write, alpha test, and the vertex-attribute formats — once per pipeline, then find the actor's by its attribute layout or vertex count. `DM_VK_PASSDUMP` (env, Android) names the passes it draws in.
+So the skin draws run and their pixels do not arrive. **What the player sees, 2026-11-03:** armour renders perfectly, hair and eyes render, and where a head should be you can see the **mouth inside it** — the skin surfaces are absent, not black, so the outer mesh never reaches the target while meshes inside it do.
+
+Two live A/B switches were added to test the pixel path (`DM_VK_NOBLEND=1`, `DM_VK_NOWMASK=1`, read per pipeline build in `gfx_vk_exec.c`): the forced colour write mask changed nothing (skin still absent), and blending off breaks the whole picture (UI included) so it cannot answer for one material. Candidate mechanisms left, in order: the skin pipeline's **depth** (drawn behind everything, which would leave the mouths inside the heads visible and the heads not), **culling** (both faces dropped for that material), and a vertex-stage fault for that one programme (degenerate or NaN positions), which would also explain why only that material vanishes.
+
+The next probe is a **pipeline inventory**: log each distinct pipeline once with its program keys, cull mode, front face, depth test/write and compare function, depth range, blend, write mask and vertex-attribute formats. The skin's pipeline is identifiable as the one that draws an actor mesh whose fragments never appear; a per-pipeline "paint magenta, ignore depth" switch would make it unmistakable. `DM_VK_PASSDUMP` (env, Android) names the passes involved.
 
 ### The route, as a script
 
