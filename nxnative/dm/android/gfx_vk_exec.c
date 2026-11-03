@@ -18,7 +18,7 @@ int prog_key(const prog_t *p, unsigned st, uint8_t key[8]);
 
 // ---------------- NVN state shadow ----------------
 static struct {
-    const prog_t *prog; vkshader_t *sh[6]; int prog_ok;
+    const prog_t *prog; vkshader_t *sh[6]; int prog_ok; uint32_t prog_mask;   // prog_mask: the stage bits of the last BindProgram (what it replaced)
     p_bind_buf ubo[6][16], ssbo[6][16];
     uint64_t tex[6][256], samp[6][128], img[6][32];
     blend_st blend[8]; color_st color; chmask_st chmask; ms_st ms; poly_st poly; ds_st ds;
@@ -625,9 +625,13 @@ static void bind_program(const p_bind_program *bp) {
     // its vertex and fragment shaders in programs of their own (NEO, AI: THE SOMNIUM FILES) binds them one after the other and draws with both.
     // prog_key's index is the position in the program's shader array (as the game passed them to SetShaders), not the stage: the stage is the bundle's.
     int vk_shader_stage(uint64_t key);
-    uint32_t mask = bp->stages ? (uint32_t)bp->stages & 0x3f : 0x3f;
+    // A stage mask of 0 replaces no stage: the bits say which stages take this program's shaders, and an empty mask leaves every bound shader alone. Reading
+    // it as "all stages" (the old default) cleared them instead, and one BindProgram(program, 0) then made every later draw skip (Skyrim draws nothing after
+    // it; the log's "draw skipped ... the program holds <vertex> 0 0 ... stage mask 0x1" is that one early bind still poisoning the pixel stage)
+    uint32_t mask = (uint32_t)bp->stages & 0x3f;
     for (int st = 0; st < 6; st++) if (mask >> st & 1) S.sh[st] = NULL;
-    S.prog = bp->prog;
+    if (mask) S.prog = bp->prog;
+    S.prog_mask = mask;
     if (S.prog) for (unsigned i = 0; i < 6; i++) {
         uint8_t k[8]; if (!prog_key(S.prog, i, k)) break;
         uint64_t kk = key64(k); int st = kk ? vk_shader_stage(kk) : -1;
@@ -1084,7 +1088,24 @@ static int prepare_draw(int prim, int indexed) {
     int var = g_bis_trace >= 0 && g_draw_i >= g_bis_trace ? g_bis_var : 0; if (g_bis_var) g_tracing = 0;   // full logs only the first time
     g_var_now = 0;
     if (var == 6) vk_end_pass();   // a new pass for this draw
-    if (!(S.sh[0] && (S.sh[1] || S.rast_discard))) { g_vkst.skip_prog++; VKRED_ONCE(50, "draw with a program whose shaders are not in the bundle: skipped"); return 0; }
+    // A draw needs a vertex shader and, unless rasterizer discard is on, a pixel one. Say which is missing and what the program holds, once per
+    // combination: a key listed here that the bundle lacks is a translation gap (bind_program already names it), and a key the program does not hold at
+    // all is a bind the game made differently -- the skip used to print nothing beyond its own red line, which named no shader and no program.
+    if (!(S.sh[0] && (S.sh[1] || S.rast_discard))) {
+        g_vkst.skip_prog++;
+        uint64_t k[3] = {0};
+        if (S.prog) for (unsigned i = 0; i < 3; i++) { uint8_t kk[8]; if (!prog_key(S.prog, i, kk)) break; k[i] = key64(kk); }
+        uint64_t sig = (S.sh[0] ? 1u : 0u) | (S.sh[1] ? 2u : 0u) | (S.rast_discard ? 4u : 0u);
+        for (int i = 0; i < 3; i++) sig = sig * 1000003ull + k[i];
+        static uint64_t seen[32]; static int nseen; int known = 0;
+        for (int j = 0; j < nseen; j++) if (seen[j] == sig) known = 1;
+        if (!known && nseen < 32) { seen[nseen++] = sig;
+            VKLOG("[RED] [vk] draw skipped: vertex %s, pixel %s, rasterizer discard %u; the program holds %016llx %016llx %016llx, its last bind had stage mask %#x",
+                  S.sh[0] ? "bound" : "missing", S.sh[1] ? "bound" : "missing", S.rast_discard,
+                  (unsigned long long)k[0], (unsigned long long)k[1], (unsigned long long)k[2], S.prog ? S.prog_mask : 0);
+        }
+        return 0;
+    }
     if (g_x_nogs && S.sh[2]) return 0;   // DM_VK_X_NOGS=1 (live, A/B): draws with a geometry shader are left out
     for (int i = 0; i < g_x_nskipvs; i++) if (S.sh[0]->key == g_x_skipvs[i]) return 0;   // DM_VK_X_SKIPVS=<key>[,<key>...] (live, up to 8): draws with these vertex shaders are left out
     // A run of draws with rasterizer discard gets a pass of its own: the pass ends where such a run begins and where it ends (and begin_pass puts a barrier

@@ -679,6 +679,13 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Found on:** [Metroid Dread](../../dm/games/010093801237C000/README.md): the combinations it uses are (program, 0x3), (null, 0x2), (null, 0x7). [13 Sentinels: Aegis Rim](../../dm/games/01003FC01670C000/README.md) builds one program per GLSLC output and pairs them only through these composites ([Single-stage programs paired with a cover](shaders.md#single-stage-programs-paired-with-a-cover)).
 - **Note:** pass dumps print a `Z` line wherever a draw is dropped (no program, no pipeline, empty scissor, both faces culled, no render pass). That is how this one was found: 144 `Z … draw skipped: no program bound` lines in a frame whose G-buffer pass had draws but stayed black.
 
+### A stage mask of 0 replaces no stage
+
+- **Symptom:** on Android only, `[RED] [vk] draw skipped: vertex bound, pixel missing` for a handful of draws a run, always after a bind whose mask was 0 -- and, once one such bind had cleared the shadow, every later draw that relied on the fragment shader bound before it.
+- **Cause:** `android/gfx_vk_exec.c` `bind_program` read `nvnCommandBufferBindProgram`'s stage bits as "all stages" when they were 0. NVN's mask names the stages that take the program's shaders; an empty mask takes none, and the Metal backend's `bind_stages` has always done that (it only assigns the stages in the bits). Clearing them instead let one `BindProgram(program, 0)` poison the shader state.
+- **Fix:** the Vulkan replay uses the mask as given (`mask = stages & 0x3f`); with 0 it changes no stage and keeps the program it had. A skipped draw now also names what is bound, the program's first three shader keys and the last bind's mask, once per combination -- that is how the empty mask was found (the old line named no shader and no program).
+- **Found on:** [Skyrim](../../BRINGUP_SKYRIM.md): its first draws after the world load run with a vertex-only program (a program that holds one shader, which cannot rasterize anything and is dropped), and one bind carries mask 0; the message named both. The skipped draws themselves are harmless -- the program has no fragment shader to translate -- but the empty-mask clearing was not.
+
 ### Composite program taken again after a replay state restore
 
 - **Symptom:** `[RED] failed to create render pipeline (vertex 790573a52b9c5053_b fragment f39fb42850f50ecd_b): Fragment input(s) user(locn0),user(locn1) … not written by vertex shader`, once on entering the first investigation; `texture type mismatch: shader declares a cube, texture is 2D` (a pixel shader run with another pair's bindings).
