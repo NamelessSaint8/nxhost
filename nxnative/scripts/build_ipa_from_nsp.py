@@ -1388,6 +1388,8 @@ def boot_android(repo, d, patched, work, env, logs, g, secs, done, log, env_rows
         romfs = f'{td}/RomFS.img'
     shmap = env.get('DM_NVN_SHMAP')
     if shmap and Path(shmap).is_file(): run(adb + ['push', shmap, f'{td}/shader_map.tsv'], log=logs / 'tool_push.log', env=env); shmap = f'{td}/shader_map.tsv'
+    shd = env.get('DM_VK_SHADERS')   # the translated bundle: a boot that draws needs it (the Vulkan backend loads it at device creation)
+    if shd and Path(shd).is_file(): run(adb + ['push', shd, f'{td}/shaders.dmsv'], log=logs / 'tool_push.log', env=env); env_rows = dict(env_rows, DM_VK_SHADERS=f'{td}/shaders.dmsv')
     PROG.set(step='booting the game on the device')
     for dd in make: sh(f'mkdir -p {dd}')   # a step's own device folders (the GLSLC capture's, the regions table's)
     rows = [kv for kv in (('DM_ROMFS', romfs), ('DM_SAVE', f'{td}/save'), ('DM_TEMP', f'{td}/temp'), ('DM_MSL_DIR', f'{td}/msl'),
