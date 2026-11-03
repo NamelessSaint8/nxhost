@@ -686,6 +686,13 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Fix:** the Vulkan replay uses the mask as given (`mask = stages & 0x3f`); with 0 it changes no stage and keeps the program it had. A skipped draw now also names what is bound, the program's first three shader keys and the last bind's mask, once per combination -- that is how the empty mask was found (the old line named no shader and no program).
 - **Found on:** [Skyrim](../../BRINGUP_SKYRIM.md): its first draws after the world load run with a vertex-only program (a program that holds one shader, which cannot rasterize anything and is dropped), and one bind carries mask 0; the message named both. The skipped draws themselves are harmless -- the program has no fragment shader to translate -- but the empty-mask clearing was not.
 
+### A vertex-only draw is dropped, where hardware runs its vertex stage
+
+- **Symptom:** `[RED] [vk] draw skipped: vertex bound, pixel missing, rasterizer discard 0; the program holds <vertex key> 0 0, its last bind had stage mask 0x1`, and the replay's own line counts them: `skipped (no program N …)`. Skyrim drops 330 of its ~610 draws a frame this way, 1.58 M of 2.93 M by the world's 4,800th present.
+- **Cause:** the game binds a program that holds one shader (a vertex one) and draws at once, with no pixel shader and no rasterizer discard. The replay refuses such a draw (`prepare_draw`), because nothing can be rasterized without a pixel stage. On the GPU the vertex stage still runs for it -- the draws are a vertex-only pass, which is how an engine writes transform feedback or computes into buffers with no colour output.
+- **Open:** those draws should run with rasterization disabled instead of being skipped (`VkPipelineRasterizationStateCreateInfo::rasterizerDiscardEnable`, a pipeline variant), so their vertex work lands as on hardware. No game seen so far depends on the result; Skyrim's skipped draws draw nothing visible either way, and its missing actor skin (below) is elsewhere.
+- **Found on:** [Skyrim](../../BRINGUP_SKYRIM.md); the same log line is what named the draws (`DM_VK_PROGBIND=1` lists every distinct program bind with its mask and each key's stage).
+
 ### Composite program taken again after a replay state restore
 
 - **Symptom:** `[RED] failed to create render pipeline (vertex 790573a52b9c5053_b fragment f39fb42850f50ecd_b): Fragment input(s) user(locn0),user(locn1) … not written by vertex shader`, once on entering the first investigation; `texture type mismatch: shader declares a cube, texture is 2D` (a pixel shader run with another pair's bindings).

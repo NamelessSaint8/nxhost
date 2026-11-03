@@ -641,6 +641,19 @@ static void bind_program(const p_bind_program *bp) {
         if (st < 0 || st > 5 || !(mask >> st & 1)) continue;
         S.sh[st] = vk_shader(kk, st);
     }
+    // DM_VK_PROGBIND=1 (live, a DM_CTL env line, read on each bind): every distinct (program, mask) with the stage the bundle gives each of its keys and
+    // what the shadow holds afterwards -- the inventory a draw that loses a stage is traced through. Capped at 200 (a boot binds thousands)
+    { static int on = -1; if (on < 0) { const char *e = getenv("DM_VK_PROGBIND"); on = e && atoi(e) != 0; } if (on) {
+        static struct { const void *p; uint32_t m; } seen[200]; static int n; int known = 0;
+        for (int i = 0; i < n; i++) if (seen[i].p == (const void *)S.prog && seen[i].m == mask) known = 1;
+        if (!known && n < 200) {
+            seen[n].p = (const void *)S.prog; seen[n].m = mask; n++;
+            uint64_t k0 = 0, k1 = 0; int s0 = -1, s1 = -1;
+            if (S.prog) { uint8_t b[8]; if (prog_key(S.prog, 0, b)) { k0 = key64(b); s0 = k0 ? vk_shader_stage(k0) : -1; } if (prog_key(S.prog, 1, b)) { k1 = key64(b); s1 = k1 ? vk_shader_stage(k1) : -1; } }
+            VKLOG("progbind %p mask %#x: %016llx stage %d, %016llx stage %d -> vertex %s pixel %s%s", (const void *)S.prog, mask,
+                  (unsigned long long)k0, s0, (unsigned long long)k1, s1, S.sh[0] ? "bound" : "empty", S.sh[1] ? "bound" : "empty",
+                  (!S.sh[0] || !S.sh[1]) ? "   (a stage is empty)" : "");
+        } } }
     S.prog_ok = (S.sh[0] && (S.sh[1] || S.rast_discard)) || S.sh[5];
 }
 typedef struct {
