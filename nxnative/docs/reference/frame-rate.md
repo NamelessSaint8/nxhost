@@ -77,6 +77,14 @@ Frame pacing: the host's frame step, engine frame limiters, present intervals an
 - **Check:** `t_nvn` verifies literal 33,333,333 / 16,666,666 ns periods for 30 / 60, display-link targets, disabled frame-step logic for native engines, target zero and movie/state-page precedence. All 134 NVN checks pass with Metal validation.
 - **Found on:** [NieR:Automata iPhone controls](../../dm/games/010056B015FE8000/README.md#iphone-resolution-and-frame-rate-controls).
 
+### A 30 fps cap that is only a present interval
+
+- **Symptom:** the game holds exactly 33.34 ms frames, p99 flat and nothing dropped, with the GPU and the replay each well inside half a frame — so it is waiting, not short of time; the profile has no `fps_target` and there is no engine limiter to write.
+- **Cause:** the cap is the game's own NVN present interval, and on a fixed 60 Hz tick an interval of 2 is 30 fps. Nothing in the engine enforces it, so `present_interval display` in the profile reaches 60 fps with no rewriter work and no limiter row: the boot line already says which it is (`present tick 60 Hz … present interval set by the game 2`).
+- **Fix:** set the profile's `present_interval` to `display` once the game is shown not to count frames — that is the one thing to prove first, since a game that steps by frame count then runs the world at double speed ([the `present_interval` row](../../dm/games/README.md) is written for this decision).
+- **Found on:** Skyrim, 2026-11-03: 0 dropped and p99 16.67 ms at the title screen and in a loaded save, frame time p50 16.64 / p95 17.94 / max 18.80 ms, frame work 16.54 of the 16.67 ms budget with GPU 12.30 and replay 4.46 ms over 2,050 draws. The player then checked walk pace, NPC animation, combat and magic timing, and the in-game clock across a session: all normal speed at 60 fps, so its logic is time-based.
+- **Check:** `grep 'present tick' <log>` names the interval and its mode; the `on-screen … p99` line decides pacing (16.67 ms held with 0 dropped) and a gameplay check decides the speed.
+
 ### Resolution policy is independent of the frame-rate cap
 
 - **Symptom:** the game always renders at full resolution, or turning off dynamic resolution still allows the native controller to lower it.

@@ -157,3 +157,14 @@ What the code says (`<build>/android/patched_v262144/main.patched.bin`, and the 
 If it recurs, grep the log for `[RED] a guest store into read-only text was dropped`: the line names the site and the registers that addressed it, and the run keeps going instead of dying. To find the writer rather than the victim, arm `DM_PROBE_WATCH=<address of the field that held the base>` (see `dm/host/probe.c`) once the field is identified.
 
 Still open from this session: the load-time replay cost (50–125 ms in `submit+present` on a cell load — `acquire` waits at steady state, the replay itself during streaming), fast travel and interior streaming, and a 30-minute soak.
+
+## Session update: 60 fps, and why VRR is not on the table (2026-11-03)
+
+The player asked for VRR or 60 fps once combat and magic worked. Two different answers:
+
+- **VRR: no.** The Y700 reports fixed modes only — `mSupportedRefreshRates=[120, 165, 144, 90, 60, 30]`, `hasArrSupport false`, no VRR mode — so there is nothing to switch on. It would also not help: at 30 fps the port already lands every fourth vsync of the 120 Hz surface (p99 33.34 ms, 0 dropped), and all the frame-time variation sits inside cell loads, which no panel mode absorbs.
+- **60 fps: yes, and it cost no code.** The cap is the game's own NVN **present interval 2** on a 60 Hz tick, not an engine limiter: the boot line says it (`present tick 60 Hz, interval mode game (game profile present_interval; present interval set by the game 2; window, fixed 60 Hz)`). The port already has the switch for exactly this shape of cap, so `DM_PRESENT_INTERVAL=display` gave 60 fps at the title screen and in a loaded save: **0 dropped, p99 16.67 ms, frame time p50 16.64 / p95 17.94 / max 18.80 ms**. The profile's `present_interval` is now `display`, so 60 is the port's default.
+- **The speed check came first.** `present_interval display` is only safe for a game that does not count frames; a frame-counted one runs at double speed. The player played at 60 and reported walk pace, NPC animation, combat and magic timing, and the in-game clock all at normal speed — Skyrim's logic is time-based.
+- **The budget is now full, which is the new constraint.** Frame work p50 **16.54 of the 16.67 ms**, GPU busy 12.30 ms, replay 4.46 ms over 2,050 draws (descriptor sets 1.26), queue submit 0.85 ms. Steady country holds 60; cities and combat will drop frames before they stutter, and the headroom to buy is in the replay.
+
+Reference entries: `nxnative/docs/reference/frame-rate.md` "A 30 fps cap that is only a present interval" (the pattern and the proof required), and the `present_interval` row in `nxnative/dm/games/README.md` (the switch's contract).
