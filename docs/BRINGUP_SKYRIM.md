@@ -26,6 +26,17 @@ Checked against the "what would make this playable" list, item by item:
 - **4/5. Streaming and memory:** the alias region holds **2.00 GB** of its 3.21 GB application pool, footprint **1.62 GB**, no refused `MapPhysicalMemory`, no `SetHeapSize OOM`, 298–300 frames per window with 0–2 dropped at p99 33.34 ms (30 fps) through the load, the walk and a menu. Fast travel and a city interior have not been tried yet.
 - **6. The skipped draws: closed.** The message now names them: `draw skipped: vertex bound, pixel missing, rasterizer discard 0; the program holds <key> 0 0; its last bind had stage mask 0x1`. They are draws whose program holds **one** shader — nothing to translate, and nothing rasterizes on hardware either. Finding them exposed a real bug: this backend read `BindProgram`'s stage mask 0 as "all stages" and cleared the shader shadow, where NVN (and the Metal backend) mean "no stage changes" — fixed in `7c3252d4` with a catalogue entry ([A stage mask of 0 replaces no stage](reference/rendering.md#a-stage-mask-of-0-replaces-no-stage)).
 
+### Open: actor skin is invisible (eyes and mouth draw)
+
+Reported by the player, 2026-11-03: eyes and mouths render, but no skin — faces, arms, hands. Ruled out so far, each with its evidence:
+
+- **Not missing draws in bulk.** The replay does skip 330 of ~610 draws a frame (1.58 M of 2.93 M by the world's 4,800th present), but `DM_VK_PROGBIND=1` shows those are **vertex-only programs** (one shader, mask `0x1`, no pixel stage): they rasterize nothing on hardware either. Catalogue: [A vertex-only draw is dropped](reference/rendering.md#a-vertex-only-draw-is-dropped-where-hardware-runs-its-vertex-stage).
+- **Not the six packaged textures.** The `packaged textures: first uploads 0` line is meaningless on Android: `mtl_pkg_stats` is a stub in `gfx_common.c` returning 0.
+- **Not the fragment-depth variant** (`DM_VK_FDZ=0` live: the picture is unchanged and the skin stays missing) and **not the one swizzled texture** (`(1 1 1 2)`, and views do apply the component mapping).
+- **Not a stage misclassification.** Every key Skyrim binds has the stage the bundle gives it, and it binds one shader per stage — `mask 0x1` with a vertex key, `mask 0x2` with a fragment key, both applied (`progbind … -> vertex bound pixel bound`).
+
+So the skin draws run and their pixels do not arrive. The next probe is the *pipeline* of an actor draw against a working one (eyes/mouth): bind a log of each distinct pipeline's state — blend and its source/dest, the colour write mask, cull, depth test/write, alpha test, and the vertex-attribute formats — once per pipeline, then find the actor's by its attribute layout or vertex count. `DM_VK_PASSDUMP` (env, Android) names the passes it draws in.
+
 ### The route, as a script
 
 `01000A10041EA000_build/route_skyrim.py` drives a launch from the title screen into the game, looking at the screen after every press (OCR through `scripts/ocr_shot.swift`) instead of firing a timed script:
