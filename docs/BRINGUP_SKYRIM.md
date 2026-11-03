@@ -13,9 +13,17 @@ The blocker described further down is solved, and it was not a lost job wake-up.
 ### Where the port stands now
 
 - **It presents frames continuously**: 300 frames per report window, 0 dropped, p99 33.34 ms (30 fps: the engine asks for present interval 2), footprint about 1.05 GB, frame 2,100 when last watched. The one `[RED]` line left is `audren: a second renderer (the host drives only one)` — the second `OpenAudioRenderer` — and it does not block.
-- **The intro-skipping overlay is still in place** (`DM_ROMFS_OVERLAY` with `sIntroSequence=`), so what is on screen is the engine's own loading/menu path, not the intro movie. Consecutive `screencap`s differ, so the picture is animating rather than frozen; which screen it is has not been read yet (the vision bridge in this session could not open the PNG).
-- **Next:** identify that screen and drive it with the `DM_CTL` key names, then a new game and a world load; re-measure memory under streaming load; rebuild the **release** APK (the device runs the 8.2 MB debug build).
+- **The intro-skipping overlay is still in place** (`DM_ROMFS_OVERLAY` with `sIntroSequence=`), so what is on screen is the engine's own loading/menu path, not the intro movie. Consecutive `screencap`s differ, so the picture is animating rather than frozen (the next update identifies the screen and drives it).
 - **Diagnostics added this session** (general, not Skyrim patches): `dm_guest_read`/`dm_guest_write` and `DM_CTL poke`, `dm_guest_describe` (a dump that stops short now says where: opened heap, alias offset committed or not), and the alias-region read fix behind all of it.
+
+## Session update: into a new game, through character creation, into the opening
+
+With the fence fixed the port plays: main menu → New Game → character creation → the cart ride. What was needed to drive it, and what it cost:
+
+- **The menu was readable only by OCR.** The screen is nearly black (luminance under 0.1) and no vision model was available, so screenshots were read with `scripts/ocr_shot.swift` (macOS Vision): `NEW <` / `LOAD` / `CRÉDITS` / `X Change User` with the `<` caret and the brightness ranking of each label, which is what identified the selection. Presses go through `DM_CTL` (`A`, `Down`, `Up`) and the engine answers them: `A` on `NEW` opened `Start a new game?`, the next `A` loaded the character-creation screen ("Song of the Dragonborn", `LEVEL 1`), whose confirmation starts the game.
+- **The BSAs stream as soon as a game starts**: `DM_FSLOG` grows from 786 KB to 1.0 MB of read lines during character creation and the intro (a few hundred KB of reads per 15 s), footprint 1.05 → **1.55 GB**, still 30 fps (p99 33.34 ms, 0–2 dropped per 300-frame window), 42,000+ frames presented.
+- **Still open, in order:** (1) one `[RED] [vk] draw with a program whose shaders are not in the bundle: skipped` (`gfx_vk_exec.c` `prepare_draw`, `S.sh[0]`/`S.sh[1]`), logged once by `VKRED_ONCE` without naming the program — the next step is to print the program's serial and which stage is missing, then take that shader into the split; (2) whether the intro reaches the execution scene and the HUD (the last captures show a full-frame 3D scene with no UI text, so this has not been confirmed); (3) the muted `audren: a second renderer` line, which does not block; (4) a **release** rebuild: the device still runs the 8.2 MB debug APK.
+- **Routing note for the next session:** the save folder is empty, so the menu has no `CONTINUE`; `NEW` sits above `LOAD`. The main menu's items are laid out bottom-up on the right edge and each press takes about two frames to show — read the screen after every press rather than firing a timed script.
 
 ## Session update: the port boots and renders one frame
 
