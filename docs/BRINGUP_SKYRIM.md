@@ -2,6 +2,32 @@
 
 For the agent picking this up. State of the world: 2026-11-03, after the M0 upstream merge (HEAD ≈ `a16ac09d`). Everything below was verified this session.
 
+## Session update: the port boots and renders one frame
+
+Done since the brief was written (commits `353e9539`, `0f7060c3`, `9653cd17`):
+
+- **The BSA reader exists** (`shader_split.py`: `bsa_members`, `bsa_read`, `fxp_records`, `fxp_shaders`, `bsa_shaders`). All 89 archives are version 0x69 with 24-byte folder records (not 16), inline bzstrings and LZ4-frame entries. `shadersfx/shaders011.fxp` holds 23,082 shader records; `fxp_records` also finds 53 built-in records in `main` (the game draws the menu with two of them: `c654c9273c80debb`, `8f865c34471ac9d7`).
+- **Split and translation**: 23,133 shaders (23,080 data + 53 main), 23,133 of 23,133 translated, 463 MB into `shaders.dmsv`.
+- **Profile memory was wrong for this game**: the provisional 5 GB / 4.375 GB alias aborts `nnosInitialize` (`AllocateAddressRegion result 0x1803`). Measured on the Y700 with `DM_ALIAS_SIZE=0x1000000000` + `DM_REGIONS`: 24 regions, the last ending at alias +0x1baa00000 (7.4 GB). The build's `profile/01000A10041EA000/game.tsv` now has `mem_reserve 0x440000000`, `mem_alias 0x400000000` (16 GB, room for streaming); the host header confirms both.
+- **Vulkan replay gaps fixed** (`dm/android/gfx_vk_exec.c`): `OP_BIND_UBO_SMALL` / `OP_BIND_VBUF1` (Skyrim sizes command memory from `GetCommandMemoryUsed`, so it emits the 24-byte bindings) and `OP_DRAW_TEX` (blit into each bound colour target). Unknown record ops are now named once each. `crash_dump_now` prints a running thread's guest stack inside an SVC (`dm/host/hle_thread.c`), which is how the looping threads were read.
+- **Boot state on the Y700 (HA2M2W71)**: through `nnosInitialize`, `nnMain`, shader bundle load (23,133), audio (two `OpenAudioRenderer`s; the host drives one and says so), and the first menu/loading frame: 50 NVN functions, 543 calls, 16 `DrawElements`, 6 `SetRenderTargets`, 33 programs. The screen then stops changing (`shot` never writes a second frame; the window stays on frame 1).
+
+### The remaining blocker
+
+Both the intro movie player and (with the intro skipped) the JobListManager spin in the same engine wait with `nn::os::YieldThread` (thousands of yields/s, `CPU` ~1 s):
+
+```
+main+0xbfeb94  (return into the caller of YieldThread)
+main+0xbf5d14
+...
+```
+
+`main+0xbfeb6c` loads `x20 = [x19+0x10]` and loops while `[x20]` is non-zero (`x20` = 0x69a4560110 in the alias, `x19` = 0x690a1ea020 — the same guest addresses across runs). The code around it reads the intro INI keys (`bPreloadIntroSequence`, `bAllowBinkSkipping`, `Data/Video/`) and the engine's own GPU profile strings (`%s%s (%0.2fms) (%ddraw %dtri)`, `Average GPU`), and frame 1 calls `CommandBufferReportValue=15` / `CommandBufferReportCounter=2`. So the wait is for a value the GPU should write (or a refcount a completed job should clear) and it never lands.
+
+Next moves: find who clears that flag (the object is in the alias; `DM_CTL memdump` cannot read it because `vm_read_overwrite`'s `process_vm_readv` fails there, so use a host-side read or the Metal backend as the reference); compare `ReportValue`'s completion-time write with what the engine polls; check whether the second `OpenAudioRenderer` (32 voices, no host thread) is what the job waits on. The engine's `JobThread0/1/2` are idle on their condvar while the JobListManager spins, so a lost wake-up (or a job that waits on GPU feedback) is the shape to test.
+
+Useful switches used this session (all in the device's `files/env.txt` unless noted): `DM_ALIAS_SIZE=0x1000000000` (sizing), `DM_REGIONS=<file>`, `DM_FSLOG=<file>`, `DM_ROMFS_OVERLAY=<dir>` (an overlay `Skyrim.ini` with `sIntroSequence=` skips the intro), `DM_VK_LOG=1`, and `DM_CTL=<file>` (only in a `--debug` APK: `dump`, `shot <path>`, `passdump <n>`, `memdump`, key presses by name). The debug APK is 8.2 MB; the release one is 1.8 MB and ignores `DM_CTL`.
+
 ## Where Skyrim stands
 
 - **No profile anywhere**: not in `nxnative/dm/games/` (neither iOS nor Android), not in the user games dir. It has never been ported on any platform of this repo.
