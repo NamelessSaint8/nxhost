@@ -1390,6 +1390,11 @@ def boot_android(repo, d, patched, work, env, logs, g, secs, done, log, env_rows
     if shmap and Path(shmap).is_file(): run(adb + ['push', shmap, f'{td}/shader_map.tsv'], log=logs / 'tool_push.log', env=env); shmap = f'{td}/shader_map.tsv'
     shd = env.get('DM_VK_SHADERS')   # the translated bundle: a boot that draws needs it (the Vulkan backend loads it at device creation)
     if shd and Path(shd).is_file(): run(adb + ['push', shd, f'{td}/shaders.dmsv'], log=logs / 'tool_push.log', env=env); env_rows = dict(env_rows, DM_VK_SHADERS=f'{td}/shaders.dmsv')
+    font = env.get('DM_SHARED_FONT')   # a JIS-capable shared-font stand-in: the device's own fallback (Roboto) is Latin-only, and a game that measures
+    for c in (font, '/System/Library/Fonts/Supplemental/Arial Unicode.ttf', '/System/Library/Fonts/Hiragino Sans GB.ttc', *('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',)):   # Japanese text (Grezzo's engines: Link's Awakening asked for U+25A1 and its font object came back null) dies on it. The Mac build machine's own CJK font
+        if c and Path(c).is_file(): run(adb + ['push', c, f'{td}/standard.ttf'], log=logs / 'tool_push.log', env=env); env_rows = dict(env_rows, DM_SHARED_FONT=f'{td}/standard.ttf'); break
+    ext = env.get('DM_SHARED_FONT_EXT')   # the synthesized button icons (dm/tools/make_ext_font.py): a file the profile or the build names
+    if ext and Path(ext).is_file(): run(adb + ['push', ext, f'{td}/nintendo_ext.ttf'], log=logs / 'tool_push.log', env=env); env_rows = dict(env_rows, DM_SHARED_FONT_EXT=f'{td}/nintendo_ext.ttf')
     PROG.set(step='booting the game on the device')
     for dd in make: sh(f'mkdir -p {dd}')   # a step's own device folders (the GLSLC capture's, the regions table's)
     rows = [kv for kv in (('DM_ROMFS', romfs), ('DM_SAVE', f'{td}/save'), ('DM_TEMP', f'{td}/temp'), ('DM_MSL_DIR', f'{td}/msl'),
