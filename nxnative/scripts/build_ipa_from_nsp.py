@@ -1351,6 +1351,57 @@ def build_mac_host(repo, out, env, logs, g):
     return out
 
 
+def boot_android(repo, d, patched, work, env, logs, g, secs, done, log):
+    """Boot the game headless on an Android device (the porter's tool mode, M2): the NDK-built dmhost executable (dm/android/build.py --exe) over adb, its stdout the same
+    host log boot_mac would collect, so heap_signals and the capture readers work unchanged. The device comes from DM_TOOL_DEVICE (a serial, or the first attached), adb from
+    PATH. The payload is pushed once and kept (dmhost, the rewritten modules, the RomFS image, the shader map) under /data/local/tmp/nx2a-tool/<title ID>. DM_TOOL_BOOT
+    bounds the run on the device even if the driver goes away. Returns the exit code, None when the time passed"""
+    import subprocess as sp
+    dev = env.get('DM_TOOL_DEVICE', 'any')
+    adb = ['adb', '-s'] if dev != 'any' else ['adb']
+    if dev != 'any': adb += [dev]
+    def sh(*a, **k): return sp.run(adb + ['shell'] + list(a), capture_output=True, text=True, errors='replace', timeout=60, **k)
+    if dev == 'any':
+        ls = sp.run(['adb', 'devices'], capture_output=True, text=True).stdout.splitlines()[1:]
+        attached = [l.split('\t')[0] for l in ls if l.strip().endswith('\tdevice')]
+        if not attached: raise BuildError('DM_TOOL_DEVICE is set but no device is attached (adb devices)')
+        adb = ['adb', '-s', attached[0]]
+        sh = lambda *a, **k: sp.run(adb + ['shell'] + list(a), capture_output=True, text=True, errors='replace', timeout=60, **k)
+    PROG.set(step='building the Android host (dmhost)')
+    out = work / 'tools/android'
+    run([sys.executable, repo / 'dm/android/build.py', '--game', g.id, '--out', out, '--lib', '--exe'] + (['--release'] if not env.get('DM_DEBUG') else []) +
+        (['--ndk', env['ANDROID_NDK_HOME']] if env.get('ANDROID_NDK_HOME') else []) + (['--jobs', env['J']] if env.get('J') else []), logs / 'dmhost_build.log', env=env)
+    td = f'/data/local/tmp/nx2a-tool/{g.id}'
+    sh(f'mkdir -p {td}/save {td}/temp {td}/msl')
+    PROG.set(step='copying to the device')
+    for src, dst in ((out / 'dmhost', f'{td}/dmhost'), (patched, f'{td}/mods')):
+        have = sh(f'[ "$(stat -c %s {dst} 2>/dev/null)" = {src.stat().st_size if src.is_file() else -1} ] && echo y').stdout.strip()
+        if src.is_dir():
+            run(adb + ['push', str(src) + '/.', dst + '/'], log=logs / 'tool_push.log', env=env)
+        elif have != 'y':
+            run(adb + ['push', str(src), dst], log=logs / 'tool_push.log', env=env)
+    sh(f'chmod +x {td}/dmhost')
+    romfs = env.get('DM_TOOL_ROMFS')
+    if romfs and romfs.endswith('.img'):   # the RomFS image: pushed once, kept by size
+        have = sh(f'[ "$(stat -c %s {td}/RomFS.img 2>/dev/null)" = {Path(romfs).stat().st_size} ] && echo y').stdout.strip()
+        if have != 'y': run(adb + ['push', romfs, f'{td}/RomFS.img'], log=logs / 'tool_push.log', env=env)
+        romfs = f'{td}/RomFS.img'
+    shmap = env.get('DM_NVN_SHMAP')
+    if shmap and Path(shmap).is_file(): run(adb + ['push', shmap, f'{td}/shader_map.tsv'], log=logs / 'tool_push.log', env=env); shmap = f'{td}/shader_map.tsv'
+    PROG.set(step='booting the game on the device')
+    henv = ' '.join(f'{k}=\'{v}\'' for k, v in (('DM_ROMFS', romfs), ('DM_SAVE', f'{td}/save'), ('DM_TEMP', f'{td}/temp'), ('DM_MSL_DIR', f'{td}/msl'),
+        ('DM_NVN_SHMAP', shmap), ('DM_AUDIO', '0'), ('DM_TOOL_BOOT', str(int(secs) + 30))) if v)
+    t0 = time.time()   # the caller's log path: the same readers read it (heap_signals, host_stopped)
+    log_path = log
+    with open(log_path, 'w') as f:
+        p = sp.Popen(adb + ['shell', f'cd {td} && {henv} ./dmhost ./mods'], stdout=f, stderr=sp.STDOUT)
+        try:
+            while not done() and p.poll() is None and time.time() - t0 < secs: time.sleep(0.25)
+        finally:
+            if p.poll() is None: p.terminate(); p.kill()   # the shell on the device ends with the connection; DM_TOOL_BOOT bounds the host itself
+    return p.poll()
+
+
 def boot_mac(host, patched, henv, rd, log, secs, done=lambda: False):
     """Boot the game in the Mac host (headless and silent: no DM_WINDOW, no DM_AUDIO) with its output in log, until done() says so, the host exits, or secs pass;
     then SIGTERM (the host's graceful exit), a kill 5 s later. Returns the host's exit code, None when it was still running"""
@@ -1633,21 +1684,26 @@ def heap_check(repo, d, patched, work, env, logs, g):
     HEAP_CHECK_NNMAIN_SECS in nnMain without one (Engage sets none): a few seconds. The keys go into the profile (profile_guess.py heap_signals), which is stamped"""
     PROG.stage('heap check')
     host, rd, log = work / 'tools/dmhost', work / 'tmp/heap_run', logs / 'heap_check.log'
-    PROG.set(step='building the Mac host'); build_mac_host(repo, host, env, logs, g)
-    rmtree(rd)
-    for x in ('save', 'temp', 'msl'): (rd / x).mkdir(parents=True)
-    # a fresh save and temporary storage, no shader libraries (only the heap request matters), the profile's shader map
-    henv = dict(env, DM_ROMFS=str(rfs.source(d)), DM_SAVE=str(rd / 'save'), DM_TEMP=str(rd / 'temp'), DM_MSL_DIR=str(rd / 'msl'), DM_NVN_SHMAP=str(g.table('shader_map.tsv')))
-    PROG.set(step='booting the game')
     t0, seen = time.time(), {}
     def done():   # the first heap request answered (or refused for good), or nnMain running for a while without one
-        try: text = log.read_text(errors='replace')
+        try: text_ = log.read_text(errors='replace')
         except OSError: return False
-        if 'SetHeapSize OOM' in text or '[mem] heap ' in text: return True
-        if '>>> nnMain' in text: seen.setdefault('nnmain', time.time())
+        if 'SetHeapSize OOM' in text_ or '[mem] heap ' in text_: return True
+        if '>>> nnMain' in text_: seen.setdefault('nnmain', time.time())
         return time.time() - seen.get('nnmain', time.time()) > HEAP_CHECK_NNMAIN_SECS
-    rc = boot_mac(host, patched, henv, rd, log, HEAP_CHECK_SECS, done)
-    text = log.read_text(errors='replace'); rmtree(rd)
+    if env.get('DM_TOOL_DEVICE') is not None:   # the Android port's tool mode (M2): the same boot on a device over adb, the same log to read (boot_android)
+        henv = dict(env, DM_TOOL_ROMFS=str(rfs.source(d)), DM_NVN_SHMAP=str(g.table('shader_map.tsv')))
+        rc = boot_android(repo, d, patched, work, env, logs, g, HEAP_CHECK_SECS, done, log)
+        text = log.read_text(errors='replace')
+    else:
+        PROG.set(step='building the Mac host'); build_mac_host(repo, host, env, logs, g)
+        rmtree(rd)
+        for x in ('save', 'temp', 'msl'): (rd / x).mkdir(parents=True)
+        # a fresh save and temporary storage, no shader libraries (only the heap request matters), the profile's shader map
+        henv = dict(env, DM_ROMFS=str(rfs.source(d)), DM_SAVE=str(rd / 'save'), DM_TEMP=str(rd / 'temp'), DM_MSL_DIR=str(rd / 'msl'), DM_NVN_SHMAP=str(g.table('shader_map.tsv')))
+        PROG.set(step='booting the game')
+        rc = boot_mac(host, patched, henv, rd, log, HEAP_CHECK_SECS, done)
+        text = log.read_text(errors='replace'); rmtree(rd)
     sig = {k: v for k, v in pg.heap_signals(text, g).items() if g.get(k, '') != v[0]} | pg.depth_signal(text, g)   # the boot often passes the game's depth mode call too
     for k, (v, why) in sig.items(): say(f'heap check: {k} {v}: {why}')
     m = re.search(r'\[mem\] heap ([0-9.]+ GB)', text)

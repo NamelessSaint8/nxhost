@@ -31,6 +31,7 @@ class Options:
     package: str = ''                  # the app's package instead of the profile's (a test install beside another build of the game)
     fps60: bool = False                # 60 fps: the profile's own frame-rate cap, else the build's FPSLocker-Warehouse config (porter/fpslocker.py)
     title_id: str = ''                # the game to port when the folder holds several, e.g. a cartridge dump with two games (upstream's --title-id / TITLE_ID)
+    tool_device: str = ''              # run the Mac-host steps (the heap check, captures) on an Android device instead: an adb serial, or 'any' for the first attached
     jobs: int = field(default_factory=lambda: os.cpu_count() or 8)
 
 
@@ -87,7 +88,7 @@ class Port:
         keys = o.keys or self.cfg.get('keys')
         if not keys: raise BuildError('no prod.keys: give -k / --keys, or set it once with `porter config keys <path>`')
         o.keys = Path(keys).expanduser().resolve()
-        try: self.tools = toolchain.require(self.cfg, str(o.keys), adb=o.install)
+        try: self.tools = toolchain.require(self.cfg, str(o.keys), adb=o.install or bool(o.tool_device))   # a tool device needs adb too: the heap check boots over it
         except toolchain.ToolError as e: raise BuildError(str(e)) from e
         for n in self.tools['notes']: say(n)   # D-09: a community arm64 NDK's port says so in its log
         o.out = Path(o.out or self.cfg.get('out') or o.folder).expanduser().resolve()
@@ -98,6 +99,9 @@ class Port:
         # NUGET_PACKAGES: every dotnet call restores into and builds from the one folder porter/nuget.py checks against pins.NUGET (RESEARCH Pitfall 7)
         # D-18: built by porter/childenv.py (dotnet's real root, invariant globalization, a UTF-8 LANG), which Prepare's .NET tools share
         self.env = childenv.dotnet(self.tools['dotnet'], o.jobs)
+        if o.tool_device:   # the tool steps (heap check) boot on the device: build.py wants the NDK, boot_android wants adb (M2)
+            self.env = dict(self.env, DM_TOOL_DEVICE=o.tool_device, ANDROID_NDK_HOME=str(self.tools['ndk']),
+                            PATH=os.pathsep.join([str(Path(self.tools['adb']).parent), self.env.get('PATH', '')]))
 
         self.inputs()
         PROG.plan(1 + len(self.versions) + bool(self.fam['dlc']) + bool(o.fps60) + 6 + bool(o.install))   # nx_extract, the versions, the DLC, 60 fps, rewrite / split / Vulkan shaders / host / APK / data, install
