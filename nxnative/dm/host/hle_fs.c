@@ -754,6 +754,26 @@ HLE_FORCE("_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci", "fsp-srv → open(2)", Re
     if (g_flag.fs) LOG("fs open [%.2fs] %s mode=%d → fd %d", (now_ns() - g_t0_ns) / 1e9, path, mode, fd);
     return RES_OK;
 }
+// DM_FADVISE=<bytes> (0 = off, the default; 262144 is the window to try): after a read, tell the kernel that the bytes after it will be needed
+// (POSIX_FADV_WILLNEED / F_RDADVISE). A cell load in Skyrim reads 100-260 MB from the data pack in a second or two, and the fslog shows the
+// shape: 78.7% of 34,864 reads were 4-16 KB and 67% of them continued within 4 KB of the previous read's end -- small sequential reads, where
+// the guest pays a FUSE round trip each and the kernel's own readahead is what is missing. It lands at about 150 MB/s while the same pack read
+// from the page cache goes at GB/s, so the load is bound by storage latency, not by the size the guest asks for. Off by default because the
+// gain is not measured yet: arm it live (an fslog run with and without) before trusting it.
+static long fadvise_bytes(void) { static long n = -1; if (n < 0) { const char *e = getenv("DM_FADVISE"); n = e ? strtol(e, NULL, 0) : 0; } return n; }
+static void fadvise_run(int fd, int64_t at, long n) {
+    static _Atomic int64_t adv_until[16]; static _Atomic int adv_fd[16];
+    if (n <= 0) return;
+    unsigned k = ((unsigned)fd * 2654435761u) & 15;   // one slot per fd, collisions only cost an extra advice
+    if (atomic_load(&adv_fd[k]) == fd && at < atomic_load(&adv_until[k])) return;
+#if defined(__APPLE__)
+    struct radvisory ra = {.ra_offset = (off_t)at, .ra_count = n > 0x7fffffff ? 0x7fffffff : (int)n};   // Darwin has no posix_fadvise; F_RDADVISE is the same hint
+    if (fcntl(fd, F_RDADVISE, &ra) < 0) return;
+#else
+    if (posix_fadvise(fd, (off_t)at, (off_t)n, POSIX_FADV_WILLNEED)) return;
+#endif
+    atomic_store(&adv_fd[k], fd); atomic_store(&adv_until[k], at + n);
+}
 HLE_FORCE("_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvm", "fsp-srv → pread(2)", Result, h_fs_ReadFile, size_t *out, uint64_t h, int64_t off, void *buf, size_t sz) { dm_thread_service_request(); h = FH_IN(h);
     if (!h) { *out = 0; return RES_FAIL; }   // a file handle is an fd; 0 is stdin and never a file the game opened: the null handle the game keeps using after a failed open
     size_t got = 0; int reprep = 0, fd = (int)h; int64_t base = 0;
@@ -782,6 +802,7 @@ HLE_FORCE("_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvm", "fsp-srv → pread(2)", 
         got += r;
     }
     *out = got;
+    if (got) fadvise_run(fd, base + off + (int64_t)got, fadvise_bytes());   // DM_FADVISE: the bytes after this read will be wanted next
     if (g_fslog) { pthread_mutex_lock(&g_fslog_lock);
         static int hash_on = -1; if (hash_on < 0) hash_on = getenv("DM_FSLOG_HASH") != NULL;   // DM_FSLOG_HASH=1: append a column with the FNV-1a 64 of the content read (to compare whether the bytes read from two resource packs match)
         uint64_t fh = 0xcbf29ce484222325ull; if (hash_on) for (size_t i = 0; i < got; i++) fh = (fh ^ ((uint8_t *)buf)[i]) * 0x100000001b3ull;

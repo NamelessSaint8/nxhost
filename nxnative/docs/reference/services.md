@@ -131,6 +131,14 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Found on:** [Monster Train 2](../../dm/games/010051701FB46000/README.md) at 60 fps: two runs in three as the route map loads, never at 30 fps.
 - **Check:** four runs at 60 fps: one retry, no failed read.
 
+### A cell load reads 100–260 MB in 4–16 KB bites
+
+- **Symptom:** entering a building or fast-travelling costs a 200–900 ms frame, of which 150–420 ms is inside submit+present (the replay) and 200–850 ms is the guest's own work, with no single slow function to blame.
+- **Cause:** the bytes are the load. Skyrim streams its cell data out of the data pack through `pread` on a FUSE-backed path: 34,864 reads and 2,237 MB over a 376 s session, **78.7% of the reads 4–16 KB** (224 MB) plus 8.1% of 256 KB–1 MB (1.2 GB), and **67% of reads continuing within 4 KB of the previous read's end** — small and sequential, so each one pays a FUSE round trip while the kernel's readahead is what is missing. Effective rate during a load is about 150 MB/s, against 2.0–5.3 GB/s for the same pack read from the page cache (`dd` on the device), so the time is storage latency, not the size the guest asks for.
+- **Fix:** `DM_FADVISE=<bytes>` in the read HLE (`hle_fs.c`, `fadvise_run`): after a read, advise the kernel that the following window will be needed (`POSIX_FADV_WILLNEED`, Darwin's `F_RDADVISE`), at most once per window per fd so it costs one system call per 256 KB rather than one per read. **Off by default**: the mechanism is in place and compiled for both platforms, but its gain is not measured yet — arm it (`env DM_FADVISE=262144` through the control file) and compare the same loads with an `DM_FSLOG` run.
+- **Found on:** Skyrim, 2026-11-03: the fslog of a Whiterun session with building entries, plus fast travel Whiterun↔Riverwood (329 ms, 352 ms and 436 ms frames).
+- **Check:** `DM_FSLOG=<file>` plus the size/sequentiality histogram of the log decides whether a game's loads are small-sequential (a hint helps) or already large (it cannot).
+
 ### File-not-found noise from optional paths
 
 - **Symptom:** `fs … not found` lines with `DM_FS=1`.
@@ -251,6 +259,14 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Cause:** a style check looked up the connected player, then input or vibration routing looked it up again. A disconnect between the reads made the second result -1, used in `1u << player`.
 - **Fix:** look up the player once and derive the style from that same result before constructing the player mask.
 - **Found on:** clang static analysis ([issue #424](https://github.com/seedds/nxnative/issues/424)); no gameplay failure reported.
+
+### The face buttons sit where the pad prints them, not where a Switch prints them
+
+- **Symptom:** on a real Switch Pro Controller or Joy-Con the confirm and cancel buttons are swapped (A cancels), while an Xbox-style pad behaves correctly.
+- **Cause:** Android reports the face buttons by the letter printed on them, so the key code that sits at the bottom of an Xbox-style pad (GameSir, 8BitDo in X-input, GameSir's MFi mode) sits on the right of a Nintendo pad. The front end maps by position — the bottom button becomes B, the right one A, which is what a Switch UI expects — and one fixed policy cannot be right for both.
+- **Fix:** the pad watcher reads `InputDevice.getVendorId()` when a controller attaches and records whether its own layout is already Nintendo (`0x057E`: Pro Controller, Joy-Con, the NSO pads); `key_bit` then swaps only for the others. `DM_PAD_LAYOUT=native|swap` forces either way, for a pad that reports Nintendo hardware without Nintendo positions. The mode is logged with the attach line: `controller attached: … (device N, vendor 0x…, Nintendo layout)` / `Xbox-style, face buttons swapped`.
+- **Found on:** Skyrim on the Y700 with a GameSir G8+ (MFi, vendor logs as a gamepad with `KEYBOARD | GAMEPAD | JOYSTICK`): the position mapping is right for it and the swap would be wrong for a Switch pad. The Nintendo branch is unverified on hardware — no Switch pad has been attached yet.
+- **Check:** with a pad attached, `grep 'controller attached' <log>` names the layout the host chose; press the button printed A and confirm the UI treats it as confirm.
 
 ### History reads fill every requested entry
 

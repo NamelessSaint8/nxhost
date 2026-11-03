@@ -87,9 +87,18 @@ static void on_destroy(ANativeActivity *a) { (void)a; _exit(0); }   // one game 
 // ---- input ----
 static AInputQueue *g_queue; static ALooper *g_ilooper;
 static uint64_t g_btn; static float g_ax[8]; static int g_pad_used;   // lx ly rx ry lt rt hatx haty
+// Android reports the face buttons by the letter printed on them, so the same key code sits at a different place from one pad to another: an
+// Xbox-style pad (GameSir, 8BitDo in X-input) prints A at the bottom, a Switch Pro Controller prints A on the right. The Switch UI wants the
+// Nintendo positions, so the default swaps (the bottom button becomes B), and a pad whose own layout is already Nintendo must not be swapped:
+// Nintendo's vendor id (0x057E: Pro Controller, Joy-Con, the NSO pads) says so per device. DM_PAD_LAYOUT=native|swap forces either way, for a
+// pad that reports Nintendo hardware without Nintendo positions (an 8BitDo in Switch mode).
+static _Atomic int g_pad_native;
+static int pad_layout_env(void) { static _Atomic int v = -1; int x = atomic_load(&v); if (x < 0) { const char *e = getenv("DM_PAD_LAYOUT"); x = e && !strcmp(e, "native") ? 1 : e && !strcmp(e, "swap") ? 0 : -1; atomic_store(&v, x = (x < 0 ? -2 : x)); } return x == -2 ? -1 : x; }
 static uint64_t key_bit(int32_t k) {   // Nintendo layout by position: the bottom face button is B, the right one A (as the iOS front end maps)
+    int native = atomic_load(&g_pad_native);
     switch (k) {
-    case AKEYCODE_BUTTON_A: return DM_BTN_B; case AKEYCODE_BUTTON_B: return DM_BTN_A; case AKEYCODE_BUTTON_X: return DM_BTN_Y; case AKEYCODE_BUTTON_Y: return DM_BTN_X;
+    case AKEYCODE_BUTTON_A: return native ? DM_BTN_A : DM_BTN_B; case AKEYCODE_BUTTON_B: return native ? DM_BTN_B : DM_BTN_A;
+    case AKEYCODE_BUTTON_X: return native ? DM_BTN_X : DM_BTN_Y; case AKEYCODE_BUTTON_Y: return native ? DM_BTN_Y : DM_BTN_X;
     case AKEYCODE_BUTTON_L1: return DM_BTN_L; case AKEYCODE_BUTTON_R1: return DM_BTN_R; case AKEYCODE_BUTTON_L2: return DM_BTN_ZL; case AKEYCODE_BUTTON_R2: return DM_BTN_ZR;
     case AKEYCODE_BUTTON_THUMBL: return DM_BTN_LS; case AKEYCODE_BUTTON_THUMBR: return DM_BTN_RS; case AKEYCODE_BUTTON_START: return DM_BTN_PLUS; case AKEYCODE_BUTTON_SELECT: return DM_BTN_MINUS;
     case AKEYCODE_DPAD_UP: return DM_BTN_UP; case AKEYCODE_DPAD_DOWN: return DM_BTN_DOWN; case AKEYCODE_DPAD_LEFT: return DM_BTN_LEFT; case AKEYCODE_DPAD_RIGHT: return DM_BTN_RIGHT;
@@ -169,6 +178,7 @@ static void *pad_watch(void *a) {
     jmethodID mIds = cID ? (*E)->GetStaticMethodID(E, cID, "getDeviceIds", "()[I") : NULL, mGet = cID ? (*E)->GetStaticMethodID(E, cID, "getDevice", "(I)Landroid/view/InputDevice;") : NULL;
     jmethodID mSrc = cID ? (*E)->GetMethodID(E, cID, "getSources", "()I") : NULL, mVirt = cID ? (*E)->GetMethodID(E, cID, "isVirtual", "()Z") : NULL;
     jmethodID mName = cID ? (*E)->GetMethodID(E, cID, "getName", "()Ljava/lang/String;") : NULL;
+    jmethodID mVendor = cID ? (*E)->GetMethodID(E, cID, "getVendorId", "()I") : NULL;
     if (jx(E) || !mIds || !mGet || !mSrc || !mVirt || !mName) { LOG("[RED] [input] InputDevice methods missing: attached controllers are not watched"); return NULL; }
     int prev[16], np = 0;
     for (;;) {
@@ -183,7 +193,11 @@ static void *pad_watch(void *a) {
                     ids[n++] = v[i]; int known = 0; for (int k = 0; k < np; k++) known |= prev[k] == v[i];
                     if (!known) {
                         jstring s = (*E)->CallObjectMethod(E, d, mName); const char *nm = !jx(E) && s ? (*E)->GetStringUTFChars(E, s, NULL) : NULL;
-                        LOG("[input] controller attached: %s (device %d): the gamepad is hidden", nm ? nm : "?", v[i]);
+                        int vendor = mVendor ? (*E)->CallIntMethod(E, d, mVendor) : 0; jx(E);
+                        int forced = pad_layout_env(), native = forced >= 0 ? forced : vendor == 0x057E;   // Nintendo's vendor id
+                        atomic_store(&g_pad_native, native);
+                        LOG("[input] controller attached: %s (device %d, vendor %#x, %s layout): the gamepad is hidden", nm ? nm : "?", v[i], vendor,
+                            native ? "Nintendo" : "Xbox-style, face buttons swapped");
                         if (nm) (*E)->ReleaseStringUTFChars(E, s, nm);
                         if (s) (*E)->DeleteLocalRef(E, s);
                     }
@@ -195,7 +209,7 @@ static void *pad_watch(void *a) {
         }
         for (int k = 0; k < np; k++) { int still = 0; for (int i = 0; i < n; i++) still |= ids[i] == prev[k]; if (!still) LOG("[input] controller detached (device %d)", prev[k]); }
         if (atomic_exchange(&g_pads, n) && !n) {   // the last one went: the gamepad again, and the device's motor for rumble
-            atomic_store(&g_overlay, 1); dm_haptics_android_device(-1);
+            atomic_store(&g_overlay, 1); dm_haptics_android_device(-1); atomic_store(&g_pad_native, 0);
             LOG("[input] no controller attached: the gamepad is shown");
         }
         memcpy(prev, ids, sizeof ids); np = n;
