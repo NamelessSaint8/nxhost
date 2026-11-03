@@ -122,6 +122,15 @@ if a.lib:
     r = subprocess.run([CC] + LDFLAGS + ['-shared', '-Wl,-soname,libdmhost.so', '-o', str(out / 'libdmhost.so')] + [str(o) for o in objs + vobjs] + LIBS, capture_output=True, text=True, errors='replace')
     print(r.stderr.strip() if r.returncode else f'linked {out / "libdmhost.so"}', file=sys.stderr if r.returncode else sys.stdout)
     if r.returncode: sys.exit(1)
+    for exe in (out / 'dmhost', out / 'libdmhost.so'):   # dlopen (and the linker's --error-limit=0) let an unresolved project symbol through; the device refuses to load it.
+        if not exe.is_file(): continue   # every project-namespaced symbol must resolve (found the hard way on an API 36 emulator: mtl_pso_prebuild_tool, M2)
+        import re as _re
+        nm = subprocess.run([str(bin_ / 'llvm-nm'), '-D', '--defined-only', str(exe)], capture_output=True, text=True).stdout
+        defd = {l.split()[-1] for l in nm.splitlines() if len(l.split()) == 3}
+        nm = subprocess.run([str(bin_ / 'llvm-nm'), '-D', '--undefined-only', str(exe)], capture_output=True, text=True).stdout
+        und = {l.split()[-1].split('@')[0] for l in nm.splitlines() if len(l.split()) >= 2}
+        bad = sorted(n for n in und - defd if _re.match(r'^(mtl_|nvn_|dm_|dmsh_)', n))
+        if bad: sys.exit(f'{exe.name}: unresolved project symbols: {" ".join(bad)}')
     if a.release:   # the static symbol table goes too (the dynamic one stays: ANativeActivity_onCreate)
         subprocess.run([str(bin_ / ('llvm-strip.exe' if os.name == 'nt' else 'llvm-strip')), '--strip-unneeded', str(out / 'libdmhost.so')], check=True)
         print(f'stripped {out / "libdmhost.so"}: {(out / "libdmhost.so").stat().st_size // 1024} KB')

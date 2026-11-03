@@ -42,3 +42,34 @@ void dm_gfx_shot_at(long k, const char *path) { (void)k; (void)path; }
 void dm_gfx_texdump_next(const char *path) { (void)path; }
 void dm_gfx_texlist(int target) { (void)target; }
 void dm_gfx_texraw(uint64_t serial, const char *path) { (void)serial; (void)path; }
+
+int mtl_pso_prebuild_tool(void) {   // main() asks first, every boot: 0 = no tool run, the game starts (Mac's pipeline-archive prebuild, nvn_mtl.m, DM_PSO_PREBUILD=tool)
+    if (getenv("DM_PSO_PREBUILD")) LOG("[RED] DM_PSO_PREBUILD is the Mac host's pipeline archive prebuild; the Android host has no such tool, starting the game");
+    return 0;
+}
+
+
+// ---- the Mac host's hooks the shared NVN layer calls (nvn_mtl.m): diagnostics, present pacing and the capture plug points. The Vulkan backend has its own ----
+// ---- for each; these answers keep the shared paths on their no- or default-branch (mtl_link_rate 60: no ProMotion link here)                        ----
+#include "nvn_obj.h"
+void mtl_prog_prefetch(const prog_t *cp) { (void)cp; }   // a program's libraries prefetch at set time (Metal); the Vulkan side loads at first use
+void mtl_queue_activate(uint64_t serial) { (void)serial; }   // the display link's serial bookkeeping (caller holds the submission lock)
+void mtl_queue_forget(uint64_t serial) { (void)serial; }
+void mtl_set_queue_origin_lower_left(int on) { (void)on; }   // Metal's NDC origin flip; the Vulkan backend keeps its own convention
+void nvn_cap_submit(int n, const uint64_t *h) { (void)n; (void)h; }   // DM_NVN_CAPTURE (nvn_capture.inc): a Mac diagnostic, off on Android
+void nvn_cap_present(const tex_t *t, const int crop[4]) { (void)t; (void)crop; }
+int mtl_snap_on(void) { return 0; }   // present snapshots: the acquire's ring-slot wait paces them on Mac; off here
+uint64_t mtl_snap_acquire_wait(void) { return 0; }
+void mtl_pso_line(char *o, size_t n) { if (n) o[0] = 0; }   // the pipeline trace's one-line summary
+unsigned mtl_cpu_tex_count(void) { return 0; }
+void mtl_ab_gpu(uint64_t f, double gpu_ms, double frame_ms) { (void)f; (void)gpu_ms; (void)frame_ms; }   // DM_AB phases trace
+int mtl_link_rate(void) { return 60; }   // no display link: the standard rate
+int mtl_link_stalled(void) { return 0; }
+int mtl_link_tick(uint64_t n, double *target, double *lead, int *ticks, double *gap) { (void)n; (void)target; (void)lead; (void)ticks; (void)gap; return 0; }
+int mtl_link_wait_ticks(int ticks, uint64_t timeout_ns) { (void)ticks; (void)timeout_ns; return 0; }
+void mtl_cshoist_stats(uint64_t *moved, uint64_t *depth, uint64_t *stops) { *moved = *depth = 0; if (stops) for (int i = 0; i < 8; i++) stops[i] = 0; }
+void mtl_geohoist_stats(uint64_t *moved, uint64_t *runs, uint64_t *stops) { *moved = *runs = 0; if (stops) for (int i = 0; i < 6; i++) stops[i] = 0; }
+void mtl_geomesh_stats(uint64_t *n, uint64_t *wait) { *n = *wait = 0; }
+void mtl_hybrid_stats(uint64_t *draws, uint64_t *made, uint64_t *none) { *draws = *made = *none = 0; }
+void mtl_sm_stats(uint64_t *np, uint64_t *nc, uint64_t *nw) { *np = *nc = *nw = 0; }
+uint64_t mtl_pkg_edge_skips(void) { return 0; }

@@ -134,7 +134,23 @@ void dm_host_preload_start(int argc, char **argv) {
     pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a, 8 << 20);
     if (pthread_create(&g_pre.th, &a, preload_thread, NULL)) die("dm_host_preload_start: cannot start the thread");
 }
+#if !defined(__APPLE__)
+static void *tool_boot_watch(void *a) {   // DM_TOOL_BOOT=<seconds>: run that long, then exit at once (the game exiting on its own ends the process either way)
+    int n = (int)(intptr_t)a;
+    sleep(n);
+    LOG("tool boot: %d seconds over, exiting", n);
+    _exit(0);
+    return NULL;
+}
+#endif
 int main(int argc, char **argv) {
+#if !defined(__APPLE__)
+    {   // DM_TOOL_BOOT=<seconds> (M2's tool mode, adb-driven; docs/UNIVERSAL_SUPPORT_PLAN.md): the heap check and the capture steps boot the game without a player.
+        // Audio off, a timed exit, and the log's last line names it, so the driver can tell a clean tool exit from a crash in between
+        const char *tb = getenv("DM_TOOL_BOOT"); int n = tb ? atoi(tb) : 0;
+        if (n > 0) { setenv("DM_AUDIO", "0", 1); pthread_t w; pthread_create(&w, NULL, tool_boot_watch, (void *)(intptr_t)n); pthread_detach(w); }
+    }
+#endif
     { int mtl_pso_prebuild_tool(void); if (mtl_pso_prebuild_tool()) return 0; }   // DM_PSO_PREBUILD=tool: the pipeline archive's prebuild alone, no game (nvn_mtl.m)
     if (getenv("DM_PRELOAD")) dm_host_preload_start(argc, argv);   // Exercise the early-start path on Mac (on iOS it is called from the App's main())
     if (atomic_load(&g_pre.started)) {

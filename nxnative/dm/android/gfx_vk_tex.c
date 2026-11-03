@@ -488,6 +488,11 @@ void mtl_reg_tex(int tid, const tex_t *t, const view_t *v) {
     pthread_mutex_unlock(&g_rmu);
 }
 void mtl_set_tex_pool_n(int n) { (void)n; }
+void mtl_reg_image(int tid, const tex_t *t, const view_t *v) {   // an image registers into the same pool index space as a texture (hle_nvn.c: image handles are pool indices;
+    // Hyrule Warriors: Age of Calamity registers its compute-write images). On Vulkan it registers like a texture; a bound image's write usage is the exec layer's to handle
+    mtl_reg_tex(tid, t, v);
+}
+
 static __thread treg_ver t_treg;   // the version a lookup found, copied (the table may be rewritten or grow meanwhile)
 vkimg_t *vk_tex_by_id(int tid, const view_t **view_out, const tex_t **tex_out) {
     uint64_t job = nvn_replaying_job();
