@@ -77,6 +77,7 @@ class Port:
         self.o = opts
         self.cfg = config.load()
         self.result = {}
+        self.env = dict(os.environ)   # until run() gives the port its child environment (dotnet on PATH); inputs() may be called first (tests do)
 
     # ---- the whole port ----
     def run(self):

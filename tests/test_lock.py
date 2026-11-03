@@ -177,7 +177,7 @@ class Lock(unittest.TestCase):
         from porter import pipeline
         from porter.upstream import BuildError
         game = self.work.parent
-        with mock.patch.object(pipeline.nsp, 'scan_nsps', lambda folder, want=None: (0x0100000000AAA000, {})), \
+        with mock.patch.object(pipeline.nsp, 'scan_nsps', lambda folder, from_package=None, contents_of=None, want=None: (0x0100000000AAA000, {})), \
              mock.patch.object(pipeline.profiles, 'by_title', lambda tid: (None, None)):
             p = self.hold(self.work)
             port = pipeline.Port(pipeline.Options(folder=game))
