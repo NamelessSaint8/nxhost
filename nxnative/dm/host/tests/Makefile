@@ -33,6 +33,7 @@ run: $(B)/t_language $(B)/t_motion $(B)/t_heap_size $(B)/t_touch $(B)/t_gesture 
 	$(B)/t_audren_layout
 	$(B)/t_swkbd
 	$(B)/t_altstack
+	$(B)/t_text_store $(QUIET)
 	$(B)/t_bigstack
 	$(B)/t_condvar
 	$(B)/t_condvar_old
@@ -167,6 +168,12 @@ $(B)/t_bigstack: t_bigstack.c ../hle_bigstack.c ../hle.h ../dm.h $(GAME_H) | $(B
 	$(CLANG) -O1 -Wall -Wno-unused-function -I.. $(GINC) -o $@ t_bigstack.c ../hle_bigstack.c
 $(B)/t_altstack: t_altstack.c t_altstack_stub.c ../crash.c ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_altstack.c t_altstack_stub.c ../crash.c
+run: $(B)/t_text_store
+$(B)/t_text_store: t_text_store.c ../text_store.c ../dm.h $(GAME_H) | $(B)
+	$(CLANG) -O1 -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_text_store.c ../text_store.c
+.PHONY: text_store
+text_store: $(B)/t_text_store
+	$(B)/t_text_store
 $(B)/t_pctl: t_pctl.c ../hle_misc.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_pctl.c
 $(B)/t_shared_font: t_shared_font.c ../hle_sdk16.c ../hle.h ../dm.h $(GAME_H) | $(B)

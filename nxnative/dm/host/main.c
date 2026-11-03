@@ -80,6 +80,7 @@ static void host_preload(int argc, char **argv) {
         if (setrlimit(RLIMIT_NOFILE, &rl)) LOG("open file limit %llu could not be raised", (unsigned long long)was);
     }
     crash_install();
+    text_store_install();   // A guest store into a module's read-only text is a bad pointer: reported and dropped, not fatal
 #if defined(__APPLE__)
     {   // Which build this is: the commit the packer stamped into the app (DMCommit; a run outside an app has none), the shader chain the host loads, the profile
         CFBundleRef b = CFBundleGetMainBundle(); CFTypeRef c = b ? CFBundleGetValueForInfoDictionaryKey(b, CFSTR("DMCommit")) : NULL; char cs[64] = "not recorded";

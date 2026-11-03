@@ -135,3 +135,25 @@ The object's `+0xa0` field holds a garbage index — and the picture sharpened o
 - Symbols: the shipped `main` has 51 dynamic symbols only; `main.obs.tsv` has 9 rows — identification is semantic (disassembly + string refs), not by name.
 
 Next moves, in order: (1) run the Android boot 5× plain and 5× with `DM_NVN_LOG=1` — if the two crash sites alternate, it's the race confirmed; (2) chase `+0x111e0d0`'s null object (whose pointer is it — disassemble back for the object's origin); (3) check the render-thread sync HLE (`svcWaitSynchronization` on the vsync event / fence semantics in `hle_thread.c`) against the catalogue's spin-wait entries; (4) the Mac comparison at MSL-complete parity (run `dmsh_build`'s Mac chain for LA first) tells whether the race is engine-generic but merely *won* on Mac timing. Fix as a general rule in the sync/wait layer if (3) confirms.
+
+## Session update: the tavern-return crash (2026-11-03)
+
+The player's run ended 1,791 s in, while screen recording and walking back to the tavern: `CRASH sig=11 addr=main+0x115cf9c pc=main+0x34af778 lr=main+0x115cf98`, a 16-bit store into the game's own code. Nothing on the host side was wrong: footprint flat at 1,688 MiB, 0 dropped frames in 95 of 98 windows, audio 0 underruns, no refused allocation, and the only `[RED]` lines are the two known start-up ones (a second audren renderer, the present thread's policy). The three `[vk] [alias] stale read` lines are image-side only (an albedo sampled over a shadow map), so the alias path is exonerated as a source of CPU-visible corruption.
+
+What the code says (`<build>/android/patched_v262144/main.patched.bin`, and the unpatched `main` from the survey extract for the original instructions):
+
+```
++0x115cb0c: add  x18, x8, x15          ; x18 used as a scratch pointer here, not the TLS base
++0x115cb14: str  w10, [x18]
++0x115cb38: sub  w18, w18, w10
++0x115cb3c: lsr  w18, w18, #2
++0x115cb40: strh w18, [x1, x2]         ; <<< the crash, x1 = lr, x2 = 4
+```
+
+- **It is an interpreter loop**: `madd x1, x10, x16, x20` with `x16 = 0x18` (a 24-byte stride) and `x20` = the base loaded from a structure field (`ldr x28, [x24, #0xb0]` at `+0x115cf18`, passed as the helper's second argument). The store writes a packed 16-bit value into a source structure, indexed by a jump table (`ldrsw x2, [x11, w2, sxtw #2]`).
+- **The rewriter is not at fault.** Its `x18` sites in this loop are shadow-register stubs in the patch area (the patched image is 55 MB against the original 33.9 MB, so `+0x34af75c` is appended by `patch_nso.py`): each stub is entered by exactly one branch (checked over every `B`/`BL` in the image), keeps the shadow in TLS at `*(tpidr_el0+0x10) + G`, and preserves `x0`/`x1`/`x3` in the red zone. The dump agrees with the code everywhere else — `x0` = `0xc37` is exactly the word the stub had just loaded from the shadow slot, `x17` = `x8 + x14` exactly, `x16` = `0x18` — so the shadow model is faithful. The one register that does not fit the arithmetic is `x1`, which equals `lr`: the base field held a code address, so `[base + 24 * index + 4]` landed on the return address + 4. **What corrupted that field is still unknown**; the run's own log has no earlier fault to blame.
+- **New general rule** (`dm/host/text_store.c`, `fix(host): a guest store into a module's own text is reported and dropped`): a write fault inside a module is a bad pointer, not self-modification — the writable segments are mapped writable, so only code can fault — and the store is reported once per distinct (pc, target) with its instruction and `x1`/`x2`/`x19`/`x20`/`lr`, then dropped so the run continues. Reference entry: `nxnative/docs/reference/memory.md` "A guest store into a module's own text". Test: `make -C nxnative/dm/host/tests GAME=<id> text_store`.
+
+If it recurs, grep the log for `[RED] a guest store into read-only text was dropped`: the line names the site and the registers that addressed it, and the run keeps going instead of dying. To find the writer rather than the victim, arm `DM_PROBE_WATCH=<address of the field that held the base>` (see `dm/host/probe.c`) once the field is identified.
+
+Still open from this session: the load-time replay cost (50–125 ms in `submit+present` on a cell load — `acquire` waits at steady state, the replay itself during streaming), fast travel and interior streaming, and a 30-minute soak.

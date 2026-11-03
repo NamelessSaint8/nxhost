@@ -118,6 +118,7 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 - travelling produces a brief multi-GB footprint spike, then memory returns to its earlier level; periodic memory lines can miss the peak. Upload diagnostics show many swapped-out blocks still alive in one batch. → [Upload staging grows within one rendering submission](../reference/memory.md#upload-staging-grows-within-one-rendering-submission)
 - GPU memory grows with repeated `nvnTextureReadTexels` calls on a long-lived game thread, even after each readback completes. → [GPU readback without an autorelease pool](../reference/memory.md#gpu-readback-without-an-autorelease-pool)
 - process footprint and Metal allocation grow during stationary gameplay even after readback fences complete; the deferred-release queue and command allocator sizes remain bounded. → [Completion readbacks survive a guest waiter's pool](../reference/memory.md#completion-readbacks-survive-a-guest-waiters-pool)
+- `CRASH sig=11 addr=main+0x115cf9c pc=main+0x34af778` — a store into the game's own code, tens of minutes into a run, with nothing wrong on the host side (footprint flat, no refused allocation, no dropped frame, audio clean). The faulting instruction is a 16-bit store whose destination is the return address + 4. → [A guest store into a module's own text](../reference/memory.md#a-guest-store-into-a-modules-own-text)
 
 ## Threads
 
