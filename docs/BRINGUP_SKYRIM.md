@@ -2,6 +2,21 @@
 
 For the agent picking this up. State of the world: 2026-11-03, after the M0 upstream merge (HEAD ≈ `a16ac09d`). Everything below was verified this session.
 
+## Session update: the frame-1 stall was a GPU fence the host broke
+
+The blocker described further down is solved, and it was not a lost job wake-up. How it was found, in order:
+
+- **`DM_CTL memdump`/`peek` could not read the polled word** (0 of 64 bytes at an alias address). The control file copied with `vm_read_overwrite` alone; the host already had guest-aware readers. `dm_guest_read`/`dm_guest_write` (`hle_svc.c`) now read and write the way the guest can — the opened heap, committed alias pages, a kernel copy for anything else — and `peek`/`memdump`/the new `poke` use them. `poke <addr> <value> [bytes]` is the pair of `peek`: it writes one value into guest memory, which is how a wait the game never leaves gets probed.
+- **The polled word was a report slot.** `while ([x19+0x10] != 0) YieldThread()` in `main+0xbfeb6c` is called from two 24-byte-bucket registries; the node's `+0x10` points at a 16-byte NVN report record (`{counter, timestamp}`), and all four records the engine had registered held a **timestamp in the counter field**. Writing 0 into the first one by hand (`poke 0x69a4560110 0 8`) moved `JobListManager` off the spin and put the main thread on the *next* slot — proof that this was the gate.
+- **The cause, and it is general:** a timestamp report puts 0 in the counter field (the time goes in the second field), which is what lets a game use `ReportCounter(TIMESTAMP_TOP, rec)` as a fence — write a token into `rec`, report, poll for 0. The host wrote the *timestamp* into that field unless the profile key `render_cond` was set, in both backends (`nvn_mtl.m`, `android/gfx_vk_core.c`), so Skyrim's fence never cleared. Both now write `{0, time}` whatever the profile says (`render_cond` only decides whether conditions are evaluated); `t_nvn` checks it, and the catalogue entry is [A timestamp report used as a fence](reference/rendering.md#a-timestamp-report-used-as-a-fence).
+
+### Where the port stands now
+
+- **It presents frames continuously**: 300 frames per report window, 0 dropped, p99 33.34 ms (30 fps: the engine asks for present interval 2), footprint about 1.05 GB, frame 2,100 when last watched. The one `[RED]` line left is `audren: a second renderer (the host drives only one)` — the second `OpenAudioRenderer` — and it does not block.
+- **The intro-skipping overlay is still in place** (`DM_ROMFS_OVERLAY` with `sIntroSequence=`), so what is on screen is the engine's own loading/menu path, not the intro movie. Consecutive `screencap`s differ, so the picture is animating rather than frozen; which screen it is has not been read yet (the vision bridge in this session could not open the PNG).
+- **Next:** identify that screen and drive it with the `DM_CTL` key names, then a new game and a world load; re-measure memory under streaming load; rebuild the **release** APK (the device runs the 8.2 MB debug build).
+- **Diagnostics added this session** (general, not Skyrim patches): `dm_guest_read`/`dm_guest_write` and `DM_CTL poke`, `dm_guest_describe` (a dump that stops short now says where: opened heap, alias offset committed or not), and the alias-region read fix behind all of it.
+
 ## Session update: the port boots and renders one frame
 
 Done since the brief was written (commits `353e9539`, `0f7060c3`, `9653cd17`):
@@ -12,7 +27,7 @@ Done since the brief was written (commits `353e9539`, `0f7060c3`, `9653cd17`):
 - **Vulkan replay gaps fixed** (`dm/android/gfx_vk_exec.c`): `OP_BIND_UBO_SMALL` / `OP_BIND_VBUF1` (Skyrim sizes command memory from `GetCommandMemoryUsed`, so it emits the 24-byte bindings) and `OP_DRAW_TEX` (blit into each bound colour target). Unknown record ops are now named once each. `crash_dump_now` prints a running thread's guest stack inside an SVC (`dm/host/hle_thread.c`), which is how the looping threads were read.
 - **Boot state on the Y700 (HA2M2W71)**: through `nnosInitialize`, `nnMain`, shader bundle load (23,133), audio (two `OpenAudioRenderer`s; the host drives one and says so), and the first menu/loading frame: 50 NVN functions, 543 calls, 16 `DrawElements`, 6 `SetRenderTargets`, 33 programs. The screen then stops changing (`shot` never writes a second frame; the window stays on frame 1).
 
-### The remaining blocker
+### The remaining blocker (solved above: the polled word was a report slot)
 
 Both the intro movie player and (with the intro skipped) the JobListManager spin in the same engine wait with `nn::os::YieldThread` (thousands of yields/s, `CPU` ~1 s):
 
