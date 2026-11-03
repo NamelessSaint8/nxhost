@@ -2602,28 +2602,34 @@ def bsa_read(d, off, stored, compressed, where):
     if len(data) != usize: red(f'{where}: the frame decodes to {len(data):#x} bytes, the entry says {usize:#x}')
     return data
 
-def fxp_shaders(d, label):
-    """Creation Engine shader packages (.fxp; Skyrim has one, shaders011.fxp in Skyrim - Shaders.bsa, 23,082 programs). A package is a list of records, each a header (magic 0x11223344, its length varies),
-    then a control section (0x848 bytes, its own length at +0x20) and right after it its code area (length at control +0x704). The records are found by their control sections and kept by the triple
-    check: a code magic right after the control's own length, the code length the control names, and a stage from the SPH (graphics) or the thread group at +0x748 (the 19 compute shaders whose code
-    areas have no 0x12345679 header). The engine combines the stages per draw, so every program is single-stage (separable_pairs pairs the vertex outputs)"""
+def fxp_records(d, label):
+    """Creation Engine shader records: a 0x10-byte tail {u32 0x10, u32 control length, u32 control length + 0x10, u32 code length} right before a control section, then the control section
+    (0x848 bytes for the .fxp records, its own length at +0x20), then right after it its code area (length at control +0x704). Skyrim's .fxp packages and the 53 built-in records in its main
+    both use it. Each record is kept by the triple check: the code magic (or, for the compute shaders whose code areas have no 0x12345679 header, a thread group at +0x748), the code length
+    the control names, and a stage. The records can start unaligned (main's after a 0x10 header); the engine combines the stages per draw, so every program is single-stage (separable_pairs
+    pairs the vertex outputs)"""
     out = []
     for m in re.finditer(re.escape(CTL_MAGIC), d):
-        off = m.start()
-        if off + 0x708 > len(d): continue
-        nctl, = struct.unpack_from('<I', d, off + 0x20)
-        at = off + nctl; ncode, = struct.unpack_from('<I', d, off + 0x704)
-        if not 0x760 <= nctl <= 0x880 or not ncode or at + ncode > len(d): continue
+        c = m.start()
+        if c < 0x10 or c + 0x708 > len(d): continue
+        nctl, = struct.unpack_from('<I', d, c + 0x20); ncode, = struct.unpack_from('<I', d, c + 0x704)
+        at = c + nctl
+        if struct.unpack_from('<4I', d, c - 0x10) != (0x10, nctl, nctl + 0x10, ncode) or not 0x760 <= nctl <= 0x880 or not ncode or at + ncode > len(d): continue
         magic = d[at:at + 4]
         if magic in (GFX_MAGIC, CS_MAGIC): st = sph_stage(d[at:at + ncode])
-        elif off + 0x758 <= len(d):
-            x, y, z = struct.unpack_from('<3I', d, off + 0x748)
+        elif c + 0x758 <= len(d):
+            x, y, z = struct.unpack_from('<3I', d, c + 0x748)
             st = 'cs' if 0 < x <= 1024 and 0 < y <= 1024 and 0 < z <= 64 else None
         else: st = None
         if not st: continue
-        ctl, code = d[off:off + nctl], d[at:at + ncode]
+        ctl, code = d[c:c + nctl], d[at:at + ncode]
         if check(label, st, ctl, code): continue   # a control magic inside code, or a record this reader does not know
-        out.append((f'{label}#FXP@{off:#x}', st, ctl, code))
+        out.append((f'{label}#FXP@{c:#x}', st, ctl, code))
+    return out
+
+def fxp_shaders(d, label):
+    """The records of a Creation Engine shader package (.fxp; Skyrim has one, shaders011.fxp in Skyrim - Shaders.bsa, 23,082 programs: 3,463 vertex, 19,600 pixel and 19 compute)"""
+    out = fxp_records(d, label)
     if not out: red(f'{label}: no .fxp shader record')
     return out
 
@@ -2863,6 +2869,7 @@ def main():
         found += glslc_shaders(img, 'main' + ('@' + tag if tag else ''), need=False)
         found += tfxo_streams(img, 'main' + ('@' + tag if tag else ''))   # YEBIS's effect file, a zlib stream in main (Pokémon Sword)
         found += retro_main_forms(img, 'main' + ('@' + tag if tag else ''))   # Retro's startup material archive, LZSS in main (Donkey Kong Country: Tropical Freeze)
+        found += fxp_records(img, 'main' + ('@' + tag if tag else ''))   # Creation Engine's built-in shader records in main (Skyrim: 53, none of them in its .fxp)
         found += raw_shaders(img, 'main' + ('@' + tag if tag else ''), {c for _, _, c, _ in found})
         # GLSLC outputs the game compiles at run time, captured on the Mac (hle_glslc.c): <version dir>/glslc_capture, or DM_GLSLC_CAPTURE. A game needs them when main holds GLSL sources and
         # calls glslcCompile in a module it loads (Fire Emblem: Three Houses; profile_guess.py shader_sources). Captain Toad: Treasure Tracker imports it with agl's GLSL sources, but no module defines it

@@ -70,11 +70,23 @@ def compute(n=0x40, group=(8, 8, 1)):
     return bytes(n)
 
 
+def tail(c, code):
+    """The 0x10-byte tail Creation Engine puts right before each control section"""
+    return struct.pack('<4I', 0x10, len(c), len(c) + 0x10, len(code))
+
+
 def fxp(records):
-    """records: [(control, code)] → a .fxp: an 8-byte header, then each record's 0x38-byte header, control section and code area"""
+    """records: [(control, code)] → a .fxp: an 8-byte header, then each record's header, tail, control section and code area"""
     out = bytearray(struct.pack('<II', 2, 2))
     for c, code in records:
-        out += struct.pack('<I', 0x11223344) + bytes(0x34) + c + code
+        out += struct.pack('<I', 0x11223344) + bytes(0x24) + tail(c, code) + c + code
+    return bytes(out)
+
+
+def main_records(records, prefix=bytes(7)):
+    """Creation Engine's built-in records as Skyrim's main holds them: a tail, control section and code area one after another, unaligned"""
+    out = bytearray(prefix)
+    for c, code in records: out += tail(c, code) + c + code
     return bytes(out)
 
 
@@ -137,6 +149,18 @@ class Fxp(unittest.TestCase):
         struct.pack_into('<I', code, 0x80, CTL)   # a magic inside the code area: its +0x20 is not a control length
         d = fxp([(control(len(code)), bytes(code))])
         self.assertEqual(len(ss.fxp_shaders(d, '/S/a.fxp')), 1)
+
+    def test_builtin_records_in_main_are_found_unaligned(self):
+        ps, vs = graphics(ps=True), graphics(ps=False)
+        d = main_records([(control(len(ps)), ps), (control(len(vs)), vs)])
+        got = ss.fxp_records(d, 'main')
+        self.assertEqual([s for _, s, _, _ in got], ['ps', 'vs'])
+        self.assertEqual(got[0][0], 'main#FXP@0x17')   # 7 bytes of prefix + the 0x10 tail
+        self.assertEqual(got[0][2], control(len(ps)))
+
+    def test_a_control_magic_without_the_record_tail_is_ignored(self):
+        d = main_records([(control(0x80), graphics())])
+        self.assertEqual(ss.fxp_records(d[0x10:], 'main'), [])   # the control section and code, no tail before it
 
     def test_no_record_is_named(self):
         with self.assertRaisesRegex(SystemExit, r'/S/a.fxp: no .fxp shader record'):
