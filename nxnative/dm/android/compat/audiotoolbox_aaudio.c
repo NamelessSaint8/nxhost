@@ -95,13 +95,19 @@ OSStatus AudioOutputUnitStart(AudioUnit u) {
         atomic_store(&u->held, 0); return noErr; }
     stop_stream(u); close_stream(u);
     atomic_store(&u->failed, 0); atomic_store(&u->held, 0);
+    // A stream that will not start is opened again through the normal mixer path: on the Legion Y700 the low-latency (fast) track goes past the output's Dolby DAP
+    // effect, and AAudio answered requestStart with AAUDIO_ERROR_DISCONNECTED (-899) on every retry, so the game stayed silent for good (Skyrim's first boot on
+    // the Y700: 48,000 rendered frames, not one audible). DM_AUDIO_PERF=none forces the normal path from the start
+    const char *pf = getenv("DM_AUDIO_PERF");
+    int perf = pf && !strcasecmp(pf, "none") ? AAUDIO_PERFORMANCE_MODE_NONE : AAUDIO_PERFORMANCE_MODE_LOW_LATENCY;
+    for (int attempt = 0; attempt < 2; attempt++, perf = AAUDIO_PERFORMANCE_MODE_NONE) {
     AAudioStreamBuilder *b; aaudio_result_t r = AAudio_createStreamBuilder(&b);
     if (r != AAUDIO_OK) return r;
     AAudioStreamBuilder_setDirection(b, AAUDIO_DIRECTION_OUTPUT);
     AAudioStreamBuilder_setSampleRate(b, (int32_t)u->fmt.mSampleRate);
     AAudioStreamBuilder_setChannelCount(b, (int32_t)u->fmt.mChannelsPerFrame);
     AAudioStreamBuilder_setFormat(b, u->fmt.mFormatFlags & kAudioFormatFlagIsFloat ? AAUDIO_FORMAT_PCM_FLOAT : AAUDIO_FORMAT_PCM_I16);
-    AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    AAudioStreamBuilder_setPerformanceMode(b, perf);
     AAudioStreamBuilder_setSharingMode(b, AAUDIO_SHARING_MODE_SHARED);
     AAudioStreamBuilder_setUsage(b, AAUDIO_USAGE_GAME);
     AAudioStreamBuilder_setContentType(b, AAUDIO_CONTENT_TYPE_MUSIC);
@@ -109,15 +115,32 @@ OSStatus AudioOutputUnitStart(AudioUnit u) {
     // on the Legion Y700 called back with 6-960 frames, more than Tales of Eternia Remastered's CRI output keeps queued (about 2 blocks), so 2600 of 2000 callbacks
     // underran and 11% of the sound was zero padding; with 240 frames, 0 underruns
     AAudioStreamBuilder_setFramesPerDataCallback(b, u->frames_hint > 0 ? u->frames_hint : (int32_t)(u->fmt.mSampleRate / 200));
+    // The buffer has to absorb the jitter of the thread that feeds it. AAudio's own default left about two callbacks queued and Skyrim lost 310 of every 2000
+    // callbacks to underruns (1550 ms of zero padding in 10 s: audible crackle and judder); four callbacks of slack fixed it. DM_AUDIO_BUFFER=<frames> overrides
+    { const char *e = getenv("DM_AUDIO_BUFFER"); int32_t want = e && atoi(e) > 0 ? (int32_t)atoi(e) : 4 * (u->frames_hint > 0 ? u->frames_hint : (int32_t)(u->fmt.mSampleRate / 200));
+      AAudioStreamBuilder_setBufferCapacityInFrames(b, want); }
     AAudioStreamBuilder_setDataCallback(b, on_data, u);
     AAudioStreamBuilder_setErrorCallback(b, on_error, u);
     r = AAudioStreamBuilder_openStream(b, &u->st);
     AAudioStreamBuilder_delete(b);
-    if (r != AAUDIO_OK) { u->st = NULL; return r; }
+    if (r != AAUDIO_OK) { u->st = NULL; if (perf == AAUDIO_PERFORMANCE_MODE_LOW_LATENCY) { __android_log_print(ANDROID_LOG_WARN, "dmhost", "audio: the low-latency output would not open (%d %s): trying the normal mixer path", r, AAudio_convertResultToText(r)); continue; } return r; }
+    // capacity alone does not set the queue: ask for the whole buffer, then report what the device granted
+    { const char *e = getenv("DM_AUDIO_BUFFER"); int32_t cb = u->frames_hint > 0 ? u->frames_hint : (int32_t)(u->fmt.mSampleRate / 200);
+      int32_t want = e && atoi(e) > 0 ? (int32_t)atoi(e) : 4 * cb, cap = AAudioStream_getBufferCapacityInFrames(u->st);
+      if (want > cap) want = cap;
+      AAudioStream_setBufferSizeInFrames(u->st, want);
+      __android_log_print(ANDROID_LOG_INFO, "dmhost", "audio: buffer %d of %d frames, %d per callback, %d Hz", AAudioStream_getBufferSizeInFrames(u->st), cap, cb, (int)u->fmt.mSampleRate); }
     // the device's own rate and channel count must be ours: AAudio converts when they differ (it reports the requested format back)
     r = AAudioStream_requestStart(u->st);
-    if (r != AAUDIO_OK) { close_stream(u); return r; }
+    if (r != AAUDIO_OK) {
+        close_stream(u);
+        if (perf == AAUDIO_PERFORMANCE_MODE_LOW_LATENCY) { __android_log_print(ANDROID_LOG_WARN, "dmhost", "audio: the low-latency output would not start (%d %s): trying the normal mixer path", r, AAudio_convertResultToText(r)); continue; }
+        return r;
+    }
+    if (perf == AAUDIO_PERFORMANCE_MODE_NONE && pf == NULL) __android_log_print(ANDROID_LOG_INFO, "dmhost", "audio: playing through the normal mixer path (the low-latency one was refused)");
     return noErr;
+    }
+    return (aaudio_result_t)-899;
 }
 // A stop holds the stream (silence, see AudioOutputUnitStart): once it returns no callback is inside the host's render callback, and none enters it until
 // the next start (held is set before in_cb is read, and each callback counts itself in before it reads held)
