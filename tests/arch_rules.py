@@ -148,7 +148,7 @@ check('doctor checks NDK, .NET, adb, keys', all(w in tc for w in ('ndk', 'dotnet
 # 9. Keys and game files never in the repository
 leak = [f for f in files if re.search(r'\.(nsp|nsz|xci|nca|keys)$|prod\.keys|title\.keys|signing-key', f, re.I)]
 check('no keys, game files or signing keys committed', not leak, ', '.join(leak))
-gen = [f for f in files if Path(f).name in ('game_profile.h', 'android_profile.h')]
+gen = [f for f in files if Path(f).name in ('game_profile.h', 'android_profile.h') and '/tests/' not in f]   # upstream's dm/host/tests/memory_profile/game_profile.h is a hand-written synthetic layout, not a generated one
 check('generated profile headers not committed', not gen, ', '.join(gen))
 
 # 10. Repository layout

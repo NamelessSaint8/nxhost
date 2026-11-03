@@ -31,7 +31,11 @@ class Hooks(unittest.TestCase):
 class Records(unittest.TestCase):
     def test_flip_version(self):
         s = (TP / 'README.md').read_text(encoding='utf-8')
-        self.assertIn('b475eb4', s); self.assertIn('1.7', s)
+        self.assertIn('1ee679c', s); self.assertIn('1.22', s)   # stb_vorbis (upstream's third-party pin record)
+
+    def test_ryujinx_pin(self):   # the merge took upstream's Ryujinx pin: Canary-1.3.351
+        s = (TP / 'ryujinx/README.md').read_text(encoding='utf-8')
+        self.assertIn('475615f', s); self.assertIn('Canary-1.3.351', s)
 
     def test_ryujinx_patch(self):
         p = (TP / 'ryujinx/nxnative-local.patch').read_text(encoding='utf-8')

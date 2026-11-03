@@ -155,7 +155,7 @@ def run(a, fn):
     _event(a, {'ev': 'log', 'path': str(p)})   # first, so a run that dies at once still names its log
     unwrap = lambda: None
     try:
-        from porter.upstream import PROG, nsp   # needs lz4: only the long commands import it here
+        from porter.upstream import PROG, nsp   # the engine modules (lz4, capstone) are lazy now: a missing one fails at the stage that first needs it, below
         unwrap = _wrap(PROG, nsp)
         try: code = fn(a)
         except KeyboardInterrupt: code = 130   # a stop before _with_progress took over

@@ -27,9 +27,9 @@ from pathlib import Path
 from porter.upstream import nsp
 def run(cmd, log, env=None, **kw):
     open({calls!r}, 'a').write('run\\n')
-    out = Path(str(cmd[-1])); out.mkdir(parents=True, exist_ok=True); (out / 'half').write_text('x')
+    out = Path(str(cmd[4])); out.parent.mkdir(parents=True, exist_ok=True); out.write_text('half')   # the RomFS image nx_extract writes (cmd[4]: <idx>.img)
     if {kill}: import os; os._exit(9)
-    (out / 'whole').write_text('x')
+    out.write_text('whole')
 nsp.run = run
 nsp.extract_aoc(Path('nx'), Path('k'), Path({nxnative!r}), Path({work!r}), 0x0100000000AAA000, {{'dlc': [(0x0100000000AAB001, 0, Path({dlc!r}))]}}, Path({work!r}) / 'logs')
 '''
@@ -56,7 +56,7 @@ class CutOff(unittest.TestCase):
         self.assertFalse(kf.exists()); self.assertFalse(aoc.exists())   # cut off before the swap: no stamp, no output
         r = self.child(False)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertTrue((aoc / '1/whole').is_file())
+        self.assertTrue((aoc / '1.img').is_file()); self.assertEqual((aoc / '1.img').read_text(), 'whole')
         key, note = kf.read_text().splitlines()[:2]
         self.assertRegex(key, r'^[0-9a-f]+$'); self.assertEqual(note, '1 DLC')
         self.assertEqual(sorted(p.name for p in self.work.iterdir()), ['aoc', 'aoc.key'])   # no temp file left beside the key

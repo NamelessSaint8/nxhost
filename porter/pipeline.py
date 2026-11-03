@@ -30,6 +30,7 @@ class Options:
     experimental: bool = False         # a game not ported to Android yet: a provisional profile from upstream's survey (or a copy of its iOS profile), status experimental
     package: str = ''                  # the app's package instead of the profile's (a test install beside another build of the game)
     fps60: bool = False                # 60 fps: the profile's own frame-rate cap, else the build's FPSLocker-Warehouse config (porter/fpslocker.py)
+    title_id: str = ''                # the game to port when the folder holds several, e.g. a cartridge dump with two games (upstream's --title-id / TITLE_ID)
     jobs: int = field(default_factory=lambda: os.cpu_count() or 8)
 
 
@@ -42,13 +43,13 @@ def version_code(ver):   # the APK's versionCode: the Switch version number (v19
     return nsp.vnum(ver) + 1
 
 
-def inspect(folder):
+def inspect(folder, title_id=''):
     """What a game folder holds, without extracting anything: the GUI's game card and `porter inspect`"""
     f = Path(folder)
     if not any((*f.glob('*.nsp'), *f.glob('*.xci'))) and any((*f.glob('*.nsz'), *f.glob('*.xcz'))):
         # keyless: NSZ / XCZ files only. A port converts them (upstream's decompress_nsz); inspect names no keys, so it refuses here
         raise BuildError('this folder has only NSZ / XCZ files: decompress them to NSP / XCI first (nsz -D with your prod.keys), then choose the folder with the NSP files')
-    app, fam = nsp.scan_nsps(f)
+    app, fam = nsp.scan_nsps(f, int(title_id, 16) if title_id else None)
     g, ap = profiles.by_title(app)
     info = dict(title_id=f'{app:016X}', base=fam['base'].name, updates=[{'version': f'v{v}' if v is not None else None, 'file': p.name} for v, p in fam['updates']],
                 dlc=[{'title_id': f'{t:016X}', 'file': p.name} for t, _, p in fam['dlc']], profile=None, android=None, versions=[], pack=None, supported=False, reason='')
@@ -121,7 +122,9 @@ class Port:
     def inputs(self):
         o = self.o
         say(f'game folder: {o.folder}')
-        self.app, self.fam = nsp.scan_nsps(o.folder)
+        want = int(o.title_id, 16) if o.title_id else None
+        with nsp.package_title_reader(NXNATIVE, o.keys, self.env) as reader:   # a package with neither a ticket nor a [title ID] tag names itself from its meta NCA
+            self.app, self.fam = nsp.scan_nsps(o.folder, reader, reader.contents, want)
         tid = f'{self.app:016X}'
         self.work = o.folder / f'{tid}_build'
         from porter import lock; self.lock = lock.take(self.work, 'port')   # D-06/D-07: one port or install of this game folder at a time, held until porter ends
