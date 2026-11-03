@@ -11,6 +11,11 @@ SECTIONS = [(r'\.cstring\b', '.section .rodata.str1.1,"aMS",@progbits,1'), (r'\.
 out = []
 for line in open(src, encoding='utf-8'):
     code, sep, comment = line.partition('//')
+    m = re.match(r'(\s*)\.zerofill\s+__DATA,__bss,_([A-Za-z][A-Za-z0-9_$.]*),(\d+),(\d+)\s*$', code)
+    if m:   # Mach-O's zero-filled BSS symbol -> an ELF .bss definition (size, alignment as a power of two)
+        ind, name, size, align = m.group(1), m.group(2), m.group(3), m.group(4)
+        out.append(ind + '.bss\n' + ind + '.p2align ' + align + '\n' + ind + name + ':\n' + ind + '.space ' + size + '\n' + ind + '.text\n')
+        continue
     code = re.sub(SYM + r'@PAGEOFF', r':lo12:\1', code)
     code = re.sub(SYM + r'@PAGE', r'\1', code)
     code = code.replace('.private_extern', '.hidden')

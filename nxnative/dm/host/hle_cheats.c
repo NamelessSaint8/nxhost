@@ -57,10 +57,10 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <mach/mach.h>       // vm_read_overwrite / vm_write: guest pages the game maps and unmaps while a pass runs (guest_page_read / _write)
-#if !TARGET_OS_IPHONE
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
 #include <mach/mach_vm.h>    // the alias mapping of main's pages (mach_vm_remap), below; the iPhone SDK has no mach_vm.h
 #include <mach/vm_prot.h>
-#endif
+#endif   // Android: dm/android/compat's mach.h declares mach_vm_remap and the VM_PROT_* constants
 #include <dispatch/dispatch.h>   // the state files are written off the presenting thread (files_queue)
 #include <errno.h>
 #include <dirent.h>

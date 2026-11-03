@@ -170,7 +170,7 @@ class Port:
         out = next(d for d in (self.o.out, *self.o.out.parents) if d.exists())
         if os.stat(out).st_dev == os.stat(self.work).st_dev: return
         # another volume: the data pack's hard links become copies there (datapack.link_or_copy)
-        need, free = size(self.game / 'RomFS') + size(self.aoc) + 2**30, shutil.disk_usage(out).free
+        rs = Path(nsp.rfs.source(self.game)); need, free = (rs.stat().st_size if rs.is_file() else size(rs)) + size(self.aoc) + 2**30, shutil.disk_usage(out).free
         if free < need: raise BuildError(f'not enough disk space for the output folder {self.o.out}: the data pack needs about {need / 2**30:.1f} GB there, {free / 2**30:.1f} GB is free')
 
     def use_profile_dir(self, pdir, first):   # every tool finds the game's profile in pdir (game.py DM_GAMES_DIR; first: before dm/games)
@@ -215,7 +215,7 @@ class Port:
         with nuget.restored(NXNATIVE / 'dm/tools/nx_extract', self.tools['dotnet'], self.env, self.logs / 'nuget_restore.log'):
             nx = nsp.build_nx_extract(NXNATIVE, self.work, self.logs, self.env)
         PROG.end()
-        self.dirs = {ver: nsp.extract(nx, o.keys, ex, ver, *picks[ver], None, self.logs, g, env=self.env) for ver in self.versions}
+        self.dirs = {ver: nsp.extract(nx, o.keys, ex, ver, *picks[ver], None, self.logs, g, self.app, env=self.env) for ver in self.versions}
         bad = [] if self.derived else [f'{v}: {x}' for v in self.versions for x in nsp.build_mismatch(self.dirs[v], v, g)]
         if bad and self.provisional: raise BuildError(f'not the builds the provisional profile registers: {"; ".join(bad)}')
         if bad:
@@ -243,7 +243,7 @@ class Port:
     def check_graphics(self):
         """What the Android host can run: NVN games whose shaders are all in their files. The other kinds need a step upstream runs on a Mac (booting the game in the Mac host)
         or a graphics layer the Android host does not have yet"""
-        src = profile_guess.build_sources(self.game / 'ExeFS', self.game / 'RomFS', self.g.words('modules'))
+        src = profile_guess.build_sources(self.game / 'ExeFS', nsp.rfs.source(self.game), self.g.words('modules'))
         gfx = src['graphics'][0]
         if gfx != 'nvn': raise BuildError(f'{self.app_name} renders with {gfx} ({src["graphics"][1]}): the Android host replays NVN only so far')
         for k in ('glslc_capture', 'ue_decode', 'oodle_packs', 'ue_legacy'):
@@ -297,8 +297,8 @@ class Port:
     def shaders(self):
         sv = self.versions
         pkg = self.work / 'shader' / 'pkg'
-        nsp.split_shaders(PY, NXNATIVE, [self.dirs[v] / 'RomFS' for v in sv], [self.dirs[v] / 'ExeFS/main' for v in sv], pkg, self.env, self.logs, self.g, bool(self.derived or self.provisional),
-                         aoc=self.aoc)   # DLC with shaders of its own (Xenoblade Chronicles 3's archives)
+        nsp.split_shaders(PY, NXNATIVE, [nsp.rfs.source(self.dirs[v]) for v in sv], [self.dirs[v] / 'ExeFS/main' for v in sv], pkg, self.env, self.logs, self.g, bool(self.derived or self.provisional),
+                         dlc_roms=(sorted(p for p in self.aoc.iterdir() if p.is_dir() or p.suffix == '.img') if self.aoc else ()))   # DLC with shaders of its own (Xenoblade Chronicles 3's archives)
         self.dmsv = self.aw / 'shaders.dmsv'; kf = self.aw / 'shaders.dmsv.key'; cap = self.aw / 'captured_shaders'
         PROG.stage('Vulkan shaders', step='building the translator')
         xlate, xkey = self.translator()
@@ -386,7 +386,7 @@ class Port:
     def data(self):
         PROG.stage('data pack', step='linking')
         dst = self.o.out / f'{app_stem(self.g, self.app_name)}-data'
-        man = datapack.build(dst, profile=self.ap, version=self.pkg_ver, display=self.display, patched=self.patched, romfs=self.game / 'RomFS', shaders=self.dmsv,
+        man = datapack.build(dst, profile=self.ap, version=self.pkg_ver, display=self.display, patched=self.patched, romfs=Path(nsp.rfs.source(self.game)), shaders=self.dmsv,
                              aoc=self.aoc, language=self.lang, package=self.package, build=self.work, env=self.fps_env, files=self.fps_files, progress=lambda what: PROG.set(step=f'linking {what}'))
         self.data_path = dst; self.result['data'] = str(dst)
         PROG.end(f'{man["files"]:,} files, {man["bytes"] / 2**30:.1f} GB')

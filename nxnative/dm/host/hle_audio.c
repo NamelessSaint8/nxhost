@@ -178,7 +178,7 @@ static OSStatus au_render(void *ctx, AudioUnitRenderActionFlags *f, const AudioT
       if (mute) memset(bl->mBuffers[0].mData, 0, bl->mBuffers[0].mDataByteSize); }
     return noErr;
 }
-#if !TARGET_OS_IPHONE
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
 // Mac DefaultOutput's default 512 device frames can exceed the PCM a game has queued, producing zero-filled gaps.
 // Request about 5 ms of device frames, as front_ios.m asks of the iOS audio session; reapply on device or output-rate changes within the supported range.
 // DM_DBG_AU_FRAMES=N asks N frames instead (1024 = the iOS default, which reproduces the crackling)
@@ -210,7 +210,7 @@ static void au_device_changed(void *ctx, AudioUnit au, AudioUnitPropertyID id, A
 }
 #endif
 static void au_dispose(AudioUnit au) {
-#if !TARGET_OS_IPHONE
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
     // Disposal clears CurrentDevice and notifies listeners. Remove them before the unit tears down its device.
     AudioUnitRemovePropertyListenerWithUserData(au, kAudioOutputUnitProperty_CurrentDevice, au_device_changed, NULL);
     AudioUnitRemovePropertyListenerWithUserData(au, kAudioUnitProperty_StreamFormat, au_device_changed, NULL);
@@ -219,7 +219,7 @@ static void au_dispose(AudioUnit au) {
 }
 static OSStatus au_create(aout *a) {
     AudioComponentDescription d = {.componentType = kAudioUnitType_Output,
-#if TARGET_OS_IPHONE
+#if defined(__APPLE__) && TARGET_OS_IPHONE
                                    .componentSubType = kAudioUnitSubType_RemoteIO,
 #else
                                    .componentSubType = kAudioUnitSubType_DefaultOutput,
@@ -233,7 +233,7 @@ static OSStatus au_create(aout *a) {
                                      .mBytesPerPacket = 2u * ch, .mFramesPerPacket = 1, .mBytesPerFrame = 2u * ch,
                                      .mChannelsPerFrame = ch, .mBitsPerChannel = 16};
     AURenderCallbackStruct cb = {au_render, a};
-#if !TARGET_OS_IPHONE
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
     const AudioUnitPropertyID props[] = {kAudioOutputUnitProperty_CurrentDevice, kAudioUnitProperty_StreamFormat};
     for (unsigned i = 0; i < sizeof props / sizeof *props; i++) {
         OSStatus st = AudioUnitAddPropertyListener(a->au, props[i], au_device_changed, NULL);

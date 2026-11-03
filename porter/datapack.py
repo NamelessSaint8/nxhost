@@ -37,6 +37,7 @@ def files_folder(package): return f'/sdcard/Android/data/{package}/files'
 
 
 def build(dst, *, profile, version, display, patched, romfs, shaders, aoc=None, language='en-US', package=None, build=None, env=(), files=None, progress=None):
+    romfs = Path(romfs) if romfs else romfs   # romfs.py's Path subclass answers is_file() with False; a real pathlib.Path here
     """Write the pack to dst (replacing it). profile: the AndroidProfile; package: the app's, when not the profile's; build: the build folder, named in the sidecar;
     env: more env.txt rows, after the profile's; files: {name in the pack: source} (the 60 fps memory writes, fpslock.tsv). Returns the manifest"""
     package = package or profile.package
@@ -48,12 +49,15 @@ def build(dst, *, profile, version, display, patched, romfs, shaders, aoc=None, 
     for what, src, sub in (('the rewritten modules', patched, 'mods'), ('the RomFS', romfs, 'RomFS'), ('the DLC', aoc, 'aoc')):
         if not src: continue
         if progress: progress(what)
+        if sub == 'RomFS' and src.is_file():   # upstream's RomFS image: one file the host reads in place of the folder (hle_fs.c)
+            link_or_copy(src, tmp / 'RomFS.img'); n += 1; b += src.stat().st_size; continue
         dn, db = link_tree(src, tmp / sub); n += dn; b += db
     link_or_copy(shaders, tmp / 'shaders.dmsv'); n += 1; b += shaders.stat().st_size
     for name, src in (files or {}).items(): shutil.copyfile(src, tmp / name); n += 1; b += Path(src).stat().st_size
     rows = [f'# Written by nx2android\'s porter for {profile.name} ({profile.id}); KEY=VALUE per line, read by the app at launch',
             f'DM_LANG={language}']
     if aoc: rows.append(f'DM_AOC_DIR={files_folder(package)}/aoc')
+    if romfs and Path(romfs).is_file(): rows.append(f'DM_ROMFS={files_folder(package)}/RomFS.img')   # the host's default is the RomFS folder beside env.txt
     rows += profile.env + list(env)
     (tmp / 'env.txt').write_text('\n'.join(rows) + '\n', encoding='utf-8', newline='\n')
     if profile.settings: (tmp / 'settings.txt').write_text(''.join(f'{k}={v}\n' for k, v in profile.settings.items()), encoding='utf-8', newline='\n')

@@ -33,6 +33,7 @@ _unimpl_entry:
 
 // The gate stacks' tops, one per gate slot (thread.c guest_gate_stack). Page-aligned, so that stub k reaches its entry with adrp and an immediate offset alone
     .globl _dm_gate_top
+    .private_extern _dm_gate_top
     .zerofill __DATA,__bss,_dm_gate_top,8192,12      // 8 × 1024 (= thread.c GATE_SLOTS)
 
 // Stub k (16 bytes) serves gate slot k: x29 = the return point (the gate block holds the guest's x29 at [sp] and reloads it after the gate), x30 = the slot's gate stack top

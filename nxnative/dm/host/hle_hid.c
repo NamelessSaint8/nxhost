@@ -172,7 +172,16 @@ static void keys_parse(const char *spec) {
     // other, and a group listed after a long repeat waited for all of it. A stable sort keeps the listed order of steps at the same time; times and frame numbers are not comparable, so a list
     // that mixes them keeps its listed order
     int mixed = 0; for (int i = 1; i < g_nsteps; i++) mixed |= g_steps[i].frame != g_steps[0].frame;
-    if (!mixed && g_nsteps > 1) mergesort(g_steps, (size_t)g_nsteps, sizeof *g_steps, step_cmp);   // stable (BSD libc), and not quadratic for long interleaved repeats
+    if (!mixed && g_nsteps > 1) {   // stable, and not quadratic for long interleaved repeats (mergesort is BSD libc alone)
+        key_step *tmp = malloc((size_t)g_nsteps * sizeof *g_steps); if (!tmp) return; memcpy(tmp, g_steps, (size_t)g_nsteps * sizeof *g_steps);
+        for (size_t w = 1; w < (size_t)g_nsteps; w *= 2)   // bottom-up merge: equal keys keep their order
+            for (size_t l = 0; l < (size_t)g_nsteps; l += 2 * w) {
+                size_t m = l + w < (size_t)g_nsteps ? l + w : (size_t)g_nsteps, r = l + 2 * w < (size_t)g_nsteps ? l + 2 * w : (size_t)g_nsteps, i = l, j = m, k = l;
+                while (i < m && j < r) tmp[k++] = step_cmp(&g_steps[j], &g_steps[i]) < 0 ? g_steps[j++] : g_steps[i++];
+                while (i < m) tmp[k++] = g_steps[i++]; while (j < r) tmp[k++] = g_steps[j++];
+            }
+        memcpy(g_steps, tmp, (size_t)g_nsteps * sizeof *g_steps); free(tmp);
+    }
 }
 // DM_KEYS=@<file>: the steps are read from the file (a DM_REC recording as it is). An environment value is capped by ARG_MAX (1 MiB for arguments and environment together on macOS,
 // about 40,000 recorded steps), and iOS's env.txt takes one line per switch; a relative path is from the working directory (Documents on iOS)

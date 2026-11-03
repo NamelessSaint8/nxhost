@@ -54,7 +54,7 @@ for sh in sorted((DM / 'android/shaders').glob('*.*')):
     hdr.write_text(f'// generated from dm/android/shaders/{sh.name} by build.py (glslc)\nstatic const uint32_t {sh.stem}_{sh.suffix[1:]}_spv[] = {{{body}}};\n')
 
 def srcs(*globs): return [p for g in globs for p in sorted(DM.glob(g))]
-HOST = [p for p in srcs('host/*.c') if p.name not in ('hle_movie_avc.c',)]   # VideoToolbox: dm/android/movie_avc.c instead
+HOST = [p for p in srcs('host/*.c') if p.name not in ('hle_movie_avc.c', 'hle_movie_av1.c', 'hle_cheats.c')]   # VideoToolbox / GCD: dm/android/movie_avc.c / movie_av1.c / cheats_stub.c instead
 GFX = srcs('gfx/*.c', 'gfx/nvn/*.c', 'gfx/tex/*.c')
 PORT = [p for p in srcs('android/compat/*.c', 'android/*.c') if not (p.name == 'gfx_null.c' and a.gfx != 'null') and not (p.name.startswith('gfx_vk') and a.gfx != 'vk')]   # one graphics backend
 ASM = srcs('host/entry.S', 'gfx/nvn/nvn_entry.S', 'gfx/nvn/nvn_thunks.S')
@@ -87,8 +87,9 @@ def compile_one(s):
     src = s
     if s.suffix == '.S':   # Mach-O assembly → ELF
         src = gen / (s.stem + '.elf.S')
-        if not src.exists() or src.stat().st_mtime < s.stat().st_mtime:
-            subprocess.run([sys.executable, str(DM / 'android/tools/darwin2elf.py'), str(s), str(src)], check=True)
+        conv = DM / 'android/tools/darwin2elf.py'
+        if not src.exists() or max(s.stat().st_mtime, conv.stat().st_mtime) > src.stat().st_mtime:
+            subprocess.run([sys.executable, str(conv), str(s), str(src)], check=True)
     if not dep_stale(o, d, src): return s, o, 0, ''
     flags = VPX_FLAGS if 'third_party/libvpx' in str(rel).replace(os.sep, '/') else [TARGET] + DBG if s.suffix == '.S' else CFLAGS + INC
     r = subprocess.run([CC] + flags + ['-MMD', '-MF', str(d), '-c', str(src), '-o', str(o)], capture_output=True, text=True, errors='replace')

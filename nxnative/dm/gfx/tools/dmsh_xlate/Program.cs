@@ -122,7 +122,7 @@ static class SwshXlate
         public bool QueryGeometryInputFixed() => _job["geometry_topology"] != null;
         // Compute lowering must emit passthrough vertices explicitly: Metal
         // cannot supply the native NV geometry-passthrough stage afterwards.
-        public bool QueryHostSupportsGeometryShaderPassthrough() => _job["geometry_topology"] == null;
+        public bool QueryHostSupportsGeometryShaderPassthrough() => _job["geometry_topology"] == null && !(_job["gs_passthrough"] is JsonNode n && !(bool)n);
         public GpuGraphicsState QueryGraphicsState()
         {
             Array32<AttributeType> attr = default; Array8<AttributeType> fout = default;
@@ -146,7 +146,6 @@ static class SwshXlate
         public bool QueryHasUnalignedStorageBuffer() => _job["sb_align"] != null;
         // Job "gs_passthrough" = false (the Android chain): passthrough geometry shaders (Maxwell's fast GS) are written out as ordinary ones. VK_NV_geometry_shader_passthrough is NVIDIA's
         // alone; with its capability declared, Adreno refused every pipeline of Xenoblade Chronicles 3's effect geometry shaders (VK_ERROR_UNKNOWN)
-        public bool QueryHostSupportsGeometryShaderPassthrough() => !(_job["gs_passthrough"] is JsonNode n && !(bool)n);
         JsonObject Xfb(int b) => _job["xfb"] is JsonArray a && b < a.Count ? a[b] as JsonObject : null;
         public bool QueryTransformFeedbackEnabled() => _job["xfb"] != null;
         public ReadOnlySpan<byte> QueryTransformFeedbackVaryingLocations(int bufferIndex)

@@ -6,7 +6,7 @@
 #include <string.h>
 
 // ---------------- statistics and diagnostics: nothing to report ----------------
-void mtl_vbuf_stats(uint64_t *a, uint64_t *b, uint64_t *c, uint64_t *d) { *a = *b = *c = *d = 0; }
+void mtl_vbuf_stats(uint64_t *a, uint64_t *b, uint64_t *c, uint64_t *d, uint64_t *e, uint64_t *f) { *a = *b = *c = *d = *e = *f = 0; }
 void mtl_res_counts(uint32_t tick, const char *why) { (void)tick; (void)why; }
 void mtl_res_snapshot(mtl_res_count *out) { memset(out, 0, sizeof *out); }
 void mtl_alloc_stats(uint64_t *w, uint64_t *g, int *n) { *w = *g = 0; *n = 0; }

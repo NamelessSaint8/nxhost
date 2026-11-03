@@ -135,7 +135,12 @@ static int pack_entry(void *c, const char *abs, const char *rel, const struct st
     size_t pl = strlen(rel); int file = S_ISREG(st->st_mode);
     if (pl > UINT16_MAX) return -1;
     uint8_t h[ENT] = {(uint8_t)(file ? 2 : 1)}; uint16_t pl16 = (uint16_t)pl, gl16 = (uint16_t)gl;
-    uint64_t size = file ? (uint64_t)st->st_size : 0; int64_t mt = st->st_mtimespec.tv_sec;
+    uint64_t size = file ? (uint64_t)st->st_size : 0;
+#if defined(__APPLE__)
+    int64_t mt = st->st_mtimespec.tv_sec;
+#else
+    int64_t mt = st->st_mtim.tv_sec;
+#endif
     memcpy(h + 2, &pl16, 2); memcpy(h + 4, &gl16, 2); memcpy(h + 8, &size, 8); memcpy(h + 16, &mt, 8);
     CC_SHA256_Update(&k->sha, h, 16); CC_SHA256_Update(&k->sha, rel, (CC_LONG)pl); CC_SHA256_Update(&k->sha, guest, (CC_LONG)gl);
     if (k->out && (fwrite(h, 1, ENT, k->out) != ENT || fwrite(rel, 1, pl, k->out) != pl || fwrite(guest, 1, (size_t)gl, k->out) != (size_t)gl)) return -1;

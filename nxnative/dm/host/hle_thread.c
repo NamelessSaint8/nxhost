@@ -694,8 +694,8 @@ void svc_thread_dump(void) {
         // pushed (x30 = the return address into the wrapper's caller, which the backtrace skips: the wrappers are leaf functions), the guest stack at the SVC follows at +16.
         // Read page by page up to the first unreadable one: a thread waiting near its stack top (a shallow worker) has PROT_NONE stack region above it, and one read would fail whole
         uint64_t *sr = atomic_load(&t->svc_regs);
-        if (sr && t->wkind) { uint64_t stk[160]; size_t got = 0; vm_address_t sa = (vm_address_t)sr[99];
-            while (got < sizeof stk) { vm_size_t n = sizeof stk - got, g4 = 0, room = vm_page_size - ((sa + got) & (vm_page_size - 1)); if (n > room) n = room;
+        if (sr && t->wkind) { uint64_t stk[160]; size_t got = 0; vm_address_t sa = (vm_address_t)sr[99]; const vm_size_t pg = (vm_size_t)getpagesize();
+            while (got < sizeof stk) { vm_size_t n = sizeof stk - got, g4 = 0, room = pg - ((sa + got) & (pg - 1)); if (n > room) n = room;
                 if (vm_read_overwrite(mach_task_self(), sa + got, n, (vm_address_t)((uint8_t *)stk + got), &g4) || g4 != n) break;
                 got += n; }
             if (got >= 16 && atomic_load(&t->svc_regs) == sr) {   // still in that SVC: the words are its stack, not a later frame's
