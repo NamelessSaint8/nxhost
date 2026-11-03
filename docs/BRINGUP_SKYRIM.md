@@ -35,6 +35,10 @@ Reported by the player, 2026-11-03: armour, hair, eyes and foliage rendered, but
 - **Verified on the device:** `skipped (no program 0, no target 0, no pipeline 0)` (was 1.58 M), zero pipeline failures, and the player confirms bodies, trunks and legs are all back.
 - **Found on the way, and wrong turns worth remembering:** `DM_VK_PROGBIND=1` (a bind inventory) is what produced the sequence; the "packaged textures: first uploads 0" line is a stub on Android and meant nothing; the fragment-depth variant, the one swizzled texture and the colour write mask all tested clean; the pipeline must be built with a *validated* SPIR-V blob (a hand-assembled one was refused with `-13 = VK_ERROR_INVALID_SHADER_NV`).
 
+### Playing it with the on-screen gamepad
+
+Skyrim has no inventory key: **Plus opens the pause menu**, and **ZL / ZR switch its category tabs** (ITEMS, MAGIC, SKILLS, MAP); the item list is the right-hand column, `A` equips or uses, `B` backs out one level. The overlay draws every button the game needs (`overlay_default.tsv`): `+` and `−` at the top centre, `ZL`/`ZR` at the top corners (x 0.06 / 0.94, y 0.30), `L`/`R` above them, a d-pad at (0.30, 0.80) — **d-pad Up is the favourites menu**, the quick weapon/spell switch — and a right stick at (0.74, 0.80). The tab switch was verified on the device: `ZR` in the pause menu changed the tab (14 % of the frame, the quest name changing from `UNBOUND` to `BEFORE THE STORM`).
+
 ### The route, as a script
 
 `01000A10041EA000_build/route_skyrim.py` drives a launch from the title screen into the game, looking at the screen after every press (OCR through `scripts/ocr_shot.swift`) instead of firing a timed script:
