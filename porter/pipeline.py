@@ -394,7 +394,7 @@ class Port:
     def data(self):
         PROG.stage('data pack', step='linking')
         dst = self.o.out / f'{app_stem(self.g, self.app_name)}-data'
-        man = datapack.build(dst, profile=self.ap, version=self.pkg_ver, display=self.display, patched=self.patched, romfs=Path(nsp.rfs.source(self.game)), shaders=self.dmsv,
+        man = datapack.build(dst, profile=self.ap, version=self.pkg_ver, display=self.display, patched=self.patched, romfs=Path(nsp.rfs.source(self.game)), shaders=self.dmsv, fonts=(NXNATIVE / 'dm/font/standard.ttf', NXNATIVE / 'dm/font/nintendo_ext.ttf'),
                              aoc=self.aoc, language=self.lang, package=self.package, build=self.work, env=self.fps_env, files=self.fps_files, progress=lambda what: PROG.set(step=f'linking {what}'))
         self.data_path = dst; self.result['data'] = str(dst)
         PROG.end(f'{man["files"]:,} files, {man["bytes"] / 2**30:.1f} GB')

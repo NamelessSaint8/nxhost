@@ -14,7 +14,7 @@ from pathlib import Path
 
 MANIFEST = 'nx2a-data.json'
 KEEP_ON_DEVICE = ('settings.txt',)          # the player's choices win over the pack's defaults
-OWNED = ('mods', 'RomFS', 'aoc')            # folders the pack owns on the device: files there that the pack lacks are stale (an older version's) and removed
+OWNED = ('mods', 'RomFS', 'aoc', 'font')    # folders the pack owns on the device: files there that the pack lacks are stale (an older version's) and removed
 SIDECAR = '.build'                          # <pack>.build beside the pack: the build folder's absolute path (D-14)
 
 
@@ -36,7 +36,7 @@ def link_tree(src, dst):   # (files, bytes)
 def files_folder(package): return f'/sdcard/Android/data/{package}/files'
 
 
-def build(dst, *, profile, version, display, patched, romfs, shaders, aoc=None, language='en-US', package=None, build=None, env=(), files=None, progress=None):
+def build(dst, *, profile, version, display, patched, romfs, shaders, aoc=None, language='en-US', package=None, build=None, env=(), files=None, progress=None, fonts=()):
     romfs = Path(romfs) if romfs else romfs   # romfs.py's Path subclass answers is_file() with False; a real pathlib.Path here
     """Write the pack to dst (replacing it). profile: the AndroidProfile; package: the app's, when not the profile's; build: the build folder, named in the sidecar;
     env: more env.txt rows, after the profile's; files: {name in the pack: source} (the 60 fps memory writes, fpslock.tsv). Returns the manifest"""
@@ -53,10 +53,15 @@ def build(dst, *, profile, version, display, patched, romfs, shaders, aoc=None, 
             link_or_copy(src, tmp / 'RomFS.img'); n += 1; b += src.stat().st_size; continue
         dn, db = link_tree(src, tmp / sub); n += dn; b += db
     link_or_copy(shaders, tmp / 'shaders.dmsv'); n += 1; b += shaders.stat().st_size
+    for f in fonts:   # the shared-font stand-ins the host needs on Android (the device's own Roboto is Latin-only: a game that measures JIS text dies on it, dm/font/)
+        if Path(f).is_file(): link_or_copy(f, tmp / 'font' / Path(f).name); n += 1; b += Path(f).stat().st_size
     for name, src in (files or {}).items(): shutil.copyfile(src, tmp / name); n += 1; b += Path(src).stat().st_size
     rows = [f'# Written by nx2android\'s porter for {profile.name} ({profile.id}); KEY=VALUE per line, read by the app at launch',
             f'DM_LANG={language}']
     if aoc: rows.append(f'DM_AOC_DIR={files_folder(package)}/aoc')
+    if fonts:
+        rows.append(f'DM_SHARED_FONT={files_folder(package)}/font/standard.ttf')
+        rows.append(f'DM_SHARED_FONT_EXT={files_folder(package)}/font/nintendo_ext.ttf')   # the host takes these over its device fallbacks
     if romfs and Path(romfs).is_file(): rows.append(f'DM_ROMFS={files_folder(package)}/RomFS.img')   # the host's default is the RomFS folder beside env.txt
     rows += profile.env + list(env)
     (tmp / 'env.txt').write_text('\n'.join(rows) + '\n', encoding='utf-8', newline='\n')
