@@ -480,7 +480,8 @@ def title_of(path, from_package=None):   # the ticket name (the first 16 digits 
         if re.match(r'[0-9A-Fa-f]{32}\.tik$', n): return int(n[:16], 16)
     m = re.search(r'\[([0-9A-Fa-f]{16})\]', path.name)
     if m: return int(m.group(1), 16)
-    return from_package(path) if from_package else None   # an NSP without a ticket (a standard-crypto dump, a repack) and without a tag (LNPANDY/NX2Apple#177)
+    r = from_package(path) if from_package else None   # an NSP without a ticket (a standard-crypto dump, a repack) and without a tag (LNPANDY/NX2Apple#177): (title ID, version) from its meta NCA
+    return r[0] if isinstance(r, tuple) else r
 
 
 @contextlib.contextmanager
@@ -497,7 +498,8 @@ def package_title_reader(repo, keys, env):
             try: run([nx[0], keys, '--title', path], log, env=env, ok=(5,))
             except BuildError: return None
             m = re.search(r'^title ([0-9a-f]{16})$', log.read_text(errors='replace'), re.M)
-            return int(m.group(1), 16) if m else None
+            ver = re.search(r'^version (\d+)$', log.read_text(errors='replace'), re.M)
+            return (int(m.group(1), 16), int(ver.group(1))) if ver else (int(m.group(1), 16), None) if m else None
         def contents(path):   # a merged package's content metas: [(type, title ID, version)] (`nx_extract <keys> --contents <package>`), None when they cannot be read
             if not nx:
                 if not shutil.which('dotnet', path=env.get('PATH')): raise BuildError(f'{path.name} holds several titles (base game, update, DLC in one file): reading them needs dotnet (.NET SDK 10)')
@@ -548,9 +550,10 @@ def scan_nsps(nsp_dir, from_package=None, contents_of=None, want=None):
                 for t, i, v in cs: add(p, i, v if t != 'Application' else None)
                 continue
             say(f'[RED] {p.name} holds several content metas, which could not be read (logs/contents.log of the title probe): it counts as the one title its ticket or name gives')
+        r = from_package(p) if from_package else None   # asked only when neither the ticket nor a tag named it: the meta NCA's version is the truth a [vN] tag only repeats
         tid = title_of(p, from_package)
         if tid is None: unknown.append(p); continue
-        add(p, tid, version_of(p))
+        add(p, tid, (r[1] if isinstance(r, tuple) and r[0] == tid else None) or version_of(p))
     if len(fams) == 1 and len(unknown) == 1 and next(iter(fams.values()))['base'] is None:   # a base game converted from a cartridge may have neither tags nor a ticket; build IDs are checked afterwards
         next(iter(fams.values()))['base'] = unknown[0]
     if not fams: raise BuildError(f'no NSP with a readable title ID in {nsp_dir}')

@@ -41,10 +41,10 @@ static class P {
         // always names the one it packs. Without it every Application content meta's NCAs are kept and the lowest Program NCA is the game
         ulong? app = null; int ai = Array.IndexOf(a, "--app");
         if (ai >= 0 && ai + 1 < a.Length) { app = Convert.ToUInt64(a[ai + 1], 16); var rest = new List<string>(a); rest.RemoveRange(ai, 2); a = rest.ToArray(); }
-        if (a.Length == 3 && a[1] == "--title") return Title(ExternalKeyReader.ReadKeyFile(a[0]), a[2]);
-        if (a.Length == 3 && a[1] == "--contents") return Contents(ExternalKeyReader.ReadKeyFile(a[0]), a[2]);
+        if (a.Length == 3 && a[1] == "--title") return Title(LoadKeys(a[0]), a[2]);
+        if (a.Length == 3 && a[1] == "--contents") return Contents(LoadKeys(a[0]), a[2]);
         if (a.Length < 4) { Console.Error.WriteLine("usage: nx_extract <prod.keys> <base.nsp> <update.nsp|-> <out dir> [base RomFS dir] [--app <title ID>] [--romfs-image|--manifest] [--allow-damaged]\n       nx_extract <prod.keys> --aoc <dlc.nsp> <out dir or image> [<DLC title ID>] [--romfs-image]\n       nx_extract <prod.keys> --title <nsp|nsz|xci|xcz>\n       nx_extract <prod.keys> --contents <nsp|nsz|xci|xcz>"); return 2; }
-        KeySet ks = ExternalKeyReader.ReadKeyFile(a[0]);
+        KeySet ks = LoadKeys(a[0]);
         if (a[1] == "--aoc") return Aoc(ks, a[2], a[3], image, a.Length > 4 ? Convert.ToUInt64(a[4], 16) : null);
         // each by its own content meta: a merged package (base game + update + DLC in one NSP, a cartridge dump with its update) is given as both the base game and the update,
         // and the base game's Program NCA and the update's have the same title ID, so without the filter the update would be layered on itself or on the wrong base
@@ -94,11 +94,20 @@ static class P {
         return Damaged();
     }
 
+    // prod.keys, plus a title.keys beside it when there is one: rights-ID = title-key lines, the title keys of console-dumped e-shop titles whose personalized tickets
+    // carry no key themselves (their .tik names the title as a common one's does, and the key from title.keys decrypts it). Nothing about the keys is printed
+    static KeySet LoadKeys(string prod) {
+        string tk = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(prod)) ?? ".", "title.keys");
+        return File.Exists(tk) ? ExternalKeyReader.ReadKeyFile(prod, tk, null, null, KeySet.Mode.Prod) : ExternalKeyReader.ReadKeyFile(prod);
+    }
+
     static int Title(KeySet ks, string path) {
+        List<Nca> ncas = OpenNsp(ks, path);
         ulong? id = null;
-        foreach (Nca n in OpenNsp(ks, path)) if (n.Header.ContentType == NcaContentType.Meta && (id == null || n.Header.TitleId < id)) id = n.Header.TitleId;
+        foreach (Nca n in ncas) if (n.Header.ContentType == NcaContentType.Meta && (id == null || n.Header.TitleId < id)) id = n.Header.TitleId;
         if (id == null) { Console.WriteLine($"[RED] no meta NCA in {Path.GetFileName(path)}"); return 5; }
         Console.WriteLine($"title {id:x16}");
+        foreach (Cnmt c in Metas(ncas)) if (c.TitleId == id) { Console.WriteLine($"version {c.TitleVersion.Version}"); break; }   // the build's own number, which a file name's [vN] tag only repeats
         return 0;
     }
 
@@ -177,7 +186,7 @@ static class P {
             IStorage st = f.Release().AsStorage();
             if (e.Name.EndsWith(".tik", StringComparison.OrdinalIgnoreCase)) {
                 byte[] t = new byte[0x2c0]; st.Read(0, t).ThrowIfFailure();
-                if (t[0x281] != 0) { Console.Error.WriteLine($"[RED] {e.Name} is not a common ticket; supply the title key separately"); continue; }
+                if (t[0x281] != 0) { Console.Error.WriteLine($"[RED] {e.Name} is not a common ticket (a personalized one): its title key goes in a title.keys beside the prod.keys (rights id = key)"); continue; }
                 ks.ExternalKeySet.Add(new RightsId(t.AsSpan(0x2a0, 0x10)), new AccessKey(t.AsSpan(0x180, 0x10))).ThrowIfFailure();
             } else if (e.Name.EndsWith(".nca", StringComparison.OrdinalIgnoreCase)) { ncas.Add(new Nca(ks, st)); ids.Add(e.Name[..e.Name.IndexOf('.')].ToLowerInvariant()); }
         }
