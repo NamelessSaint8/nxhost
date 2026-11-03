@@ -952,7 +952,7 @@ def derive_profile(g, pdir, ver, d, mods, app=None, shader_only=False):
         # Registered cuts stay the same file: patch_nso.py deduplicates real paths, so an external profile must not register copied claims for the same builds.
         if shader_only and p.name == 'patches.py': (pdir / p.name).symlink_to(p.resolve())
         else: shutil.copyfile(p, pdir / p.name)
-    kf.write_text(f'{key}\n')
+    write_whole(kf, f'{key}\n')
     return disp
 
 

@@ -123,10 +123,10 @@ class Env(unittest.TestCase):   # HARD-06: a port never writes os.environ; every
 
     def test_nx_extract_gets_env(self):   # nx_extract's apphost finds .NET 10 through DOTNET_ROOT in the env it is given
         envs, E = [], {'DOTNET_ROOT': 'x'}
-        def run(cmd, log, env=None, **k): envs.append(env); Path(cmd[-1] if cmd[2] == '--aoc' else cmd[4]).mkdir(parents=True)
+        def run(cmd, log, env=None, **k): envs.append(env); Path(cmd[4]).mkdir(parents=True)
         nsp.run = run
         base = self.t / 'base.nsp'; base.write_bytes(b'\0'); (self.t / 'logs').mkdir()
-        nsp.extract('nx', 'keys', self.t / 'ex', 'v0', base, None, None, self.t / 'logs', {'romfs_marker': 'm'}, env=E)
+        nsp.extract('nx', 'keys', self.t / 'ex', 'v0', base, None, None, self.t / 'logs', {'romfs_marker': 'm'}, 0x1000000000000, env=E)
         nsp.extract_aoc('nx', 'keys', pipeline.NXNATIVE, self.t, 0x0100000000AAA000, {'dlc': [(0x0100000000AAB001, 0, base)]}, self.t / 'logs', env=E)
         self.assertEqual(envs, [E, E])
 
