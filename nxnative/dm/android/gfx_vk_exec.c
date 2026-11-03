@@ -663,7 +663,7 @@ typedef struct {
     uint32_t nbind; struct { uint32_t binding, stride, rate, divisor; } bind[17];
     uint32_t ncol, cfmt[8], dfmt, samples, a2c, blend_en, logic_en, logic_op, wmask[8];
     struct { uint32_t src, dst, srca, dsta, eq, eqa; } bl[8];
-    uint32_t clip_neg1, alt, fdz, fdz_pad;   // fdz: the fragment shader's variant that writes gl_FragDepth = gl_FragCoord.z (fdz below)
+    uint32_t clip_neg1, alt, fdz, depth_only;   // fdz: the fragment shader's variant that writes gl_FragDepth = gl_FragCoord.z; depth_only: no pixel shader, depth written from the vertex stage (a depth prepass)
     uint64_t um[3], im[3];   // each stage's sampled bindings given integer views (vk_shader_module)
 } pkey;
 static nvn_hmap g_pipes = {.klen = sizeof(pkey)}; static pthread_mutex_t g_pipe_mu = PTHREAD_MUTEX_INITIALIZER;   // the replay thread and the prewarm threads
@@ -742,6 +742,23 @@ static VkPipeline build_pipeline(const pkey *k, VkPipelineLayout layout, vkshade
     if (stg[0]) xo[0] = (stg[2] ? stg[2]->in_locs : fs ? fs->in_locs : 0) & ~stg[0]->out_locs;
     if (stg[2]) xo[2] = (fs ? fs->in_locs : 0) & ~stg[2]->out_locs;
     for (int i = 0; i < 3; i++) if (stg[i] && !(i == 1 && k->raster_discard)) ss[ns++] = (VkPipelineShaderStageCreateInfo){VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, NULL, 0, fl[i], vk_shader_module(stg[i], k->um[i], k->im[i], k->alt && !k->um[i] && !k->im[i] && !xo[i] ? 1u << 31 : xo[i], i == 1 && k->fdz), "main", NULL};
+    VkShaderModule nomod = VK_NULL_HANDLE;
+    if (k->depth_only && !k->raster_discard && !stg[1]) {
+        // An empty fragment shader, so the pipeline is valid and no colour is written: the draw writes depth only, as a program without a pixel shader
+        // does on the hardware. 45 words of SPIR-V 1.0, from glslangValidator on "#version 450\nvoid main() {}", checked with spirv-val
+        static const uint32_t noop[] = {
+            0x07230203u, 0x00010000u, 0x0008000bu, 0x00000006u, 0x00000000u, 0x00020011u, 0x00000001u, 0x0006000bu,
+            0x00000001u, 0x4c534c47u, 0x6474732eu, 0x3035342eu, 0x00000000u, 0x0003000eu, 0x00000000u, 0x00000001u,
+            0x0005000fu, 0x00000004u, 0x00000004u, 0x6e69616du, 0x00000000u, 0x00030010u, 0x00000004u, 0x00000007u,
+            0x00030003u, 0x00000002u, 0x000001c2u, 0x00040005u, 0x00000004u, 0x6e69616du, 0x00000000u, 0x00020013u,
+            0x00000002u, 0x00030021u, 0x00000003u, 0x00000002u, 0x00050036u, 0x00000002u, 0x00000004u, 0x00000000u,
+            0x00000003u, 0x000200f8u, 0x00000005u, 0x000100fdu, 0x00010038u,
+        };
+        VkShaderModuleCreateInfo smi = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, NULL, 0, sizeof noop, noop};
+        VkResult sr = vkCreateShaderModule(V.dev, &smi, NULL, &nomod);
+        if (sr == VK_SUCCESS) ss[ns++] = (VkPipelineShaderStageCreateInfo){VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, NULL, 0, VK_SHADER_STAGE_FRAGMENT_BIT, nomod, "main", NULL};
+        else VKRED_ONCE(90, "the empty fragment shader for a depth-only draw was refused by the driver (%d)", sr);
+    }
     VkVertexInputAttributeDescription ad[16]; VkVertexInputBindingDescription bd[17]; VkVertexInputBindingDivisorDescriptionEXT dd[17]; uint32_t ndd = 0;
     for (uint32_t i = 0; i < k->nattr; i++) ad[i] = (VkVertexInputAttributeDescription){k->attr[i].loc, k->attr[i].binding, (VkFormat)k->attr[i].fmt, k->attr[i].off};
     for (uint32_t i = 0; i < k->nbind; i++) { bd[i] = (VkVertexInputBindingDescription){k->bind[i].binding, k->bind[i].stride, (VkVertexInputRate)k->bind[i].rate};
@@ -763,8 +780,11 @@ static VkPipeline build_pipeline(const pkey *k, VkPipelineLayout layout, vkshade
     // env line flips it in a running game and the player can say whether the missing material appears
     const char *nb = getenv("DM_VK_NOBLEND"), *nw = getenv("DM_VK_NOWMASK");   // read per pipeline build (pipelines are keyed and reused, so this is rare)
     int noblend = nb && atoi(nb) != 0, nowmask = nw && atoi(nw) != 0;
-    for (uint32_t i = 0; i < k->ncol; i++) cba[i] = (VkPipelineColorBlendAttachmentState){noblend ? 0 : ((k->blend_en >> i) & 1), bfac(k->bl[i].src), bfac(k->bl[i].dst), bop(k->bl[i].eq),
-        bfac(k->bl[i].srca), bfac(k->bl[i].dsta), bop(k->bl[i].eqa), nowmask ? 0xf : k->wmask[i]};
+    // A draw with no pixel shader is a depth-only draw: on the GPU the vertex stage runs and the rasterizer writes depth, which is how Skyrim's depth prepass
+    // works (and its shading pass then tests depth EQUAL against what this wrote). Vulkan wants a fragment stage, so an empty one is used and no colour is
+    // written: the depth comes from the vertex stage's position, as on the hardware
+    for (uint32_t i = 0; i < k->ncol; i++) cba[i] = (VkPipelineColorBlendAttachmentState){k->depth_only ? 0 : (noblend ? 0 : ((k->blend_en >> i) & 1)), bfac(k->bl[i].src), bfac(k->bl[i].dst), bop(k->bl[i].eq),
+        bfac(k->bl[i].srca), bfac(k->bl[i].dsta), bop(k->bl[i].eqa), k->depth_only ? 0 : (nowmask ? 0xf : k->wmask[i])};
     VkPipelineColorBlendStateCreateInfo cb = {VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, NULL, 0, k->logic_en, (VkLogicOp)k->logic_op, k->ncol, cba, {0, 0, 0, 0}};
     VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_BLEND_CONSTANTS, VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
                             VK_DYNAMIC_STATE_STENCIL_WRITE_MASK, VK_DYNAMIC_STATE_STENCIL_REFERENCE, VK_DYNAMIC_STATE_DEPTH_BIAS, VK_DYNAMIC_STATE_LINE_WIDTH};
@@ -777,6 +797,7 @@ static VkPipeline build_pipeline(const pkey *k, VkPipelineLayout layout, vkshade
     if (!prp && !V.has_dynrender) return (VkPipeline)1;   // no compatible render pass and no dynamic rendering: no valid pipeline (pass_commit skips such passes)
     VkGraphicsPipelineCreateInfo ci = {VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, prp ? NULL : &rci, 0, ns, ss, &vi, &ia, NULL, &vs, &rs, &ms, &ds, &cb, &dy, layout, prp, 0, VK_NULL_HANDLE, -1};
     VkResult r = vkCreateGraphicsPipelines(V.dev, V.pcache, 1, &ci, NULL, &p);
+    if (nomod != VK_NULL_HANDLE) vkDestroyShaderModule(V.dev, nomod, NULL);   // the empty fragment stage is per pipeline; the pipeline keeps what it needs
     static uint64_t n; uint64_t c = __atomic_add_fetch(&n, 1, __ATOMIC_RELAXED);
     if (r) { LOG("[RED] [vk] graphics pipeline failed (%d): shaders %016llx %016llx %016llx", r, (unsigned long long)k->key[0], (unsigned long long)k->key[1], (unsigned long long)k->key[2]); p = (VkPipeline)1; }
     else if (c % 200 == 0) VKLOG("%llu graphics pipelines", (unsigned long long)c);
@@ -1106,24 +1127,16 @@ static int prepare_draw(int prim, int indexed) {
     int var = g_bis_trace >= 0 && g_draw_i >= g_bis_trace ? g_bis_var : 0; if (g_bis_var) g_tracing = 0;   // full logs only the first time
     g_var_now = 0;
     if (var == 6) vk_end_pass();   // a new pass for this draw
-    // A draw needs a vertex shader and, unless rasterizer discard is on, a pixel one. Say which is missing and what the program holds, once per
-    // combination: a key listed here that the bundle lacks is a translation gap (bind_program already names it), and a key the program does not hold at
-    // all is a bind the game made differently -- the skip used to print nothing beyond its own red line, which named no shader and no program.
-    if (!(S.sh[0] && (S.sh[1] || S.rast_discard))) {
+    // A draw needs a vertex shader. A pixel shader is not required: without one the draw is a depth-only draw -- the vertex stage runs, the rasterizer writes
+    // depth and no colour, which is what a program without a pixel shader does on the hardware and what Skyrim's depth prepass relies on (its shading pass
+    // then tests depth EQUAL). Such draws used to be dropped, which left the depth buffer empty for everything the prepass covered: Skyrim's actor skin, tree
+    // trunks and the player's legs never appeared, while foliage (alpha cards, no prepass) and armour did.
+    if (!S.sh[0]) {
         g_vkst.skip_prog++;
-        uint64_t k[3] = {0};
-        if (S.prog) for (unsigned i = 0; i < 3; i++) { uint8_t kk[8]; if (!prog_key(S.prog, i, kk)) break; k[i] = key64(kk); }
-        uint64_t sig = (S.sh[0] ? 1u : 0u) | (S.sh[1] ? 2u : 0u) | (S.rast_discard ? 4u : 0u);
-        for (int i = 0; i < 3; i++) sig = sig * 1000003ull + k[i];
-        static uint64_t seen[32]; static int nseen; int known = 0;
-        for (int j = 0; j < nseen; j++) if (seen[j] == sig) known = 1;
-        if (!known && nseen < 32) { seen[nseen++] = sig;
-            VKLOG("[RED] [vk] draw skipped: vertex %s, pixel %s, rasterizer discard %u; the program holds %016llx %016llx %016llx, its last bind had stage mask %#x",
-                  S.sh[0] ? "bound" : "missing", S.sh[1] ? "bound" : "missing", S.rast_discard,
-                  (unsigned long long)k[0], (unsigned long long)k[1], (unsigned long long)k[2], S.prog ? S.prog_mask : 0);
-        }
+        static int once; if (!once++) VKLOG("[RED] [vk] draw skipped: no vertex shader bound");
         return 0;
     }
+    if (!S.sh[1] && !S.rast_discard) { static int once; if (!once++) VKLOG("[vk] a draw without a pixel shader runs depth-only (a depth prepass)"); }
     if (g_x_nogs && S.sh[2]) return 0;   // DM_VK_X_NOGS=1 (live, A/B): draws with a geometry shader are left out
     for (int i = 0; i < g_x_nskipvs; i++) if (S.sh[0]->key == g_x_skipvs[i]) return 0;   // DM_VK_X_SKIPVS=<key>[,<key>...] (live, up to 8): draws with these vertex shaders are left out
     // A run of draws with rasterizer discard gets a pass of its own: the pass ends where such a run begins and where it ends (and begin_pass puts a barrier
@@ -1211,6 +1224,7 @@ static int prepare_draw(int prim, int indexed) {
         }
     }
     k.clip_neg1 = !g_depth_zero;
+    k.depth_only = (!S.sh[1] && !k.raster_discard) ? 1u : 0u;   // no pixel shader: the draw writes depth only (see build_pipeline)
     // layout and pipeline
     VkDescriptorSetLayout dsl[5] = {0}; int nsets = 0;
     for (int st = 0; st < 3; st++) if (S.sh[st] && !(st == 1 && k.raster_discard)) { dsl[S.sh[st]->set] = S.sh[st]->dsl; if (S.sh[st]->set + 1 > nsets) nsets = S.sh[st]->set + 1; }
