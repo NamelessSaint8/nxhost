@@ -16,6 +16,28 @@ The blocker described further down is solved, and it was not a lost job wake-up.
 - **The intro-skipping overlay is still in place** (`DM_ROMFS_OVERLAY` with `sIntroSequence=`), so what is on screen is the engine's own loading/menu path, not the intro movie. Consecutive `screencap`s differ, so the picture is animating rather than frozen (the next update identifies the screen and drives it).
 - **Diagnostics added this session** (general, not Skyrim patches): `dm_guest_read`/`dm_guest_write` and `DM_CTL poke`, `dm_guest_describe` (a dump that stops short now says where: opened heap, alias offset committed or not), and the alias-region read fix behind all of it.
 
+## Session update: the port is playable — control, saves, streaming
+
+Checked against the "what would make this playable" list, item by item:
+
+- **1. Control: there.** The pause menu opens with `Plus` (`QUEST JOURNAL`, `GENERAL STATS`, `SYSTEM`, `QUICKSAVE`, `LOAD`, `LEVEL 1`, and the clock `Sundas, 10:59 AM, 17th of Last Seed, 4E 201`), and the current quest reads `UNBOUND`. `B` backs out one level at a time (two presses from the pause menu's root). In the world a held `LUp~2` moves the camera/character: the frame changes across its whole upper half, not the idle animation's corner.
+- **2. Input:** stick and buttons reach the game in gameplay, not only in menus (the walk above), and `A`/`Y`/`B`/`Plus` do what the on-screen hints say. Still to check by a player: the prompts for a real pad on Android, where the front end swaps A/B for physical controllers.
+- **3. Saves: both halves work.** The engine wrote them by itself during the intro — `…_Save1_E17C50DC_0_507269736F6E6572_536B797269.sav0` and `…_Autosave1_…sav0`, 2.5 MB each, in the app's internal `files/save/Saves` (the name carries the hex of "Prisoner" and "Skyr…"). After a restart the main menu offers `CONTINUE`, and accepting "continue from your last saved game?" loads it and gives control back. Not yet done: a manual save from the pause menu, and quitting to the menu on purpose (the restart above did it for us).
+- **4/5. Streaming and memory:** the alias region holds **2.00 GB** of its 3.21 GB application pool, footprint **1.62 GB**, no refused `MapPhysicalMemory`, no `SetHeapSize OOM`, 298–300 frames per window with 0–2 dropped at p99 33.34 ms (30 fps) through the load, the walk and a menu. Fast travel and a city interior have not been tried yet.
+- **6. The skipped draws: closed.** The message now names them: `draw skipped: vertex bound, pixel missing, rasterizer discard 0; the program holds <key> 0 0; its last bind had stage mask 0x1`. They are draws whose program holds **one** shader — nothing to translate, and nothing rasterizes on hardware either. Finding them exposed a real bug: this backend read `BindProgram`'s stage mask 0 as "all stages" and cleared the shader shadow, where NVN (and the Metal backend) mean "no stage changes" — fixed in `7c3252d4` with a catalogue entry ([A stage mask of 0 replaces no stage](reference/rendering.md#a-stage-mask-of-0-replaces-no-stage)).
+
+### The route, as a script
+
+`01000A10041EA000_build/route_skyrim.py` drives a launch from the title screen into the game, looking at the screen after every press (OCR through `scripts/ocr_shot.swift`) instead of firing a timed script:
+
+```
+python3 route_skyrim.py HA2M2W71              # title → CONTINUE (a save on the device) → control, checked by the pause menu
+python3 route_skyrim.py HA2M2W71 --continue   # the same, explicitly
+python3 route_skyrim.py HA2M2W71 --until intro   # NEW game: creation (Y = Done), name entry (adb Enter), stop at the intro
+```
+
+It handles the `PRESS ANY BUTTON` title screen, and `CONTINUE` versus `NEW` depending on whether the device holds a save.
+
 ## Session update: into a new game, through character creation, into the opening
 
 With the fence fixed the port plays: main menu → New Game → character creation → the cart ride. What was needed to drive it, and what it cost:
