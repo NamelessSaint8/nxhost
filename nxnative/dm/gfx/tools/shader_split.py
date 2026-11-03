@@ -43,6 +43,9 @@
 #   · Frostbite (EA SPORTS FC 27): the CompiledBytecode resources of the bundles its superbundle tables (.toc) list, in its cas files (Oodle Leviathan, decoded by the game's own decoder in the
 #       Mac host), each a VNVN record with one code area and control section (frostbite.py), see frostbite_jobs and frostbite_shaders
 #   · Unreal Engine 3 (Batman: Arkham Knight): shader records in its global shader cache (BMSG) and in the packages (the combined shader cache), whose compressed chunks are Oodle blocks decoded by the game's own decoder in the Mac host, see ue3_body and ue3_shaders
+#   · BSA (Bethesda's archive, The Elder Scrolls V: Skyrim: 89 .bsa under Data, 12.35 GB): the .fxp shader packages inside, each a list of records of a header, a 0x848-byte control section and
+#       its code area right after it (Skyrim - Shaders.bsa holds shadersfx/shaders011.fxp, 23,082 programs: 3,463 vertex, 19,600 pixel and 19 compute, the compute ones' code areas without a header),
+#       see bsa_members, bsa_read, fxp_shaders and bsa_shaders
 # Code area: 0x30 header + (graphics) 0x50 SPH + instructions; header magic 0x12345678 for graphics, 0x12345679 for compute. The control section starts with 0x98761234, +0x704 = code area length,
 #   +0x700 = start of the c1 constant segment within the code area; for compute +0x748 thread group xyz (u32 ×3), +0x754 shared memory bytes (checked one by one against PC reflection on D2R's 22 compute shaders).
 # Stage: BNSH uses the stage slot; BAHS uses bits 10..13 of SPH word 0 (1 vertex 2 hull 3 domain 4 geometry 5 pixel), and a compute header means compute.
@@ -2445,7 +2448,7 @@ def pixel_input_cover(shaders):
         k = min(ins, key=lambda k: (-len(ins[k] & left), k)); cover.append(k); left -= ins[k]
     return cover
 
-SINGLE_STAGE = ('#GLSLC@', '#UE', '#MTSPK@', '#MGFX@', '#NLG', '#PGSO', '#RAW@', '#TFXO@', '#NEEDLE@', '#SNOWDROP@', '#PHYRE@', '#SUMO@', '#NVNSH@')   # sources whose every shader is a program of one stage: GLSLC outputs, Unreal's shader records, MT Framework's shader package (BNSH variations, Unity programs, MSHD and SDF pair theirs);
+SINGLE_STAGE = ('#GLSLC@', '#UE', '#MTSPK@', '#MGFX@', '#NLG', '#PGSO', '#RAW@', '#TFXO@', '#NEEDLE@', '#SNOWDROP@', '#PHYRE@', '#SUMO@', '#NVNSH@', '#FXP@')   # sources whose every shader is a program of one stage: GLSLC outputs, Unreal's shader records, Creation Engine's .fxp records, MT Framework's shader package (BNSH variations, Unity programs, MSHD and SDF pair theirs);
 # Unreal Engine 3's shader caches (ue3_shaders, '#UE3@'); MonoGame's effects, whose passes may name no vertex shader and keep the one bound (Celeste: 10 of its 13 effects draw through SpriteBatch's vertex shader, which is in main); Next Level Games'
 # archives (Luigi's Mansion 3 makes 5,317 programs of one stage each at boot); PlatinumGames' shader objects (Bayonetta 3: one stage each, pg_shader); control sections loose in main
 # (Advance Wars 1+2: Re-Boot Camp's Bink shaders, raw_shaders), which no file pairs; YEBIS's effect file (tfxo_shaders); and Sumo's Ninty_NX descriptors and NVNsh records, one stage
@@ -2539,6 +2542,101 @@ def heaps_shaders(d, label):
     if not found: red(f'{label}: no GLSLC output in //BIN= comments')
     return found
 
+BSA = b'BSA\0'
+LZ4_FRAME = bytes.fromhex('04224d18')
+
+def bsa_string(d, at, where):
+    """A bzstring of a BSA archive: u8 length including the terminating null, then that many bytes → (text, offset after it)"""
+    if not 0 <= at < len(d): red(f'{where}: a name at {at:#x} lies outside the {len(d):#x} bytes there are')
+    n = d[at]
+    raw = span(d, at + 1, n, f'{where}: the {n}-byte name at {at:#x}')
+    if not n or raw[-1]: red(f'{where}: the name at {at:#x} is not null-terminated')
+    return raw[:-1].decode('latin-1'), at + 1 + n
+
+def bsa_members(d, label):
+    """The files of a Bethesda BSA archive, version 0x69 (The Elder Scrolls V: Skyrim on the Switch: all 89 archives under Data are this layout): → (folder, name, offset, stored size, compressed).
+    Header: 'BSA\\0', u32 version, u32 folder record offset (0x24), u32 archive flags, u32 folder count, u32 file count, u32 total folder name length, u32 total file name length, u32 file flags.
+    A folder record is 24 bytes {u64 name hash, u32 file count, 12 bytes this reader does not use}, a file record 16 bytes {u64 name hash, u32 size, u32 offset}.
+    The folder names (bzstrings) and their file records follow the folder records one folder after another; the file names then follow as one null-separated block, and the file data after it.
+    Flag 0x4 of the archive and bit 30 of a file's size mark LZ4-frame entries: u32 uncompressed length, then the frame (the archive flag's size counts that u32, bit 30's does not)."""
+    where = f'{label}: BSA'
+    if len(d) < 0x24: red(f'{where}: {len(d):#x} bytes is shorter than the 0x24-byte header')
+    magic, ver, at, flags, nfold, nfile, nfname, nname, _ = struct.unpack_from('<4s8I', d, 0)
+    if magic != BSA: red(f'{where}: magic {magic!r}, not BSA')
+    if ver != 105: red(f'{where}: version {ver}, not the 0x69 layout this reader knows (24-byte folder records, Skyrim on the Switch)')
+    if not 0x24 <= at <= len(d) - 24 * nfold: red(f'{where}: {nfold} folder records at {at:#x} lie outside the {len(d):#x} bytes there are')
+    pos = at; folders = []
+    for i in range(nfold):
+        h, cnt = struct.unpack_from('<QI', d, pos); pos += 24; folders.append(cnt)
+    names, recs, n = [], [], 0
+    for i, cnt in enumerate(folders):
+        name, pos = bsa_string(d, pos, f'{where} folder {i}')
+        if not 0 <= cnt <= (len(d) - pos) // 16: red(f'{where}: folder {name}: {cnt} file records at {pos:#x} lie outside the {len(d):#x} bytes there are')
+        recs.append([struct.unpack_from('<QII', d, pos + 16 * k) for k in range(cnt)])
+        names.append(name); pos += 16 * cnt; n += cnt
+    if n != nfile: red(f'{where}: the folders hold {n} files, the header says {nfile}')
+    named = sum(len(n.encode('latin-1')) + 1 for n in names)
+    if named != nfname: red(f'{where}: the folder names take {named:#x} bytes, the header says {nfname:#x}')
+    block = span(d, pos, nname, f'{where} file names')
+    fnames = block.split(b'\0')
+    if fnames and fnames[-1] == b'': fnames.pop()
+    if len(fnames) != nfile: red(f'{where}: the name block holds {len(fnames)} names, the header says {nfile}')
+    data_at = pos + nname; i = 0
+    for name, rs in zip(names, recs):
+        for h, size, off in rs:
+            fname = fnames[i].decode('latin-1'); i += 1
+            compressed = bool(size & 0x40000000) or bool(flags & 4)
+            stored = (size & 0x3FFFFFFF) + (4 if size & 0x40000000 else 0) if compressed else size
+            if not data_at <= off <= len(d) - stored: red(f'{where}: {name}/{fname} at {off:#x} ({stored:#x} bytes) lies outside the data ({data_at:#x}..{len(d):#x})')
+            yield name, fname, off, stored, compressed
+
+def bsa_read(d, off, stored, compressed, where):
+    """One member of a BSA archive: stored as it is, or a u32 uncompressed length and an LZ4 frame (bsa_members)"""
+    payload = span(d, off, stored, where)
+    if not compressed: return payload
+    if payload[4:8] != LZ4_FRAME: red(f'{where}: an entry of a compressed archive without an LZ4 frame')
+    usize, = struct.unpack_from('<I', payload, 0)
+    import lz4.frame
+    try: data = lz4.frame.decompress(payload[4:])
+    except lz4.frame.LZ4FrameError as e: red(f'{where}: damaged LZ4 frame ({e})')
+    if len(data) != usize: red(f'{where}: the frame decodes to {len(data):#x} bytes, the entry says {usize:#x}')
+    return data
+
+def fxp_shaders(d, label):
+    """Creation Engine shader packages (.fxp; Skyrim has one, shaders011.fxp in Skyrim - Shaders.bsa, 23,082 programs). A package is a list of records, each a header (magic 0x11223344, its length varies),
+    then a control section (0x848 bytes, its own length at +0x20) and right after it its code area (length at control +0x704). The records are found by their control sections and kept by the triple
+    check: a code magic right after the control's own length, the code length the control names, and a stage from the SPH (graphics) or the thread group at +0x748 (the 19 compute shaders whose code
+    areas have no 0x12345679 header). The engine combines the stages per draw, so every program is single-stage (separable_pairs pairs the vertex outputs)"""
+    out = []
+    for m in re.finditer(re.escape(CTL_MAGIC), d):
+        off = m.start()
+        if off + 0x708 > len(d): continue
+        nctl, = struct.unpack_from('<I', d, off + 0x20)
+        at = off + nctl; ncode, = struct.unpack_from('<I', d, off + 0x704)
+        if not 0x760 <= nctl <= 0x880 or not ncode or at + ncode > len(d): continue
+        magic = d[at:at + 4]
+        if magic in (GFX_MAGIC, CS_MAGIC): st = sph_stage(d[at:at + ncode])
+        elif off + 0x758 <= len(d):
+            x, y, z = struct.unpack_from('<3I', d, off + 0x748)
+            st = 'cs' if 0 < x <= 1024 and 0 < y <= 1024 and 0 < z <= 64 else None
+        else: st = None
+        if not st: continue
+        ctl, code = d[off:off + nctl], d[at:at + ncode]
+        if check(label, st, ctl, code): continue   # a control magic inside code, or a record this reader does not know
+        out.append((f'{label}#FXP@{off:#x}', st, ctl, code))
+    if not out: red(f'{label}: no .fxp shader record')
+    return out
+
+def bsa_shaders(d, label):
+    """The shader packages of a BSA archive (bsa_members): every .fxp entry read (bsa_read) and its records found (fxp_shaders). Skyrim's shaders are all in one entry,
+    shadersfx/shaders011.fxp of Skyrim - Shaders.bsa; the other 88 archives are searched by their directories only, without reading their data"""
+    out = []
+    for folder, name, off, stored, compressed in bsa_members(d, label):
+        if not name.lower().endswith('.fxp'): continue
+        where = f'{label}/{folder.replace(chr(92), "/")}/{name}'
+        out += fxp_shaders(bsa_read(d, off, stored, compressed, where), where)
+    return out
+
 UE_TAG ={'SV': 'vs', 'SH': 'hs', 'SD': 'ds', 'SG': 'gs', 'SP': 'ps', 'SC': 'cs'}
 def main_imports(img):   # the names main imports (its dynamic symbols)
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../tools')); import nso_syms
@@ -2631,6 +2729,10 @@ def scan_file_in(args):
         return rel, uniq_keys(found), var_pairs(found), trees
     if len(args) > 2:   # a range of LINKDATA entries (linkdata_jobs)
         linkdata_shaders(path, rel, args[2], found)
+        return rel, uniq_keys(found), var_pairs(found), trees
+    if head[:4] == BSA:   # a Bethesda BSA archive (The Elder Scrolls V: Skyrim): the .fxp shader packages of its entries (bsa_shaders, fxp_shaders)
+        from romfs import mmap
+        with open(path, 'rb') as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as d: found += bsa_shaders(d, '/' + rel)
         return rel, uniq_keys(found), var_pairs(found), trees
     if head[:4] == BND2:   # a Criterion Bundle 2 (Need for Speed: Hot Pursuit Remastered's SHADERS.BNDL): GLSLC outputs in its zlib resources (bnd2_shaders)
         found += bnd2_shaders(open(path, 'rb').read(), '/' + rel)
@@ -2851,7 +2953,8 @@ def main():
                                             ('MT Framework SPK', any('#MTSPK@' in r[4] for r in rows)), ('MonoGame MGFX', any('#MGFX@' in r[4] for r in rows)),
                                             ('PlatinumGames shader objects', any('#PGSO' in r[4] for r in rows)),
                                             ('Snowdrop shader objects', any('#SNOWDROP@' in r[4] for r in rows)),
-                                            ('Unreal Engine shader code archives', any('#UE' in r[4] for r in rows))) if hit)
+                                            ('Unreal Engine shader code archives', any('#UE' in r[4] for r in rows)),
+                                            ('Creation Engine .fxp packages', any('#FXP@' in r[4] for r in rows))) if hit)
         f.write(f'# kind: evidence  {NOTE} ({kinds} in RomFS + main) → control section + code area keys (dm/gfx/tools/shader_split.py)\n')
         f.write('# column 5 records where each key first appears; no PC shader pairing supplied\n')
         f.write('package\tindex\tstage\tdm_ctl_sha16\tsource\n')
