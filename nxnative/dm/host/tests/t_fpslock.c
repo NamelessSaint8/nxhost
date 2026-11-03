@@ -11,6 +11,29 @@ module_t *g_mod = test_modules;
 int g_nmod;
 static int writes;
 void dm_guest_write_prepare(void *p, size_t n) { (void)p; assert(n == 4 || n == 8); writes++; }
+// The fixture's module memory is host-mapped, which the kernel copy reads: the heap / alias region rules are t_svc_memory's
+size_t dm_guest_read(uint64_t a, void *out, size_t n) { if (a < 0x1000) return 0; memcpy(out, (void *)(uintptr_t)a, n); return n; }
+int dm_guest_write(uint64_t a, const void *src, size_t n) { if (a < 0x1000) return -1; memcpy((void *)(uintptr_t)a, src, n); return 0; }
+void dm_guest_describe(uint64_t a, char *buf, size_t n) { snprintf(buf, n, "address %#llx", (unsigned long long)a); }
+// "memdump <address> <bytes> <path>" (hle_hid.c): the readable prefix goes to the file, and a range the read stops in writes only that prefix
+static void dump(void) {
+    uint8_t src[16]; memset(src, 0x5a, sizeof src);
+    char path[512]; const char *t = getenv("TMPDIR"); snprintf(path, sizeof path, "%s/dm_memdump_test.bin", t ? t : ".");
+    dm_ctl_memdump((uint64_t)(uintptr_t)src, sizeof src, path);
+    FILE *f = fopen(path, "rb"); assert(f); uint8_t got[32]; size_t n = fread(got, 1, sizeof got, f); fclose(f); remove(path);
+    assert(n == sizeof src && !memcmp(got, src, sizeof src));
+    dm_ctl_memdump(0, 8, path);   // below the first page: nothing readable, so an empty file and the log line that says so
+    f = fopen(path, "rb"); assert(f); n = fread(got, 1, sizeof got, f); fclose(f); remove(path);
+    assert(!n);
+    // "poke <address> <value> [bytes]": an eight-byte write (the word a wait polls is 64-bit); a size that is none of 1/2/4/8 or a non-guest
+    // address is refused and writes nothing
+    uint64_t w = 0x1122334455667788ull;
+    dm_ctl_poke((uint64_t)(uintptr_t)src, w, 8);
+    assert(*(uint64_t *)src == w);
+    dm_ctl_poke((uint64_t)(uintptr_t)src, 0x99, 3);
+    assert(*(uint64_t *)src == w);
+    dm_ctl_poke(0, 1, 8);
+}
 
 // adrp / add of a module offset into register r, at word i of the text (module offsets: the text at 0)
 static void cvar(const char *name, uint64_t off) { strcpy(g_mod[0].ue_cvar[g_mod[0].n_ue_cvar].name, name); g_mod[0].ue_cvar[g_mod[0].n_ue_cvar++].off = off; }
@@ -118,6 +141,7 @@ static void check(int which) {
 }
 
 int main(void) {
+    dump();   // the control file's own read, before the cases fork
     // Each process starts the production one-time initialization with a fresh build and target.
     for (int i = 0; i < 17; i++) {
         pid_t p = fork(); assert(p >= 0);

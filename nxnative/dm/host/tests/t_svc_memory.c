@@ -184,6 +184,43 @@ static void alias_lifecycle(void) {
     assert(pages(1, alias + g_alias_cap - P, 2 * P) == BAD);
 }
 
+// The host's own read of guest memory (DM_CTL memdump / peek, and the read the cheat VM's heap path already had): the opened heap, the alias pages the
+// game mapped, and a stop at the first byte the game could not read either -- a kernel copy alone refuses an alias page the game only reaches after
+// MapPhysicalMemory, which is why a control-file dump at such an address used to write nothing at all, at any length.
+static void diagnostic_read(void) {
+    uint8_t buf[2 * P]; char why[160];
+    assert(!resize(4 * P));
+    memset((void *)heap, 0x22, 4 * P);
+    assert(dm_guest_read(heap + 8, buf, 2 * P) == 2 * P && buf[0] == 0x22 && buf[2 * P - 1] == 0x22);
+    assert(!resize(0));
+    assert(!dm_guest_read(heap, buf, 8));   // closed: the host's copy refuses the released pages, and so does the reader
+    // Two committed alias pages, then an uncommitted one the copy must stop at (as memdump reports its readable prefix)
+    assert(!pages(1, alias + 3 * P, 2 * P));
+    memset((void *)(alias + 3 * P), 0x11, 2 * P);
+    memset(buf, 0xa7, sizeof buf);
+    assert(dm_guest_read(alias + 3 * P, buf, 2 * P) == 2 * P);
+    for (size_t i = 0; i < 2 * P; ++i) assert(buf[i] == 0x11);
+    assert(dm_guest_read(alias + 4 * P, buf, 2 * P) == P);
+    assert(!dm_guest_read(alias + 20 * P, buf, 8));
+    dm_guest_describe(alias + 20 * P, why, sizeof why);
+    assert(strstr(why, "not committed"));
+    dm_guest_describe(alias + 4 * P, why, sizeof why);
+    assert(strstr(why, "committed"));
+    assert(!dm_guest_read(0, buf, 8) && dm_guest_read(alias + 3 * P, buf, 0) == 0);
+    // The same regions for a write (DM_CTL poke): a mapped alias page and the opened heap take it, one the game never mapped is refused
+    uint64_t word = 0x0123456789abcdefull;
+    assert(!dm_guest_write(alias + 3 * P + 8, &word, sizeof word));
+    assert(dm_guest_read(alias + 3 * P + 8, buf, sizeof word) == sizeof word && !memcmp(buf, &word, sizeof word));
+    assert(dm_guest_write(alias + 20 * P, &word, sizeof word) == -1);
+    assert(dm_guest_write(alias + 3 * P + 8, &word, 0) == 0);   // nothing to write is nothing to refuse
+    assert(!resize(2 * P));
+    assert(!dm_guest_write(heap + 16, &word, sizeof word));
+    assert(dm_guest_read(heap + 16, buf, sizeof word) == sizeof word && !memcmp(buf, &word, sizeof word));
+    assert(dm_guest_write(heap + 2 * P, &word, sizeof word) == -1);   // past the opened span
+    assert(!resize(0));
+    assert(!pages(0, alias + 3 * P, 2 * P));
+}
+
 static void ownership(void) {
     assert(!pages(1, alias, 16 * P));
     memset((void *)alias, 0x34, 16 * P);
@@ -516,7 +553,7 @@ int main(int argc, char **argv) {
     for (unsigned i = 0; i < 8; ++i) assert(!pthread_create(&threads[i], NULL, init_worker, &addresses[i]));
     for (unsigned i = 0; i < 8; ++i) { assert(!pthread_join(threads[i], NULL)); assert(addresses[i] == addresses[0]); }
     alias = addresses[0]; stack = info(I_StackAddr); heap = info(I_HeapAddr);
-    lazy_commit(); alias_lifecycle(); ownership(); module_sources(); module_back_patch(); failures(); release_fallback(); concurrency(); fragmented_queries();
+    lazy_commit(); alias_lifecycle(); diagnostic_read(); ownership(); module_sources(); module_back_patch(); failures(); release_fallback(); concurrency(); fragmented_queries();
     guest_helper();
     if (!DM_GAME_MEM_MAP_LIMIT) metadata_limit();
 #ifdef TEST_REAL_DIRTY

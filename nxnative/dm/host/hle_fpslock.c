@@ -13,7 +13,6 @@
 // What a field holds: the frame rate as a float, double or int32, vsyncs per frame (60 / frame rate) as an int32, or the frame time in milliseconds as a float. Copies: consecutive copies of the
 // value (Unreal keeps one for the game thread, one for the render thread). A row with no pointer (ptr_off 0) has its field at main + field: a constant in main's read-only data, which the loader
 #include "hle.h"
-#include <mach/mach.h>
 // leaves writable (the image's data block on iOS too, loader.c map_image).
 // At 60 a frame time gets MS_MARGIN less than the vsync: such a limiter counts from the frame's start, and the work after it (the GPU fence wait, the next frame's start) adds to the
 // period, so frames at exactly 16.667 ms came 0.11 ms late each on the Mac (59.6 fps, every 150th frame shown two vsyncs). Slightly shorter, the host's present pacing sets the pace
@@ -66,7 +65,7 @@ static const lock_t k_locks[] = {
 };
 #define NLOCKS ((int)(sizeof k_locks / sizeof k_locks[0]))
 
-static int rd(uint64_t a, void *out, size_t n) { vm_size_t got = 0; return a >= 0x1000 && vm_read_overwrite(mach_task_self(), (vm_address_t)a, n, (vm_address_t)out, &got) == KERN_SUCCESS && got == n; }
+static int rd(uint64_t a, void *out, size_t n) { return dm_guest_read(a, out, n) == n; }
 
 // Imported rows (DM_FPS_LOCKS: fpslock.tsv in an Android port's data pack, written by porter/fpslocker.py): the memory writes of the community's FPSLocker config of this main
 // build (masagrator's FPSLocker-Warehouse, its ALL_FPS entries), whose expressions the porter evaluated for 30 and 60. A row: the value type, main offsets (all but the last name
@@ -421,17 +420,36 @@ void dm_ctl_cvar_f32(uint64_t off, float v) {
 void dm_ctl_peek(uint64_t a, int n) {
     for (int i = 0; i < n && i < 64; i += 4) {
         uint32_t w[4] = {0}; int k = n - i < 4 ? n - i : 4;
-        if (!rd(a + 4 * (uint64_t)i, w, 4 * (size_t)k)) { LOG("DM_CTL: peek %#llx: not readable", (unsigned long long)(a + 4 * (uint64_t)i)); return; }
+        if (!rd(a + 4 * (uint64_t)i, w, 4 * (size_t)k)) {
+            char why[160]; dm_guest_describe(a + 4 * (uint64_t)i, why, sizeof why);
+            LOG("[RED] DM_CTL: peek %#llx: not readable (%s)", (unsigned long long)(a + 4 * (uint64_t)i), why); return;
+        }
         float f[4]; memcpy(f, w, sizeof f);
         LOG("DM_CTL: peek %#llx: %g %g %g %g (%08x %08x %08x %08x)", (unsigned long long)(a + 4 * (uint64_t)i), f[0], f[1], f[2], f[3], w[0], w[1], w[2], w[3]);
     }
+}
+// "poke <guest address> <hex value> [bytes=4]": one little-endian value into guest memory (the pair of peek). A wait the game never leaves can be
+// probed this way: write the word it polls and see whether it goes on. Refused off guest memory, or on an alias page the game never mapped
+void dm_ctl_poke(uint64_t a, uint64_t v, size_t n) {
+    uint8_t b[8]; memcpy(b, &v, sizeof b);
+    if (n != 1 && n != 2 && n != 4 && n != 8) { LOG("[RED] DM_CTL: poke %#llx: %zu bytes (1, 2, 4 or 8)", (unsigned long long)a, n); return; }
+    if (dm_guest_write(a, b, n)) { char why[160]; dm_guest_describe(a, why, sizeof why);
+                                   LOG("[RED] DM_CTL: poke %#llx %#llx: not writable (%s)", (unsigned long long)a, (unsigned long long)v, why); return; }
+    LOG("DM_CTL: poke %#llx = %#llx (%zu bytes)", (unsigned long long)a, (unsigned long long)v, n);
 }
 // "memdump <guest address> <bytes> <path>": guest memory to a file, read safely (stops at the first unreadable page)
 void dm_ctl_memdump(uint64_t a, uint64_t n, const char *path) {
     FILE *f = fopen(path, "wb"); if (!f) { LOG("[RED] DM_CTL: memdump: cannot open %s", path); return; }
     static uint8_t buf[1 << 16]; uint64_t done = 0;
-    while (done < n) { size_t k = n - done < sizeof buf ? (size_t)(n - done) : sizeof buf; if (!rd(a + done, buf, k)) break; fwrite(buf, 1, k, f); done += k; }
-    fclose(f); LOG("DM_CTL: memdump %#llx: %llu of %llu bytes → %s", (unsigned long long)a, (unsigned long long)done, (unsigned long long)n, path);
+    while (done < n) { size_t k = n - done < sizeof buf ? (size_t)(n - done) : sizeof buf; size_t got = dm_guest_read(a + done, buf, k);
+                       if (got) fwrite(buf, 1, got, f); done += got; if (got < k) break; }
+    fclose(f);
+    if (done < n) {   // say where it stopped and what that address is: an alias address the game never mapped reads as nothing, at any length
+        char why[160]; dm_guest_describe(a + done, why, sizeof why);
+        LOG("[RED] DM_CTL: memdump %#llx: stopped after %llu of %llu bytes at %#llx (%s) → %s", (unsigned long long)a, (unsigned long long)done,
+            (unsigned long long)n, (unsigned long long)(a + done), why, path);
+    }
+    else LOG("DM_CTL: memdump %#llx: %llu of %llu bytes → %s", (unsigned long long)a, (unsigned long long)done, (unsigned long long)n, path);
 }
 // "cvari <main offset> <value>": the same for an int console variable
 void dm_ctl_cvar_i32(uint64_t off, int32_t v) {

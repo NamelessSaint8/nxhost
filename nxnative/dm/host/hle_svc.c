@@ -242,6 +242,77 @@ static void alias_initialize(uint64_t off, size_t size) {
 static int memory_contains(uint64_t base, uint64_t capacity, uint64_t addr, uint64_t size) {
     return addr >= base && size <= capacity && addr - base <= capacity - size;
 }
+// Guest memory read for the host's own diagnostics (DM_CTL memdump / peek, which used to copy with vm_read_overwrite alone). The three regions need
+// three different reads: the heap is one opened span (its read takes g_map_lock), an alias page exists only once MapPhysicalMemory mprotect'ed it, and a
+// kernel copy refuses a page that is not mapped at all. Reading the alias bitmap first also keeps the copy from faulting: a page that is not committed
+// is left PROT_NONE by the reservation, and Unmap turns a committed one back into exactly that under the same lock. Bytes copied; stops at the first
+// byte the guest could not read either, so a dump reports the readable prefix as it always did.
+size_t dm_guest_read(uint64_t a, void *out, size_t n) {
+    mem_init();
+    if (a < 0x1000 || !n) return 0;
+    if (dm_guest_heap_readable(a, n)) return dm_guest_heap_read(a, out, n) ? 0 : n;   // the whole range inside the opened heap: one copy
+    size_t done = 0;
+    while (done < n) {
+        uint64_t at = a + done;
+        size_t k = 0x1000 - (size_t)(at & 0xFFF);
+        if (k > n - done) k = (size_t)(n - done);
+        int ok = 0;
+        if (dm_guest_heap_readable(at, k)) ok = !dm_guest_heap_read(at, (uint8_t *)out + done, k);
+        else if (g_alias && memory_contains((uintptr_t)g_alias, g_alias_cap, at, k)) {
+            pthread_mutex_lock(&g_map_lock);   // Map / Unmap take this lock, so the page cannot go away between the query and the copy
+            uint64_t base = 0, size = 0; int mapped = 0;
+            alias_query(at, &base, &size, &mapped);
+            if (mapped && memory_contains(base, size, at, k)) { memcpy((uint8_t *)out + done, (void *)(uintptr_t)at, k); ok = 1; }
+            pthread_mutex_unlock(&g_map_lock);
+        } else {
+            vm_size_t got = 0;
+            if (vm_read_overwrite(mach_task_self(), (vm_address_t)at, (vm_size_t)k, (vm_address_t)((uint8_t *)out + done), &got) == KERN_SUCCESS && got == k) ok = 1;
+        }
+        if (!ok) break;
+        done += k;
+    }
+    return done;
+}
+// The counterpart, for the diagnostic that nudges the game (DM_CTL "poke"): the whole range must lie in guest memory the game can write -- the opened
+// heap, or alias pages it mapped -- and the write goes through dm_guest_write_prepare first, as every path that writes guest memory does, so the
+// graphics layer's write-protect tracking sees it. 0 = written, -1 = refused (not guest memory, or an alias page the game never mapped: writing it
+// would fault on the PROT_NONE reservation, which the game itself could not do either).
+int dm_guest_write(uint64_t a, const void *src, size_t n) {
+    mem_init();
+    if (!n) return 0;
+    if (a < 0x1000 || n > UINT64_MAX - a) return -1;
+    if (dm_guest_heap_readable(a, n)) return dm_guest_heap_write(a, src, n) ? -1 : 0;
+    if (g_alias && memory_contains((uintptr_t)g_alias, g_alias_cap, a, n)) {
+        pthread_mutex_lock(&g_map_lock);
+        uint64_t base = 0, size = 0; int mapped = 0;
+        alias_query(a, &base, &size, &mapped);
+        int ok = mapped && memory_contains(base, size, a, n);
+        if (ok) { dm_guest_write_prepare((void *)(uintptr_t)a, n); memcpy((void *)(uintptr_t)a, src, n); }
+        pthread_mutex_unlock(&g_map_lock);
+        return ok ? 0 : -1;
+    }
+    return -1;   // module memory has its own write paths (hle_cheats.c); nothing else is guest memory
+}
+// Which region a guest address is in, for a read that stopped short: the next question after "memdump wrote 0 bytes" is where the address was and
+// whether the game had it mapped, and only this file knows (the alias page bitmap, the heap span).
+void dm_guest_describe(uint64_t a, char *buf, size_t n) {
+    mem_init();
+    if (dm_guest_heap_readable(a, 1)) { snprintf(buf, n, "the opened heap"); return; }
+    if (g_heap && memory_contains((uintptr_t)g_heap, g_heap_cap, a, 1)) {
+        snprintf(buf, n, "the heap block [%p+%#llx] outside the %#zx bytes the game opened", (void *)g_heap, (unsigned long long)(a - (uintptr_t)g_heap),
+                 (size_t)atomic_load(&g_heap_cur));
+        return;
+    }
+    if (g_alias && memory_contains((uintptr_t)g_alias, g_alias_cap, a, 1)) {
+        uint64_t base = 0, size = 0; int mapped = 0;
+        pthread_mutex_lock(&g_map_lock); alias_query(a, &base, &size, &mapped); pthread_mutex_unlock(&g_map_lock);
+        snprintf(buf, n, "alias +%#llx (%s; its run starts at +%#llx, %#llx bytes)", (unsigned long long)(a - (uintptr_t)g_alias),
+                 mapped ? "committed" : "not committed", (unsigned long long)(base - (uintptr_t)g_alias), (unsigned long long)size);
+        return;
+    }
+    if (dm_guest_as_contains((uintptr_t)a)) { snprintf(buf, n, "the guest block at +%#llx (the stack region, or no region at all)", (unsigned long long)(a - (uintptr_t)g_as)); return; }
+    snprintf(buf, n, "host memory outside the guest block");
+}
 static uint32_t map_arguments(uint64_t dst, uint64_t src, uint64_t size) {
     if ((dst | src) & 0xfff) return 0xCC01;
     if (!size || (size & 0xfff)) return 0xCA01;

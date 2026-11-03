@@ -174,6 +174,10 @@ void dm_guest_write_prepare(void *addr, size_t len);
 void dm_guest_heap_range(uint64_t *base, size_t *open_len);   // hle_svc.c: the guest heap's base and opened length (guest addresses), 0 / 0 when none
 int dm_guest_heap_read(uint64_t addr, void *out, size_t len);    // hle_svc.c: hole-free guest heap read for the cheat VM (under the memory lock); 0 = ok, 1 = a byte outside the opened span
 int dm_guest_heap_write(uint64_t addr, const void *src, size_t len);   // hle_svc.c: hole-free guest heap write (the dirty tracking sees it first)
+// hle_svc.c: read guest memory the way the guest can (heap span, committed alias pages, anything else the kernel can copy): bytes copied, stops at the first byte the guest could not read either
+size_t dm_guest_read(uint64_t addr, void *out, size_t len);
+int dm_guest_write(uint64_t addr, const void *src, size_t len);   // hle_svc.c: the same for a write (the opened heap or a mapped alias page); 0 = written, -1 = refused
+void dm_guest_describe(uint64_t addr, char *buf, size_t n);   // what region addr is in, for a read that stopped short (DM_CTL memdump / peek)
 // Cheats (hle_cheats.c): Atmosphère-format cheat code files applied to the running game (docs/development.md "Cheats")
 void dm_cheats_init(void);            // Called once in host_preload after loading the modules (main.c): reads DM_CHEATS and friends, loads the build's file
 void dm_cheats_present(void);         // Per presented frame (hle_nvn.c presents): applies the enabled cheats once
