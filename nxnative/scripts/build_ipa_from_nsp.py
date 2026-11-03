@@ -1351,7 +1351,7 @@ def build_mac_host(repo, out, env, logs, g):
     return out
 
 
-def boot_android(repo, d, patched, work, env, logs, g, secs, done, log):
+def boot_android(repo, d, patched, work, env, logs, g, secs, done, log, env_rows={}, make=(), pull_back=()):
     """Boot the game headless on an Android device (the porter's tool mode, M2): the NDK-built dmhost executable (dm/android/build.py --exe) over adb, its stdout the same
     host log boot_mac would collect, so heap_signals and the capture readers work unchanged. The device comes from DM_TOOL_DEVICE (a serial, or the first attached), adb from
     PATH. The payload is pushed once and kept (dmhost, the rewritten modules, the RomFS image, the shader map) under /data/local/tmp/nx2a-tool/<title ID>. DM_TOOL_BOOT
@@ -1389,8 +1389,10 @@ def boot_android(repo, d, patched, work, env, logs, g, secs, done, log):
     shmap = env.get('DM_NVN_SHMAP')
     if shmap and Path(shmap).is_file(): run(adb + ['push', shmap, f'{td}/shader_map.tsv'], log=logs / 'tool_push.log', env=env); shmap = f'{td}/shader_map.tsv'
     PROG.set(step='booting the game on the device')
-    henv = ' '.join(f'{k}=\'{v}\'' for k, v in (('DM_ROMFS', romfs), ('DM_SAVE', f'{td}/save'), ('DM_TEMP', f'{td}/temp'), ('DM_MSL_DIR', f'{td}/msl'),
-        ('DM_NVN_SHMAP', shmap), ('DM_AUDIO', '0'), ('DM_TOOL_BOOT', str(int(secs) + 30))) if v)
+    for dd in make: sh(f'mkdir -p {dd}')   # a step's own device folders (the GLSLC capture's, the regions table's)
+    rows = [kv for kv in (('DM_ROMFS', romfs), ('DM_SAVE', f'{td}/save'), ('DM_TEMP', f'{td}/temp'), ('DM_MSL_DIR', f'{td}/msl'),
+        ('DM_NVN_SHMAP', shmap), ('DM_AUDIO', '0'), ('DM_TOOL_BOOT', str(int(secs) + 30))) if kv[1]] + list(env_rows.items())
+    henv = ' '.join(f'{k}=\'{v}\'' for k, v in rows)
     t0 = time.time()   # the caller's log path: the same readers read it (heap_signals, host_stopped)
     log_path = log
     with open(log_path, 'w') as f:
@@ -1399,6 +1401,8 @@ def boot_android(repo, d, patched, work, env, logs, g, secs, done, log):
             while not done() and p.poll() is None and time.time() - t0 < secs: time.sleep(0.25)
         finally:
             if p.poll() is None: p.terminate(); p.kill()   # the shell on the device ends with the connection; DM_TOOL_BOOT bounds the host itself
+    for src, dst in pull_back:   # what the step's run wrote on the device: its readers parse it locally (a capture's shaders, the regions table)
+        sp.run(adb + ['pull', src, str(dst)], capture_output=True)   # a path the game never wrote is no failure: the step's own checks report emptiness
     return p.poll()
 
 
@@ -1435,20 +1439,29 @@ def capture_glslc(repo, dirs, pkg_ver, patched, work, env, logs, g):
         say(f'reusing the captured run-time shaders: {", ".join(str(d / "glslc_capture") for d in dirs.values())}')
         PROG.end('reused'); return
     if todo != [pkg_ver]: raise BuildError(f'the run-time shader capture runs the packed version {pkg_ver}\'s code; {", ".join(v for v in todo if v != pkg_ver)} needs a capture of its own')
-    PROG.set(step='building the Mac host')
-    host = build_mac_host(repo, work / 'tools/dmhost', env, logs, g)
     d = dirs[pkg_ver]; cap, rd, log = d / 'glslc_capture.partial', work / 'tmp/glslc_run', logs / 'glslc_capture.log'
-    rmtree(cap); rmtree(rd)
-    for s in ('save', 'temp'): (rd / s).mkdir(parents=True)
-    # everything the run writes stays in <id>_build (DM_ROOT is already there): a fresh save and temporary storage, no shader libraries yet, the profile's shader map (the host looks beside itself by default)
-    henv = dict(env, DM_ROMFS=str(rfs.source(d)), DM_SAVE=str(rd / 'save'), DM_TEMP=str(rd / 'temp'), DM_MSL_DIR=str(rd / 'msl'), DM_NVN_SHMAP=str(g.table('shader_map.tsv')), DM_GLSLC_CAPTURE=str(cap))
-    PROG.set(step='booting the game', done=0, total=len(want) if want else None, unit='shaders')
-    say(f'booting the game in the Mac host to capture the shaders it compiles at run time → {d / "glslc_capture"}')
     t0 = time.time()
-    def done():   # every file the profile names is there (Three Houses: within its first frames)
-        got = glslc_done(cap); PROG.set(done=len(got & want if want else got))
-        return bool(want and got >= want)
-    rc = boot_mac(host, patched, henv, rd, log, GLSLC_SECS, done)
+    if env.get('DM_TOOL_DEVICE') is not None:   # the tool mode (M2): the same capture boot on a device; the files come back with it. The full window runs (no early exit on
+        rmtree(cap); cap.mkdir(parents=True)
+        if rd.exists(): rmtree(rd)   # the first complete set: the files are counted on the Mac only once pulled)
+        PROG.set(step='booting the game on the device', done=0, total=len(want) if want else None, unit='shaders')
+        say(f'booting the game on the device to capture the shaders it compiles at run time → {d / "glslc_capture"}')
+        dev_cap = f'/data/local/tmp/nx2a-tool/{g.id}/glslc_capture'
+        rc = boot_android(repo, d, patched, work, env, logs, g, GLSLC_SECS, lambda: False, log,
+                          env_rows={'DM_GLSLC_CAPTURE': dev_cap}, make=(dev_cap,), pull_back=((dev_cap, str(cap) + '/'),))
+    else:
+        PROG.set(step='building the Mac host')
+        host = build_mac_host(repo, work / 'tools/dmhost', env, logs, g)
+        rmtree(cap); rmtree(rd)
+        for s in ('save', 'temp'): (rd / s).mkdir(parents=True)
+        # everything the run writes stays in <id>_build (DM_ROOT is already there): a fresh save and temporary storage, no shader libraries yet, the profile's shader map (the host looks beside itself by default)
+        henv = dict(env, DM_ROMFS=str(rfs.source(d)), DM_SAVE=str(rd / 'save'), DM_TEMP=str(rd / 'temp'), DM_MSL_DIR=str(rd / 'msl'), DM_NVN_SHMAP=str(g.table('shader_map.tsv')), DM_GLSLC_CAPTURE=str(cap))
+        PROG.set(step='booting the game', done=0, total=len(want) if want else None, unit='shaders')
+        say(f'booting the game in the Mac host to capture the shaders it compiles at run time → {d / "glslc_capture"}')
+        def done():   # every file the profile names is there (Three Houses: within its first frames)
+            got_ = glslc_done(cap); PROG.set(done=len(got_ & want if want else got_))
+            return bool(want and got_ >= want)
+        rc = boot_mac(host, patched, henv, rd, log, GLSLC_SECS, done)
     got = glslc_done(cap)
     if rc is not None and not (want and got >= want): host_stopped(log, rc, time.time() - t0)
     if not got or (want and not got >= want):
@@ -1743,21 +1756,29 @@ def region_check(repo, d, patched, work, env, logs, g):
     by hand, which it checks instead (Absolum: 2.56 GB from its first seconds; 2.5 and 2.72 GB both play). Others are reported, not changed: the fix depends on who lays the region out. A derived profile gets it too: its build has none of the registered builds' fixed-address cuts, only the function-matched ones
     (Super Smash Bros. Ultimate 13.0.1, GitHub issue #375), so a region those cuts shrank shows here before the IPA aborts on an iPhone. The profile is stamped"""
     PROG.stage('address regions')
-    host, rd, log, table = work / 'tools/dmhost', work / 'tmp/region_run', logs / 'region_check.log', logs / 'regions.tsv'
-    PROG.set(step='building the Mac host'); build_mac_host(repo, host, env, logs, g)
-    rmtree(rd); table.unlink(missing_ok=True)
-    for x in ('save', 'temp', 'msl'): (rd / x).mkdir(parents=True)
-    henv = dict(env, DM_ROMFS=str(rfs.source(d)), DM_SAVE=str(rd / 'save'), DM_TEMP=str(rd / 'temp'), DM_MSL_DIR=str(rd / 'msl'), DM_NVN_SHMAP=str(g.table('shader_map.tsv')),
-                DM_ALIAS_SIZE=f'{SWITCH_ALIAS:#x}', DM_REGIONS=str(table))
-    PROG.set(step='booting the game')
+    rd, log, table = work / 'tmp/region_run', logs / 'region_check.log', logs / 'regions.tsv'
+    if rd.exists(): rmtree(rd)
+    table.unlink(missing_ok=True)
     t0, seen = time.time(), {}
     def done():
         try: text = log.read_text(errors='replace')
         except OSError: return False
         if '>>> nnMain' in text: seen.setdefault('nnmain', time.time())
         return time.time() - seen.get('nnmain', time.time()) > REGION_CHECK_NNMAIN_SECS
-    rc = boot_mac(host, patched, henv, rd, log, HEAP_CHECK_SECS + REGION_CHECK_NNMAIN_SECS, done)
-    rmtree(rd)
+    if env.get('DM_TOOL_DEVICE') is not None:   # the tool mode (M2): the same boot on a device; the regions table comes back with it
+        PROG.set(step='booting the game on the device')
+        dev_tab = f'/data/local/tmp/nx2a-tool/{g.id}/regions.tsv'
+        rc = boot_android(repo, d, patched, work, env, logs, g, HEAP_CHECK_SECS + REGION_CHECK_NNMAIN_SECS, done, log,
+                          env_rows={'DM_ALIAS_SIZE': f'{SWITCH_ALIAS:#x}', 'DM_REGIONS': dev_tab}, pull_back=((dev_tab, str(table)),))
+    else:
+        host = work / 'tools/dmhost'
+        PROG.set(step='building the Mac host'); build_mac_host(repo, host, env, logs, g)
+        for x in ('save', 'temp', 'msl'): (rd / x).mkdir(parents=True)
+        henv = dict(env, DM_ROMFS=str(rfs.source(d)), DM_SAVE=str(rd / 'save'), DM_TEMP=str(rd / 'temp'), DM_MSL_DIR=str(rd / 'msl'), DM_NVN_SHMAP=str(g.table('shader_map.tsv')),
+                    DM_ALIAS_SIZE=f'{SWITCH_ALIAS:#x}', DM_REGIONS=str(table))
+        PROG.set(step='booting the game')
+        rc = boot_mac(host, patched, henv, rd, log, HEAP_CHECK_SECS + REGION_CHECK_NNMAIN_SECS, done)
+        rmtree(rd)
     try: ran = log.read_text(errors='replace')
     except OSError: ran = ''
     depth = pg.depth_signal(ran, g)   # before the shader steps and the prebuild, which take the mode from the profile
