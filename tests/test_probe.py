@@ -58,7 +58,8 @@ class Probe(unittest.TestCase):
             with self.subTest(platform), mock.patch.object(probe, 'sys', types.SimpleNamespace(platform=platform)):
                 d = ndk(self.t / platform); r, _ = self.run_probe(d, link=PermissionError(errno.EACCES, 'Permission denied'))
                 self.assertFalse(r['ok']); self.assertIn('not executable', r['detail']); self.assertIn('chmod +x', r['fix'])
-                self.assertEqual(f'xattr -dr com.apple.quarantine {d}' in r['fix'], xattr)
+                # the path is shlex-quoted in the fix, and a Windows path needs it: C:\... holds backslashes, which force the quotes
+                self.assertEqual(f'xattr -dr com.apple.quarantine {shlex.quote(str(d))}' in r['fix'], xattr)
 
     def test_timeout(self):
         r, _ = self.run_probe(ndk(self.t / 'ndk'), link=subprocess.TimeoutExpired('clang', probe.TIMEOUT))
