@@ -82,6 +82,24 @@ Requirements for the cross-platform GUI milestone. Each maps to a roadmap phase.
 - [ ] **TOOL-03**: User on Linux sees the distro adb version; versions without `push -Z` are handled or refused with fix text, and "no permissions" points to the udev rules package
 - [ ] **TOOL-04**: User launching the app from Finder or a desktop menu has every tool found by absolute path, without relying on the shell PATH
 
+### Tooling and code quality
+
+Added 2026-11-04 with roadmap Phases 7–14 (plan of record: `docs/TOOLING_PLAN.md`). These are about the cost of a port, the parity between its targets, and the guards around both — not about the GUI or about which games port.
+
+- [ ] **QUAL-01**: A port reports per-stage wall clock with cached hits and misses and labels reused stages, writing `<build>/logs/timings.tsv` and printing the table once, with host CPU, core count and RAM recorded beside it
+- [ ] **QUAL-02**: Cold and warm timing tables exist for three titles of different engines, so "a cold port" is a range and not one sample
+- [ ] **QUAL-03**: The shader stage logs its work size (`n shaders, m cached`) and an ETA, derived from `shader_map`, before it compiles the first shader
+- [ ] **QUAL-04**: Shader worker count is capped by available RAM as well as core count, with the per-worker footprint measured, so a 16-core/16 GB host neither swaps nor runs out of memory
+- [ ] **QUAL-05**: Cross-target shader reuse is settled by measurement: either a second run is demonstrably warm, or the reason reuse cannot happen is documented in `dmsh_build.py`
+- [ ] **QUAL-06**: `porter port --platform android|mac-app` is the only entry point for either package, with reuse keys namespaced per target and build folders written with today's keys still usable
+- [ ] **QUAL-07**: The GUI's Port view offers the target through porter — Android, the Mac app, or both as two checkboxes defaulting to what suits the host, with the Mac app disabled off macOS — and one run shows one result with a row per target, with no second code path from view to pipeline
+- [ ] **QUAL-08**: `porter saves list|export|import` moves saves between Android and the Mac with a manifest, and refuses a build-ID mismatch with a precise reason instead of writing an unloadable save
+- [ ] **QUAL-09**: CI compiles `dm/host` for Apple arm64 and Android arm64 on every push, as two blocking jobs path-filtered to `nxnative/**` and `.github/**`; a source missing from `SRC` fails naming the file; implicit function declarations are errors on every toolchain; the `dmsh_chain.lock` refusal is covered by a test
+- [ ] **QUAL-10**: `python devtools/verify.py` runs the suite, a warm re-port per engine family and a device smoke that asserts no `[RED]` and no crash, and prints one verdict with every skip named
+- [ ] **QUAL-11**: Guards lock out four paid-for classes: `SA_ONSTACK` on every signal handler, honest Android stub counters, a "rows are tab-separated" message for `android.tsv`, and a stub list that fails when an unlisted stub appears
+- [ ] **QUAL-12**: Every push reports the upstream `nxnative/` distance, a threshold warns with the pick checklist linked, and `devtools/nuget_pins.py` regeneration is exercised in CI
+- [ ] **QUAL-13**: One run can produce the APK, the Mac app, or both: Android first, extraction and the shader split shared, per-target stages in their own folders; a failing target does not stop the other, the run reports per target and exits non-zero if any failed; a profile without `android.tsv` is skipped for Android with the reason named
+
 ### Hardening
 
 - [x] **HARD-01**: Zip and tar extraction cannot write outside the unpack folder (symlinks, `..`, absolute paths); tar uses `filter='data'` and porter refuses Pythons without the CVE-2025-4517 fix (3.11.13 / 3.12.11 / 3.13.4+)
@@ -212,6 +230,19 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TOOL-02 | Phase 3 | Gaps Found |
 | TOOL-03 | Phase 3 | Gaps Found |
 | TOOL-04 | Phase 3 | Gaps Found |
+| QUAL-01 | Phase 7 | Pending |
+| QUAL-02 | Phase 7 | Pending |
+| QUAL-03 | Phase 8 | Pending |
+| QUAL-04 | Phase 8 | Pending |
+| QUAL-05 | Phase 8 | Pending |
+| QUAL-06 | Phase 9 | Pending |
+| QUAL-07 | Phase 11 | Pending |
+| QUAL-08 | Phase 10 | Pending |
+| QUAL-09 | Phase 11 | Pending |
+| QUAL-10 | Phase 12 | Pending |
+| QUAL-11 | Phase 13 | Pending |
+| QUAL-12 | Phase 14 | Pending |
+| QUAL-13 | Phase 11 | Pending |
 | HARD-01 | Phase 2 | Complete |
 | HARD-02 | Phase 2 | Complete |
 | HARD-03 | Phase 2 | Complete |
@@ -229,10 +260,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | VER-02 | Phase 6 | Pending |
 
 **Coverage:**
-- v1 requirements: 60 total
-- Mapped to phases: 60
+- v1 requirements: 73 total (60 as defined 2026-10-29, plus 13 QUAL- requirements: 12 added 2026-11-04 with Phases 7–14, and QUAL-13 same day when the user asked for one-or-both targets)
+- Mapped to phases: 73
 - Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-10-29*
-*Last updated: 2026-10-29 after roadmap creation*
+*Last updated: 2026-11-04 after adding QUAL-13 (one run, two targets) and moving QUAL-07 to Phase 11*
