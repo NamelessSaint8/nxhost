@@ -351,5 +351,74 @@ class MacTarget(unittest.TestCase):   # --platform mac-app: a Mac app's port (pi
             port.mac_options(); self.assertTrue(pipeline.nsp.ALLOW_OTHER_METAL)
 
 
+class Both(unittest.TestCase):   # --platform both: one run, two targets (D-04 Android first, D-06 a failure does not stop the other, D-07/D-08 the result)
+    def setUp(self):
+        self.t = Path(tempfile.mkdtemp(prefix='nx2a_test_both_'))
+        self.addCleanup(shutil.rmtree, self.t, True)
+
+    def driver(self, **kw):
+        """A 'both' port whose scan has already happened (begin()): the folders here hold no NSPs, so the driver's own scan is stubbed out"""
+        p = pipeline.Port(pipeline.Options(folder=self.t, platform='both', keys=self.t / 'prod.keys', **kw))
+        p.work, p.app, p.fam = self.t / f'{NEO}_build', int(NEO, 16), {'base': None, 'updates': [], 'dlc': []}
+        return p
+
+    def test_both_runs_android_then_mac(self):   # D-04: the order is the driver's, not the caller's; D-08: one result, targets[] beside today's flat keys
+        from types import SimpleNamespace
+        from unittest import mock
+        p, seen = self.driver(), []
+        def run(child):
+            seen.append((child.o.platform, child.multi_target, child.work, child.app, child.fam))
+            if child.o.platform == 'android':
+                return {'apk': str(self.t / 'Game.apk'), 'data': str(self.t / 'Game-data'), 'title_id': NEO, 'name': 'Game', 'package': 'org.nx2a.neo',
+                        'version': 'v0', 'display': '1.0', 'language': 'en-US', 'status': 'playable', 'derived': False, 'installed': False}
+            return {'app': str(self.t / 'Game.app'), 'title_id': NEO, 'name': 'Game', 'platform': 'mac-app', 'version': 'v0', 'display': '1.0', 'language': 'en-US'}
+        with mock.patch.object(pipeline, 'sys', SimpleNamespace(platform='darwin')), mock.patch.object(pipeline.Port, 'begin') as begin, \
+             mock.patch.object(pipeline.Port, 'run', run), mock.patch.object(pipeline, 'say'):
+            res = p.run_both()
+        begin.assert_called_once_with()                                   # one scan and one lock for the run, not one per target (QUAL-13)
+        self.assertEqual([r['platform'] for r in res['targets']], ['android', 'mac-app'])
+        self.assertEqual([r['status'] for r in res['targets']], ['ok', 'ok'])
+        self.assertEqual([r['out'] for r in res['targets']], [str(self.t / 'Game.apk'), str(self.t / 'Game.app')])
+        self.assertEqual([r['reason'] for r in res['targets']], ['', ''])
+        self.assertEqual(res['platform'], 'both')                          # the run's own platform, not the last child's ('mac-app')
+        self.assertEqual((res['apk'], res['data'], res['app'], res['package']), (str(self.t / 'Game.apk'), str(self.t / 'Game-data'), str(self.t / 'Game.app'), 'org.nx2a.neo'))
+        self.assertEqual([s[0] for s in seen], ['android', 'mac-app'])     # each child is its own target
+        self.assertEqual({s[1] for s in seen}, {True})                     # multi_target: a missing profile is a skip, not a failure
+        self.assertTrue(all(s[2] == p.work and s[3] == p.app and s[4] is p.fam for s in seen))   # one work folder, one scan, inherited
+
+    def test_run_dispatches_both_to_the_driver(self):   # 'both' is a driver over two Ports, never the single-target stage sequence
+        from types import SimpleNamespace
+        from unittest import mock
+        p = pipeline.Port(pipeline.Options(folder=self.t, platform='both', keys=self.t / 'prod.keys'))
+        tools = {'ndk': Path('/ndk'), 'dotnet': Path('/dotnet'), 'adb': None, 'notes': []}
+        both, apk = mock.Mock(return_value={'targets': []}), mock.Mock()
+        with mock.patch.object(pipeline, 'sys', SimpleNamespace(platform='darwin')), mock.patch.object(pipeline.Port, 'run_both', both), \
+             mock.patch.object(pipeline.Port, 'apk', apk), mock.patch.object(pipeline.toolchain, 'require', return_value=tools), \
+             mock.patch.object(pipeline.childenv, 'dotnet', return_value={}):
+            self.assertEqual(p.run(), {'targets': []})
+        both.assert_called_once_with()
+        apk.assert_not_called()
+
+    def test_runlog_platform_reaches_the_event_not_the_result(self):   # D-08/RESEARCH Pattern 2: the target rides on the stage events so the GUI can key (platform, k)
+        from types import SimpleNamespace
+        from porter import runlog
+        seen = []
+        prog = SimpleNamespace(k=1, n=4, cur=None, stage=lambda name, poll=None, step='', **kw: None, end=lambda summary='', ok=True: None,
+                               say=lambda msg: None, _json=lambda obj: seen.append(obj))
+        unwrap = runlog._wrap(prog, SimpleNamespace(clock=lambda: '00:00:00'))
+        try:
+            runlog.reset(); runlog.set_platform('mac-app')
+            prog._json({'ev': 'stage', 'k': 1, 'name': 'host'})
+            prog._json({'ev': 'stage_end', 'k': 1, 'name': 'host'})
+            prog._json({'ev': 'say', 'msg': 'not a stage event'})
+            prog._json({'ev': 'result', 'apk': 'x'})
+            runlog.set_platform(None)
+            prog._json({'ev': 'stage', 'k': 2, 'name': 'APK'})
+        finally:
+            unwrap(); runlog.reset()
+        self.assertEqual([e.get('platform') for e in seen], ['mac-app', 'mac-app', None, None, None])
+        self.assertNotIn('platform', seen[3])   # the result carries targets[], never a platform key of its own
+
+
 if __name__ == '__main__':
     unittest.main()
