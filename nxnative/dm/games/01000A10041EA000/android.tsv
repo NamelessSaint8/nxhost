@@ -16,3 +16,8 @@ orientation	landscape
 # GPUs without BC texture formats (Mali on the MediaTek Dimensity and Samsung tablets): the host decompresses the game's BC1 and BC3
 # textures to RGBA8 at upload (dm/gfx/tex/nvn_bc.c), so no device is refused for them. It costs GPU memory and bandwidth -- four times
 # the texel bytes -- which the profile's frame rate note should be read against on such a device.
+# Where the GPU's memory pools cannot be imported as AHardwareBuffers (Samsung's driver refuses the mmap of one with EACCES, so every pool there is a
+# copy), a copied pool used to be copied back whole before each submission: 252 MB and 514 ms a frame on the SM-X230 against 1.5 ms of GPU, about
+# 1.5 fps. With this a pool comes back whole only when the submission's GPU work touched it -- 30 fps there, and no effect on an Adreno, whose pools
+# are zero-copy so nothing is copied back at all.
+env	DM_VK_COPYBACK_RANGES=1
