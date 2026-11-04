@@ -17,10 +17,12 @@ def _parser():
     tr.add_argument('--title-id', default='')
     tr.add_argument('--json', action='store_true')
     tr.set_defaults(func=cmd_triage)
-    po = sub.add_parser('port', help='make the APK and the data pack (and install them)')
+    po = sub.add_parser('port', help='make the APK and the data pack (and install them), or with --platform mac-app a Mac app')
     po.add_argument('folder', help='the game\'s folder: its base game NSP / XCI, updates and DLC')
     po.add_argument('-k', '--keys', help='prod.keys (default: the configured one)')
-    po.add_argument('-o', '--out', help='folder for the APK and the data pack (default: the game folder)')
+    po.add_argument('-o', '--out', help='folder for the APK and the data pack (default: the game folder); with --platform mac-app, the .app or the folder it goes in')
+    po.add_argument('--platform', choices=('android', 'mac-app'), default='android',
+                    help='android = the APK and the data pack; mac-app = a double-clickable Mac app built on this Mac with Xcode (dm/mac/pack_app.py), ad-hoc signed')
     po.add_argument('-p', '--version', default='', help='version to pack, v<N> (default: the newest in the folder)')
     po.add_argument('-l', '--language', default='', help='game language, a code or a name (default: English)')
     po.add_argument('--app-name', default='', help='the app\'s name on the device (default: the game\'s name)')
@@ -33,6 +35,7 @@ def _parser():
     po.add_argument('--fps60', action='store_true', help='60 fps: the profile\'s own frame-rate cap, else the community\'s FPSLocker-Warehouse config of the game\'s build, fetched from GitHub')
     po.add_argument('--title-id', default='', help='the game to port when the folder holds several, e.g. a cartridge dump with two games')
     po.add_argument('--tool-device', default='', help="run the Mac-host steps (the heap check) on an Android device instead: an adb serial, or 'any'")
+    po.add_argument('--allow-other-metal', action='store_true', help='--platform mac-app: build the Metal shaders with this Mac\'s compiler even when it is not the one dmsh_chain.lock pins (untested)')
     po.add_argument('--jobs', type=int, default=os.cpu_count() or 8)
     po.add_argument('--progress', default='auto', choices=('auto', 'bar', 'lines', 'json', 'off'), help='json: one JSON event per line, for the GUI')
     ins = sub.add_parser('install', help='install a port made earlier'); ins.add_argument('data', help='the data pack folder (<App>-data)'); ins.add_argument('--apk', help='the APK (default: <App>.apk beside the pack)')
@@ -132,7 +135,8 @@ def _with_progress(mode, fn):
 def cmd_port(a):
     from porter import pipeline
     opts = pipeline.Options(folder=Path(a.folder), keys=Path(a.keys) if a.keys else None, out=Path(a.out) if a.out else None, version=a.version, language=a.language,
-                            app_name=a.app_name, install=a.install, device=a.device, replace_signer=a.replace_signer, debug=a.debug, experimental=a.experimental, package=a.package, fps60=a.fps60, jobs=a.jobs, title_id=a.title_id, tool_device=getattr(a, 'tool_device', ''))
+                            app_name=a.app_name, install=a.install, device=a.device, replace_signer=a.replace_signer, debug=a.debug, experimental=a.experimental, package=a.package, fps60=a.fps60, jobs=a.jobs, title_id=a.title_id,
+                            tool_device=getattr(a, 'tool_device', ''), platform=getattr(a, 'platform', 'android'), allow_other_metal=getattr(a, 'allow_other_metal', False))
     return _with_progress(a.progress, lambda: pipeline.emit_result(pipeline.Port(opts).run()))
 
 

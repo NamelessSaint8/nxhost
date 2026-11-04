@@ -1,8 +1,10 @@
-# The port: a game folder (NSP / XCI) + prod.keys + the game's profile → <App>.apk and <App>-data/ (docs/ARCHITECTURE.md "The port").
+# The port: a game folder (NSP / XCI) + prod.keys + the game's profile → <App>.apk and <App>-data/ (docs/ARCHITECTURE.md "The port"), or with --platform mac-app a
+# double-clickable <App>.app for the Mac that runs the port (nxnative's dm/mac/pack_app.py).
 # The steps every platform shares are upstream's (porter.upstream.nsp: scan, extraction, the shader split, stage reuse, progress); the Android ones are here:
-# the rewrite for DM_TARGET=android, the Vulkan shader bundle, the host built with the player's NDK, the APK, the data pack and the install.
+# the rewrite for DM_TARGET=android, the Vulkan shader bundle, the host built with the player's NDK, the APK, the data pack and the install. The Mac ones are
+# upstream's Mac-only build (DM_TARGET=apple, the Metal shader chain, the host Xcode builds, the app) driven from run_mac().
 # Work files go where upstream's NSP script puts them, <game folder>/<title ID>_build/ (extract/, aoc/, shader/, logs/ are shared with an iOS build of the same folder),
-# with the Android ones in its android/ folder.
+# with each platform's own outputs in its android/ or mac/ folder.
 import os, re, shutil, sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,7 +21,8 @@ PY = sys.executable
 class Options:
     folder: Path                       # the game's folder: the base game, its updates and DLC
     keys: Path = None                  # prod.keys
-    out: Path = None                   # where the APK and the data pack go (default: the game folder)
+    out: Path = None                   # where the APK and the data pack go (default: the game folder); with platform mac-app, the .app or the folder it goes in
+    platform: str = 'android'          # 'android' = the APK and the data pack; 'mac-app' = a double-clickable Mac app (built on a Mac, with Xcode; dm/mac/pack_app.py)
     version: str = ''                  # v<N> to pack (default: the newest in the folder)
     language: str = ''                 # a code or a name (default: English)
     app_name: str = ''                 # the launcher label (default: the game's name in its control data)
@@ -30,6 +33,7 @@ class Options:
     experimental: bool = False         # a game not ported to Android yet: a provisional profile from upstream's survey (or a copy of its iOS profile), status experimental
     package: str = ''                  # the app's package instead of the profile's (a test install beside another build of the game)
     fps60: bool = False                # 60 fps: the profile's own frame-rate cap, else the build's FPSLocker-Warehouse config (porter/fpslocker.py)
+    allow_other_metal: bool = False    # platform mac-app: build the Metal shaders with this Mac's compiler even when it is not the one dmsh_chain.lock pins (upstream's --allow-other-metal)
     title_id: str = ''                # the game to port when the folder holds several, e.g. a cartridge dump with two games (upstream's --title-id / TITLE_ID)
     tool_device: str = ''              # run the Mac-host steps (the heap check, captures) on an Android device instead: an adb serial, or 'any' for the first attached
     jobs: int = field(default_factory=lambda: os.cpu_count() or 8)
@@ -76,6 +80,7 @@ def inspect(folder, title_id=''):
 class Port:
     def __init__(self, opts):
         self.o = opts
+        self.mac = opts.platform in ('mac', 'mac-app')   # a Mac app, built on a Mac: run_mac's stages instead of the Android port's
         self.cfg = config.load()
         self.result = {}
         self.env = dict(os.environ)   # until run() gives the port its child environment (dotnet on PATH); inputs() may be called first (tests do)
@@ -83,12 +88,14 @@ class Port:
     # ---- the whole port ----
     def run(self):
         o = self.o
+        if o.platform not in ('android', 'mac', 'mac-app'): raise BuildError(f'platform must be android or mac-app: {o.platform}')
+        if self.mac: o.platform = 'mac-app'; self.mac_options()
         o.folder = Path(o.folder).expanduser().resolve()
         if not o.folder.is_dir(): raise BuildError(f'not a folder: {o.folder}')
         keys = o.keys or self.cfg.get('keys')
         if not keys: raise BuildError('no prod.keys: give -k / --keys, or set it once with `porter config keys <path>`')
         o.keys = Path(keys).expanduser().resolve()
-        try: self.tools = toolchain.require(self.cfg, str(o.keys), adb=o.install or bool(o.tool_device))   # a tool device needs adb too: the heap check boots over it
+        try: self.tools = toolchain.require(self.cfg, str(o.keys), adb=o.install or bool(o.tool_device), mac=self.mac)   # a tool device needs adb too: the heap check boots over it
         except toolchain.ToolError as e: raise BuildError(str(e)) from e
         for n in self.tools['notes']: say(n)   # D-09: a community arm64 NDK's port says so in its log
         o.out = Path(o.out or self.cfg.get('out') or o.folder).expanduser().resolve()
@@ -99,6 +106,7 @@ class Port:
         # NUGET_PACKAGES: every dotnet call restores into and builds from the one folder porter/nuget.py checks against pins.NUGET (RESEARCH Pitfall 7)
         # D-18: built by porter/childenv.py (dotnet's real root, invariant globalization, a UTF-8 LANG), which Prepare's .NET tools share
         self.env = childenv.dotnet(self.tools['dotnet'], o.jobs)
+        if self.mac: return self.run_mac()   # everything below is the Android port's
         if o.tool_device:   # the tool steps (heap check) boot on the device: build.py wants the NDK, boot_android wants adb (M2)
             self.env = dict(self.env, DM_TOOL_DEVICE=o.tool_device, ANDROID_NDK_HOME=str(self.tools['ndk']),
                             PATH=os.pathsep.join([str(Path(self.tools['adb']).parent), self.env.get('PATH', '')]))
@@ -135,14 +143,21 @@ class Port:
         from porter import lock; self.lock = lock.take(self.work, 'port')   # D-06/D-07: one port or install of this game folder at a time, held until porter ends
         g, ap = profiles.by_title(self.app)
         self.provisional = False
-        if not (g and ap):
-            what = f'no game profile for {tid}' if not g else f'{g.get("name", g.id)} ({g.id}) has a game profile but is not ported to Android yet (no android.tsv in {g.dir})'
-            if not o.experimental: raise BuildError(f'{what}: --experimental tries it anyway (profiles: `porter profiles`)')
-            g, ap = self.experimental_profile(g, tid)
-        self.g, self.ap = g, ap
-        self.package = o.package or ap.package
-        if not re.fullmatch(r'[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+', self.package): raise BuildError(f'not a package name: {self.package}')
-        say(f'game profile: {g.id} {g.get("name", "")} (Android: {ap.status}' + (f', tested on {ap.tested}' if ap.tested else '') + ')')
+        if self.mac:   # a Mac app needs the game profile only: the 52 iOS profiles port as they are, and there is no package (the app is its own bundle)
+            if g is None:
+                if not o.experimental: raise BuildError(f'no game profile for {tid}: --experimental surveys it and guesses one (it may not start; profiles: `porter profiles --all`)')
+                g, ap = self.experimental_profile(g, tid)
+            self.g, self.ap, self.package = g, ap, None
+            say(f'game profile: {g.id} {g.get("name", "")} (Mac app' + (f', Android: {ap.status}' if ap else '') + ')')
+        else:
+            if not (g and ap):
+                what = f'no game profile for {tid}' if not g else f'{g.get("name", g.id)} ({g.id}) has a game profile but is not ported to Android yet (no android.tsv in {g.dir})'
+                if not o.experimental: raise BuildError(f'{what}: --experimental tries it anyway (profiles: `porter profiles`)')
+                g, ap = self.experimental_profile(g, tid)
+            self.g, self.ap = g, ap
+            self.package = o.package or ap.package
+            if not re.fullmatch(r'[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+', self.package): raise BuildError(f'not a package name: {self.package}')
+            say(f'game profile: {g.id} {g.get("name", "")} (Android: {ap.status}' + (f', tested on {ap.tested}' if ap.tested else '') + ')')
         builds, need = g.builds(), g.words('shader_versions')
         have = nsp.nsp_versions(self.fam, builds)
         self.derived = ''
@@ -158,7 +173,7 @@ class Port:
         self.versions = [self.pkg_ver] if self.derived else need + ([self.pkg_ver] if self.pkg_ver not in need else [])
         self.have = have
         self.check_space()
-        self.aw = self.work / 'android'; self.logs = self.work / 'logs'
+        self.aw = self.work / ('mac' if self.mac else 'android'); self.logs = self.work / 'logs'
         for d in (self.aw, self.logs, self.work / 'tmp'): d.mkdir(parents=True, exist_ok=True)
         from porter import runlog; runlog.build_folder(self.work, self.logs)   # D-08: the cut-off marker, and the run log names the per-tool logs
         # DM_GAME picks the profile for every tool; WORK keeps their temporary folders inside the build folder (the shader translator writes thousands of files)
@@ -246,13 +261,22 @@ class Port:
         if not want: raise BuildError(f'unknown game language {lang_in!r}')
         have = nacp.languages(self.game / 'control.nacp') or nacp.languages(self.base / 'control.nacp')
         self.lang = nsp.game_language(want, bool(lang_in), have)
-        say(f'app: {self.app_name} {self.display} ({self.package}), game language {self.lang}')
+        say(f'app: {self.app_name} {self.display}' + (f' ({self.package})' if self.package else '') + f', game language {self.lang}')
 
     def check_graphics(self):
         """What the Android host can run: NVN games whose shaders are all in their files. The other kinds need a step upstream runs on a Mac (booting the game in the Mac host)
         or a graphics layer the Android host does not have yet"""
         src = profile_guess.build_sources(self.game / 'ExeFS', nsp.rfs.source(self.game), self.g.words('modules'))
         gfx = src['graphics'][0]
+        if self.mac:   # the Mac host runs NVN, Vulkan and GL, but porter drives the NVN path (every Android profile's): upstream's script takes the others
+            if gfx != 'nvn':
+                raise BuildError(f'{self.app_name} renders with {gfx} ({src["graphics"][1]}): porter builds the NVN path for the Mac '
+                                 f'(python nxnative/scripts/build_ipa_from_nsp.py <folder> --platform mac-app builds the others)')
+            extra = [k for k in ('glslc_capture', 'ue_decode', 'oodle_packs', 'ue_legacy') if src[k][0]]
+            if extra:
+                raise BuildError(f'{self.app_name} needs a step that boots the game in the Mac host ({"; ".join(src[k][1] for k in extra)}): '
+                                 f'python nxnative/scripts/build_ipa_from_nsp.py <folder> --platform mac-app runs it')
+            return
         if gfx != 'nvn': raise BuildError(f'{self.app_name} renders with {gfx} ({src["graphics"][1]}): the Android host replays NVN only so far')
         for k in ('glslc_capture', 'ue_decode', 'oodle_packs', 'ue_legacy'):
             if src[k][0]: raise BuildError(f'{self.app_name} needs a step that boots the game in the Mac host ({src[k][1]}), which a Windows port cannot run yet')
@@ -291,22 +315,32 @@ class Port:
         say(f'60 fps: FPSLocker-Warehouse config {src}, by masagrator and contributors: {n} memory write(s)' + (f', {len(cuts)} code cut(s)' if cuts else ''))
         PROG.end(f'{n} memory write(s)' + (f', {len(cuts)} code cut(s)' if cuts else ''))
 
-    # ---- rewrite: patch_nso.py for the Android host's thread slots ----
+    # ---- rewrite: patch_nso.py for this host's thread slots (DM_TARGET; the rewrite's reuse key does not include the target, so each has its own folder) ----
     def rewrite(self):
-        self.patched = self.aw / f'patched_{self.pkg_ver}'   # beside, not over, an iOS build's patched_<version>: the rewrite's reuse key does not include the target
-        nsp.rewrite(PY, NXNATIVE, self.game / 'ExeFS', self.patched, dict(self.env, DM_TARGET='android'), self.logs, self.g)
+        self.patched = self.aw / f'patched_{self.pkg_ver}'   # beside, not over, an iOS build's or the other platform's patched_<version>
+        nsp.rewrite(PY, NXNATIVE, self.game / 'ExeFS', self.patched, dict(self.env, DM_TARGET='apple' if self.mac else 'android'), self.logs, self.g)
         if self.derived or self.provisional:   # the keys that need the rewritten modules (upstream's provisional steps)
             nsp.provisional_prep(PY, NXNATIVE, self.env, self.logs, self.g)
             self.g = nsp.refine_after_rewrite(self.g, self.game, self.patched)
             if self.provisional and profile_guess.heap_check_needed(self.game / 'ExeFS') and not nsp.heap_checked(self.g):
                 say('[RED] no heap check: it boots the game in the Mac host; the provisional profile keeps its guessed heap keys')
 
-    # ---- shaders: upstream's split, then SPIR-V for the Vulkan backend ----
-    def shaders(self):
+    # ---- shaders: upstream's split, then this platform's libraries (SPIR-V for Android's Vulkan backend, MSL for the Mac) ----
+    def split(self):
+        """Upstream's shader split, one package for both platforms (it reads the game's files, not the target). Returns the package's content key"""
         sv = self.versions
         pkg = self.work / 'shader' / 'pkg'
-        nsp.split_shaders(PY, NXNATIVE, [nsp.rfs.source(self.dirs[v]) for v in sv], [self.dirs[v] / 'ExeFS/main' for v in sv], pkg, self.env, self.logs, self.g, bool(self.derived or self.provisional),
-                         dlc_roms=(sorted(p for p in self.aoc.iterdir() if p.is_dir() or p.suffix == '.img') if self.aoc else ()))   # DLC with shaders of its own (Xenoblade Chronicles 3's archives)
+        return nsp.split_shaders(PY, NXNATIVE, [nsp.rfs.source(self.dirs[v]) for v in sv], [self.dirs[v] / 'ExeFS/main' for v in sv], pkg, self.env, self.logs, self.g, bool(self.derived or self.provisional),
+                                 dlc_roms=(sorted(p for p in self.aoc.iterdir() if p.is_dir() or p.suffix == '.img') if self.aoc else ()))   # DLC with shaders of its own (Xenoblade Chronicles 3's archives)
+
+    def shaders(self):
+        pkg = self.work / 'shader' / 'pkg'
+        if self.mac:   # the Mac's libraries: dmsh_build.py compiles the Metal the host loads, into <shader>/cache/b-<chain>
+            nsp.check_metal(PY, NXNATIVE, self.env)   # seconds, where the split and the build take minutes: a Mac with another Xcode stops here
+            pkey = self.split()
+            self.msl = nsp.build_shaders(PY, NXNATIVE, self.work / 'shader', NXNATIVE / 'dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate', self.env, self.logs, self.g, pkey, mac=True)   # the shipped binary: dmsh_chain.lock fingerprints it
+            return
+        self.split()
         self.dmsv = self.aw / 'shaders.dmsv'; kf = self.aw / 'shaders.dmsv.key'; cap = self.aw / 'captured_shaders'
         PROG.stage('Vulkan shaders', step='building the translator')
         xlate, xkey = self.translator()
@@ -358,8 +392,12 @@ class Port:
             nsp.swap_in(tmp, out); nsp.write_whole(kf, f'{key}\n')
         return dll, key
 
-    # ---- host: the Android host built for this profile with the player's NDK ----
+    # ---- host: the Android host built with the player's NDK, or the Mac host Xcode builds (upstream's mac_host) ----
     def host(self):
+        if self.mac:
+            nsp.chain_header(PY, NXNATIVE, self.env, self.logs)   # dmsh_chain.h before any host is built: the host and the app's launcher read it
+            self.host_bin, self.font = nsp.mac_host(PY, NXNATIVE, self.work, self.env, self.logs, self.g)
+            return
         PROG.stage('host', step=f'NDK {self.tools["ndk"].name}')
         out = self.aw / ('host-debug' if self.o.debug else 'host')
         nsp.run([PY, DM / 'android/build.py', '--game', self.g.id, '--ndk', self.tools['ndk'], '--out', out, '--lib', '--jobs', str(self.o.jobs)] + ([] if self.o.debug else ['--release']),
@@ -402,6 +440,48 @@ class Port:
     # ---- install (optional) ----
     def install(self):
         install.install(self.apk_path, self.data_path, self.tools['adb'], self.o.device or self.cfg.get('device'), replace_signer=self.o.replace_signer)
+
+    # ---- mac: the app packed from the Mac host, the Metal libraries and the build's files (upstream's mac_app) ----
+    def pack_app(self):
+        out = self.o.out
+        dst = out if out.suffix == '.app' and not out.is_dir() else out / f'{nsp.mac_app_name(self.o.app_name or self.app_name)}.app'
+        nsp.mac_app(PY, NXNATIVE, dst, self.app, self.work, self.game, self.patched, self.host_bin, self.font, self.msl, self.aoc, 'nvn', self.lang, self.g,
+                    self.app_name, self.display, f'org.nxnative.{self.app:016x}', self.icon(), '-', self.env, self.logs)   # '-' = ad-hoc: the app runs on the Mac that built it
+        self.app_path = dst
+        self.result['app'] = str(dst)
+
+    # ---- the whole Mac port: upstream's Mac-only build, packed into a double-clickable app ----
+    def mac_options(self):
+        """What --platform mac-app cannot be combined with, and the Metal override: checked before the tools are, so a wrong flag costs no probing"""
+        o = self.o
+        if o.install or o.device or o.replace_signer: raise BuildError('a Mac app is not installed over adb: open it from Finder (--install, --device and --replace-signer are the Android port\'s)')
+        if o.fps60: raise BuildError("--fps60 is the Android pause menu's switch: on the Mac the launcher's Frame rate row sets it (dm/games/settings.tsv)")
+        if o.debug: raise BuildError('--debug is the Android development build: a Mac app is always a release build (a windowless dmhost run is the Mac development path, docs/development.md)')
+        if o.package: raise BuildError('--package names an Android app: a Mac app is its own bundle')
+        if o.tool_device: raise BuildError('--tool-device runs an Android port\'s Mac-host steps on a device: a Mac build runs the Mac host itself, here')
+        if o.allow_other_metal: nsp.ALLOW_OTHER_METAL = True   # upstream's --allow-other-metal: the Metal compiler this Mac has, not the one dmsh_chain.lock pins
+
+    def run_mac(self):
+        o = self.o
+        if sys.platform != 'darwin': raise BuildError('a Mac app is built on a Mac: it runs the game\'s own arm64 code natively and links with Xcode (--platform mac-app needs macOS)')
+        if not nsp.apple_silicon(): raise BuildError('a Mac app is built on Apple silicon: the Mac host runs the game\'s own arm64 code natively')
+        nsp.check_prereqs(self.env, NXNATIVE / 'dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate', mac=True)   # Xcode, make, zstd, the Metal toolchain and the chain's binaries, before the extraction
+        self.inputs()
+        PROG.plan(1 + len(self.versions) + bool(self.fam['dlc']) + 4)   # nx_extract, the versions, the DLC, shader split / Mac shaders / Mac host / Mac app (the pipeline archive adds a stage of its own)
+        self.extract()
+        self.check_space(extracted=True)
+        self.check_graphics()
+        self.rewrite()
+        self.shaders()
+        self.host()
+        self.pack_app()
+        nsp.rmtree(self.work / 'tmp')
+        self.result.update(title_id=self.g.id, name=self.app_name, platform='mac-app', version=self.pkg_ver, display=self.display, language=self.lang,
+                           status=self.ap.status if self.ap else 'mac', derived=bool(self.derived), app=str(self.app_path))
+        say(f'done: {self.result["app"]}; open it from Finder. Its save is in ~/Library/Application Support/nxnative/{self.app:016X}/, '
+            f'its log in ~/Library/Logs/nxnative/{self.app:016X}.log')
+        if self.derived: say(f'[RED] {self.derived}: the app is built from a derived profile and may not run as the profile\'s tested version does')
+        return self.result
 
 
 def emit_result(r):   # the last JSON event of a port (the GUI's done screen); a summary line in the other modes

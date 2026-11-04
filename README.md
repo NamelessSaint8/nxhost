@@ -44,6 +44,8 @@ python -m porter port "D:\Games\NEO" -k "D:\keys\prod.keys" --install
 
 The APK (`NeoTheWorldEndsWithYou.apk`) and the data pack (`NeoTheWorldEndsWithYou-data/`) appear in the game folder (`-o` picks another). The first port takes a while (extraction, rewriting the game's code, translating its shaders); later ones reuse what has not changed. `python -m porter -h` lists the commands.
 
+On a Mac with Apple silicon, `python -m porter port "…" --platform mac-app` makes a double-clickable `<App>.app` from the same game folder instead, with Xcode's toolchain and no Android NDK: ad-hoc signed, so it runs on the Mac that built it (docs/ARCHITECTURE.md, "The Mac app").
+
 ## Layout
 
 - `porter/`: the port pipeline (`python -m porter`).

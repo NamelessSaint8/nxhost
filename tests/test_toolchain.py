@@ -132,4 +132,21 @@ class Detection(unittest.TestCase):   # the finders' order and the per-OS folder
                 self.assertEqual(paths.user_dir(), want); self.assertTrue(want.is_dir())
 
 
+class MacPorter(unittest.TestCase):   # a Mac app's port needs no NDK and no APK signing key: Xcode builds the host (pipeline.run_mac)
+    ROWS = (toolchain.Check('Android NDK', False, 'not found', fix='install NDK'), toolchain.Check('.NET SDK', True, '10.0.100 (dotnet)', path='/opt/dotnet/dotnet'),
+            toolchain.Check('adb', False, 'not found: the tool cannot install on a device', required=False), toolchain.Check('Signing key', False, 'cannot be read'))
+
+    def require(self, **kw):
+        with mock.patch.object(toolchain, 'checks', lambda *a, **k: list(self.ROWS)):
+            return toolchain.require(keys='k', **kw)
+
+    def test_mac_skips_ndk_and_signing_key(self):
+        got = self.require(mac=True)
+        self.assertIsNone(got['ndk']); self.assertEqual(got['dotnet'], Path('/opt/dotnet/dotnet'))
+
+    def test_android_still_requires_them(self):
+        with self.assertRaises(toolchain.ToolError) as e: self.require()
+        self.assertIn('Android NDK', str(e.exception)); self.assertIn('Signing key', str(e.exception))
+
+
 if __name__ == '__main__': unittest.main()

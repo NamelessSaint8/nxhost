@@ -159,10 +159,14 @@ def checks(cfg=None, keys=None):
     return out
 
 
-def require(cfg=None, keys=None, adb=False):
-    """The checked tools for a port: {'ndk', 'dotnet', 'adb', 'notes'} (notes: every passing row's note, for the port's log); ToolError naming every missing requirement"""
+def require(cfg=None, keys=None, adb=False, mac=False):
+    """The checked tools for a port: {'ndk', 'dotnet', 'adb', 'notes'} (notes: every passing row's note, for the port's log); ToolError naming every missing requirement.
+    mac: a Mac app's port, which builds the host with Xcode and signs nothing with the APK key, so the NDK and the signing key are not requirements (the .NET SDK is:
+    nx_extract and the shader translator are built with it)"""
     rows = checks(cfg, keys)
-    bad = [r for r in rows if not r.ok and (r.required or (adb and r.name == 'adb'))]
+    optional = ('Android NDK', 'Signing key') if mac else ()
+    bad = [r for r in rows if not r.ok and (r.required or (adb and r.name == 'adb')) and r.name not in optional]
     if bad: raise ToolError('missing requirements: ' + '; '.join(f'{r.name}: {r.detail}' + (f' ({r.fix})' if r.fix else '') for r in bad))
     by = {r.name: r for r in rows}
-    return {'ndk': Path(by['Android NDK'].path), 'dotnet': Path(by['.NET SDK'].path), 'adb': Path(by['adb'].path) if by['adb'].ok else None, 'notes': [r.note for r in rows if r.ok and r.note]}
+    return {'ndk': None if mac else Path(by['Android NDK'].path), 'dotnet': Path(by['.NET SDK'].path), 'adb': Path(by['adb'].path) if by['adb'].ok else None,
+            'notes': [r.note for r in rows if r.ok and r.note]}

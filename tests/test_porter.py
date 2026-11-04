@@ -324,5 +324,32 @@ class FpsLocker(unittest.TestCase):   # porter/fpslocker.py: FPSLocker-Warehouse
             self.assertTrue([l for l in said if l.startswith('[RED]') and 'untested' in l and f'/{self.HEAD}/' in l])
 
 
+class MacTarget(unittest.TestCase):   # --platform mac-app: a Mac app's port (pipeline.run_mac, dm/mac/pack_app.py), no game files or toolchains needed here
+    def test_platform_option_reaches_the_port(self):
+        from porter import cli
+        self.assertEqual(cli._parser().parse_args(['port', 'x']).platform, 'android')   # the APK stays the default
+        a = cli._parser().parse_args(['port', 'x', '--platform', 'mac-app', '--allow-other-metal'])
+        self.assertEqual((a.platform, a.allow_other_metal), ('mac-app', True))
+        self.assertTrue(pipeline.Port(pipeline.Options(folder=Path('x'), platform='mac')).mac)   # 'mac' still reaches run_mac (upstream's own name for a Mac-only build)
+        port = pipeline.Port(pipeline.Options(folder=Path('x'), platform=a.platform, allow_other_metal=a.allow_other_metal))
+        self.assertTrue(port.mac); self.assertFalse(pipeline.Port(pipeline.Options(folder=Path('x'))).mac)
+        port.mac_options()   # nothing to refuse
+
+    def test_flags_a_mac_app_cannot_take(self):   # refused before a tool is probed, each naming the Mac's own way to that setting
+        from porter.upstream import BuildError
+        for kw, says in (({'install': True}, 'Finder'), ({'device': 'HA2M2W71'}, 'Finder'), ({'replace_signer': True}, 'Finder'), ({'fps60': True}, 'Frame rate'),
+                         ({'debug': True}, 'release build'), ({'package': 'org.nx2a.t1'}, 'own bundle'), ({'tool_device': 'any'}, 'Mac host')):
+            with self.subTest(**kw):
+                port = pipeline.Port(pipeline.Options(folder=Path('x'), platform='mac-app', **kw))
+                with self.assertRaises(BuildError) as e: port.mac_options()
+                self.assertIn(says, str(e.exception))
+
+    def test_allow_other_metal_arms_upstream_switch(self):   # dmsh_chain.lock pins Apple's Metal compiler; --allow-other-metal is upstream's escape hatch
+        from unittest import mock
+        port = pipeline.Port(pipeline.Options(folder=Path('x'), platform='mac-app', allow_other_metal=True))
+        with mock.patch.object(pipeline.nsp, 'ALLOW_OTHER_METAL', False):
+            port.mac_options(); self.assertTrue(pipeline.nsp.ALLOW_OTHER_METAL)
+
+
 if __name__ == '__main__':
     unittest.main()
