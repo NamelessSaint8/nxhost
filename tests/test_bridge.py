@@ -569,6 +569,89 @@ class Targets(unittest.TestCase):   # D-02 / UI-SPEC rules 1-11: two target boxe
         self.assertFalse(p.mac_box.isEnabled()); self.assertTrue(p.install_row.isEnabled())
 
 
+class Results(unittest.TestCase):   # D-06, rules 15-20: one row per target, porter's own reason on the second line, its own Reveal; the single output button is gone
+    def setUp(self):
+        keep = runner.PORTER; self.addCleanup(setattr, runner, 'PORTER', keep); runner.PORTER = [FAKE, '--']
+        m = mock.patch.object(app, 'MAC_HOST', False); m.start(); self.addCleanup(m.stop)   # the APK ticked, so the bar's Install button has a target to follow
+
+    def port(self):
+        return window(self).port
+
+    def draw(self, port, **res):   # the result event as porter sends it (runlog adds the log path; the view only needs it to exist)
+        port.on_event(dict({'ev': 'result', 'log': ''}, **res))
+
+    def rows(self, port):
+        return port.results.findChildren(app.TargetRow)
+
+    def test_one_row_per_target_in_the_runs_order(self):
+        p = self.port()
+        self.assertTrue(p.results.isHidden())   # rule 15: hidden until a result arrives, no heading, no placeholder
+        self.draw(p, platform='both', apk='/out/Game.apk', data='/out/Game-data', app='/out/Game.app',
+                  targets=[{'platform': 'android', 'status': 'ok', 'out': '/out/Game.apk', 'reason': ''},
+                           {'platform': 'mac-app', 'status': 'ok', 'out': '/out/Game.app', 'reason': ''}])
+        rows = self.rows(p)
+        self.assertEqual([r.name.text() for r in rows], ['Android APK · built', 'Mac app · built'])
+        self.assertEqual([r.glyph.text() for r in rows], ['✓', '✓'])
+        self.assertEqual([r.path.full for r in rows], ['/out/Game.apk', '/out/Game.app'])
+        self.assertFalse(p.results.isHidden())
+        self.assertEqual(p.results_layout.count(), 2)   # the block holds the rows and nothing else
+
+    def test_a_failed_row_shows_porters_reason_as_plain_text(self):
+        p = self.port(); reason = '<b>dmsh_chain.lock</b> is held: close the other port & try again'
+        self.draw(p, platform='both', targets=[{'platform': 'android', 'status': 'ok', 'out': '/out/Game.apk', 'reason': ''},
+                                               {'platform': 'mac-app', 'status': 'failed', 'out': '', 'reason': reason}])
+        row = self.rows(p)[1]
+        self.assertEqual((row.name.text(), row.glyph.text()), ('Mac app · failed', '✗'))
+        self.assertEqual(row.reason.text(), reason)   # T-11-09: porter's sentence verbatim, markup and all
+        self.assertEqual(row.reason.textFormat(), app.Qt.PlainText)
+        self.assertTrue(row.reason.wordWrap()); self.assertFalse(row.reason.isHidden())
+        self.assertFalse(row.reveal.isEnabled()); self.assertTrue(row.path.isHidden())   # no package: no path, nothing to open
+
+    def test_a_skipped_row_and_a_built_rows_reveal(self):
+        p = self.port()
+        self.draw(p, platform='both', targets=[{'platform': 'android', 'status': 'skipped', 'out': '', 'reason': 'no android.tsv for this game'},
+                                               {'platform': 'mac-app', 'status': 'ok', 'out': '/out/Game.app', 'reason': ''}])
+        a, m = self.rows(p)
+        self.assertEqual((a.name.text(), a.glyph.text(), a.reason.text()), ('Android APK · skipped', '–', 'no android.tsv for this game'))
+        self.assertFalse(a.reveal.isEnabled())
+        self.assertTrue(m.reveal.isEnabled()); self.assertEqual(m.reveal.text(), 'Reveal')
+        self.assertEqual(m.reveal.toolTip(), 'Show the Mac app in your file manager'); self.assertEqual(m.reveal.accessibleName(), 'Reveal the Mac app')
+        self.assertNotEqual(a.reveal.accessibleName(), m.reveal.accessibleName())   # rule 19: two identical labels, two names
+        with mock.patch.object(app, 'QDesktopServices') as ds:
+            m.reveal.click()
+        self.assertEqual(Path(ds.openUrl.call_args[0][0].toLocalFile()), Path('/out'))
+
+    def test_a_single_target_result_draws_one_row_and_a_run_clears_it(self):   # rule 16: one shape, so today's goldens stay valid
+        p = self.port()
+        self.draw(p, apk='/out/Game.apk', data='/out/Game-data')   # today's result: no targets[], no platform
+        rows = self.rows(p)
+        self.assertEqual([r.name.text() for r in rows], ['Android APK · built']); self.assertTrue(rows[0].reveal.isEnabled())
+        self.draw(p, platform='mac-app', app='/out/Game.app')
+        self.assertEqual([r.name.text() for r in self.rows(p)], ['Mac app · built'])   # replaced, never stacked
+        with mock.patch.object(p.porter, 'start'):
+            p.run(['port', 'x', '--progress', 'json'])
+        self.assertEqual(self.rows(p), []); self.assertTrue(p.results.isHidden()); self.assertEqual(p.results_layout.count(), 0)
+
+    def test_install_follows_a_built_android_row(self):
+        p = self.port()
+        self.draw(p, platform='both', apk='/out/Game.apk', data='/out/Game-data',
+                  targets=[{'platform': 'android', 'status': 'ok', 'out': '/out/Game.apk', 'reason': ''},
+                           {'platform': 'mac-app', 'status': 'failed', 'out': '', 'reason': 'the translator did not build'}])
+        p.on_finished(1)
+        self.assertTrue(p.inst_btn.isEnabled())   # rule 20: the APK exists, so it can be installed
+        self.draw(p, platform='both', app='/out/Game.app',
+                  targets=[{'platform': 'android', 'status': 'skipped', 'out': '', 'reason': 'no android.tsv for this game'},
+                           {'platform': 'mac-app', 'status': 'ok', 'out': '/out/Game.app', 'reason': ''}])
+        p.on_finished(0)
+        self.assertFalse(p.inst_btn.isEnabled())   # a Mac app is never installed from here
+
+    def test_the_single_output_button_is_gone(self):
+        p = self.port()
+        self.assertFalse(hasattr(p, 'open_btn')); self.assertFalse(hasattr(p, 'open_out'))
+        labels = [b.text() for b in p.findChildren(app.QPushButton)]
+        self.assertIn('Open log', labels); self.assertIn('Install on device', labels); self.assertNotIn('Open output folder', labels)
+
+
 FIXTURES = REPO / 'tests/fixtures/bridge'
 
 
