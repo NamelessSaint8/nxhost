@@ -1,9 +1,9 @@
 ---
-status: testing
+status: complete
 phase: 11-compile-the-c-host-in-ci
 source: [11-01-SUMMARY.md, 11-02-SUMMARY.md, 11-03-SUMMARY.md, 11-04-SUMMARY.md]
 started: "2026-11-04T11:50:00Z"
-updated: "2026-11-04T17:25:00Z"
+updated: "2026-11-04T18:00:00Z"
 ---
 
 ## Current Test
@@ -15,14 +15,14 @@ expected: |
   and `host-android` (ubuntu-22.04) from `.github/workflows/host-build.yml`, and both
   finish green. A docs-only push starts neither, while `fork-ci.yml` still runs its
   four-host Python suite.
-awaiting: user response — this needs a push to origin
+awaiting: [testing complete]
 
 ## Tests
 
 ### 1. Both CI host-compile jobs run green on a code push
 expected: A push touching `nxnative/**` or `.github/**` starts both `host-apple` and `host-android`, and both finish green; a docs-only push starts neither while `fork-ci.yml` still runs.
-result: pending
-evidence: pushed 23815667 to NamelessSaint8/nx2android; host-build run 41878713095 and fork-ci run 41878712610 both triggered on that SHA. At the time of writing both jobs are queued. A previous head (d132fe9e) already had a red fork-ci, so ours must be checked against that, not assumed.
+result: pass
+evidence: first run 41878713095 proved the point the wrong way — host-android passed, host-apple failed with 8 errors (`MTL4FXTemporalScaler` content offsets compile only against the macOS 27 SDK; the macos-26 image tops out at 26.6 / SDK 26.5). Fixed in 1aff5907 by guarding the block with `__MAC_OS_X_VERSION_MAX_ALLOWED >= 270000`; re-run 41880689832 then had both jobs success. The job genuinely caught a break the push caused.
 
 ### 2. Branch protection makes the two jobs actually blocking
 expected: `host-apple` and `host-android` are listed as required status checks on `main`, so a PR touching `nxnative/**` cannot merge while either is red.
@@ -52,9 +52,9 @@ evidence: probe_both.py — two rows, bar at 1000, status line `finished in 0:12
 ## Summary
 
 total: 6
-passed: 5
+passed: 6
 issues: 0
-pending: 1
+pending: 0
 skipped: 0
 blocked: 0
 
