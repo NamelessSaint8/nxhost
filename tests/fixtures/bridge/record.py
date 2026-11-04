@@ -1,8 +1,11 @@
 # Regenerates the golden JSON-lines fixtures that tests/test_bridge.py's Replay feeds through gui/runner.Porter:
-#   .venv/bin/python tests/fixtures/bridge/record.py
+#   .venv/bin/python tests/fixtures/bridge/record.py                 (every fixture below)
+#   .venv/bin/python tests/fixtures/bridge/record.py port_both.jsonl  (just that one, so the others' timestamps stay put)
 # port_ok.jsonl and install_ok.jsonl come from porter's own emitter (upstream PROG in json mode inside runlog.run, which adds the log event and result.log),
-# driving the stages Port.run (a base game and one update) and install.install go through; port_build_error.jsonl is a real `porter port` of a
-# folder that is not there (its first check, the same on every machine; an empty one fails on the tools or prod.keys first, which differ). The protocol only grows additively (no version field), so old fixtures stay valid. Every line has the tmp folder, NX2A_HOME and the
+# driving the stages Port.run (a base game and one update) and install.install go through; port_both.jsonl is the same emitter over pipeline.run_both's two
+# chains, each numbering its stages from k=1 again (runlog.set_platform stamps the target on every stage event); port_build_error.jsonl is a real
+# `porter port` of a folder that is not there (its first check, the same on every machine; an empty one fails on the tools or prod.keys first, which differ).
+# The protocol only grows additively (no version field), so old fixtures stay valid. Every line has the tmp folder, NX2A_HOME and the
 # home folder replaced by <folder>, <home> and <user>. edge.jsonl is written by hand (malformed input on purpose) and is not made here.
 import argparse, json, os, subprocess, sys, tempfile, time
 from pathlib import Path
@@ -20,6 +23,19 @@ PORT = [   # Port.run's stages for a base game plus one update, in order (porter
     ('APK', '', None, 'Game.apk, 4.0 MB'),
     ('data pack', 'linking', None, '9,412 files, 2.8 GB'),
 ]
+BOTH = [   # --platform both: run_both drives the Android chain, then the Mac app's, and each child plans its own stages from k=1 (the collision rule 12 fixes)
+    ('android', PORT),
+    ('mac-app', [
+        ('build nx_extract', '', None, ''),
+        ('extract 1.0.0', '', (3_000_000_000, 'B'), '9,412 files'),
+        ('rewrite', 'checking the inputs', None, '2 module(s)'),
+        ('shader split', 'checking the inputs', None, '1,234 shaders'),
+        ('Metal shaders', 'building the translator', (1234, 'shaders'), '1,234 shaders'),
+        ('host', 'Xcode 26.6', None, '2.7 MB'),
+        ('Mac app', '', None, 'Game.app, 3.9 MB'),
+    ]),
+]
+MAC_FAILED = 'the Mac shader chain in dm/gfx/tools is older than the translator: delete dmsh_chain.lock and port again'   # porter's own sentence, shown verbatim
 
 
 def _stages(PROG, stages):
@@ -49,8 +65,19 @@ def emit(cmd, folder):   # in a child: porter's runlog and emitter, stdout is th
         PROG.set(step='pushing the game data', done=0, total=3_000_000_000, unit='B')
         for d, piece in ((1_500_000_000, 12), (3_000_000_000, 24)): time.sleep(PROG.JSON_INTERVAL + 0.05); PROG.set(done=d, note=f'{piece} of 24 pieces')
         PROG.set(step='removing 3 stale files'); PROG.end('Game on Tablet'); say('installed: open "Game" on the device')
-    a = argparse.Namespace(cmd=cmd, progress='json', folder=str(f), install=False, json=False)
-    return runlog.run(a, lambda _a: cli._with_progress('json', port if cmd == 'port' else install))
+    def both():
+        say(f'game folder: {f}')
+        for platform, stages in BOTH:   # run_both's order, and each child's own plan() (so k starts again at 1 for the Mac chain)
+            runlog.set_platform(platform); PROG.plan(len(stages)); _stages(PROG, stages)
+        runlog.set_platform(None)
+        pipeline.emit_result({'apk': str(f / 'Game.apk'), 'data': str(f / 'Game-data'), 'platform': 'both',
+                              'targets': [{'platform': 'android', 'status': 'ok', 'out': str(f / 'Game.apk'), 'reason': ''},
+                                          {'platform': 'mac-app', 'status': 'failed', 'out': '', 'reason': MAC_FAILED}],
+                              'title_id': '0100000000010000', 'name': 'Game', 'package': 'com.nx2android.game', 'version': '1.1.0', 'display': '1.1.0',
+                              'language': 'en', 'status': 'playable', 'derived': False, 'installed': False})
+    a = argparse.Namespace(cmd='port' if cmd == 'both' else cmd, progress='json', folder=str(f), install=False, json=False,   # a both run is a `porter port --platform both`
+                           platform='both' if cmd == 'both' else 'android')
+    return runlog.run(a, lambda _a: cli._with_progress('json', {'port': port, 'install': install, 'both': both}[cmd]))
 
 
 def scrub(text, folder, home):
@@ -69,7 +96,9 @@ def record(name, argv, folder, home):
 
 def main():
     if len(sys.argv) == 4 and sys.argv[1] == '--emit': return emit(sys.argv[2], sys.argv[3])
-    for name, cmd in (('port_ok.jsonl', 'port'), ('install_ok.jsonl', 'install'), ('port_build_error.jsonl', None)):
+    only = set(sys.argv[1:])   # named fixtures only, so regenerating one leaves the others' timestamps (and bytes) alone
+    for name, cmd in (('port_ok.jsonl', 'port'), ('install_ok.jsonl', 'install'), ('port_both.jsonl', 'both'), ('port_build_error.jsonl', None)):
+        if only and name not in only: continue
         folder, home = tempfile.mkdtemp(), tempfile.mkdtemp()
         argv = [sys.executable, __file__, '--emit', cmd, folder] if cmd else [sys.executable, '-m', 'porter', 'port', str(Path(folder) / 'missing'), '--progress', 'json']
         record(name, argv, folder, home)

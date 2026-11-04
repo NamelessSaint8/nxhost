@@ -162,7 +162,7 @@ class PortTab(QWidget):
         for b in (self.log_btn, self.inst_btn): bar.addWidget(b)   # rule 19-20: the single output button is gone; each result row has its own Reveal
         v.addLayout(bar)
 
-        self.step = QLabel(''); self.step.setTextFormat(Qt.PlainText); self.prog = QProgressBar(); self.prog.setTextVisible(True); self.prog.setRange(0, 1000); self.prog.setValue(0)
+        self.step = QLabel(''); self.step.setTextFormat(Qt.PlainText); self.step.setWordWrap(True); self.prog = QProgressBar(); self.prog.setTextVisible(True); self.prog.setRange(0, 1000); self.prog.setValue(0)
         v.addWidget(self.step); v.addWidget(self.prog)
         self.results = QWidget(); self.results_layout = QVBoxLayout(self.results)   # rules 15-19: one row per target, hidden until a result arrives
         self.results_layout.setContentsMargins(0, 16, 0, 0); self.results_layout.setSpacing(8); self.results.setVisible(False); v.addWidget(self.results)
@@ -275,28 +275,31 @@ class PortTab(QWidget):
         red = msg.startswith('[RED] ')
         self.log.appendHtml(f'<span style="color:{"#c62828" if red else "inherit"}">{msg.removeprefix("[RED] ").replace("&", "&amp;").replace("<", "&lt;").replace(chr(10), "<br>")}</span>')
 
-    def item(self, k, name):
-        it = self.items.get(k)
+    def item(self, k, name, platform=''):
+        it = self.items.get((platform, k))   # rules 12-13, Pitfall 5: the Mac chain's k=1..n appends after the Android chain's instead of overwriting it
         if not it:
-            it = QTreeWidgetItem(['…', name, '', '']); self.stages.addTopLevelItem(it); self.items[k] = it
+            it = QTreeWidgetItem(['…', f'{TARGET_LABEL.get(platform, platform)} · {name}' if platform else name, '', '']); self.stages.addTopLevelItem(it); self.items[(platform, k)] = it
         return it
+
+    def target_prefix(self, ev):   # rule 13: `<Target> · ` only when the event carries a platform, so a single-target run reads exactly as today
+        p = ev.get('platform'); return f'{TARGET_LABEL.get(p, p)} · ' if p else ''
 
     def on_event(self, ev):
         e = ev.get('ev')
         if e == 'stage':
-            self.cur = ev; it = self.item(ev['k'], ev['name']); it.setText(0, '▶'); it.setData(0, Qt.UserRole, time.time())
-            self.step.setText(f'[{ev["k"]}/{ev["n"]}] {ev["name"]}' + (f' · {ev["step"]}' if ev.get('step') else '')); self.prog.setRange(0, 0)
+            self.cur = ev; it = self.item(ev['k'], ev['name'], ev.get('platform', '')); it.setText(0, '▶'); it.setData(0, Qt.UserRole, time.time())
+            self.step.setText(self.target_prefix(ev) + f'[{ev["k"]}/{ev["n"]}] {ev["name"]}' + (f' · {ev["step"]}' if ev.get('step') else '')); self.prog.setRange(0, 0)
         elif e == 'step':
-            self.step.setText(f'{ev["name"]} · {ev["step"]}'); self.prog.setRange(0, 0)
+            self.step.setText(self.target_prefix(ev) + f'{ev["name"]} · {ev["step"]}'); self.prog.setRange(0, 0)
         elif e == 'progress':
             done, total = ev.get('done'), ev.get('total')
             count = '' if done is None else (f'{size(done)} / {size(total)}' if ev.get('unit') == 'B' and total else f'{done:,}' + (f' / {total:,}' if total else '') + (f' {ev["unit"]}' if ev.get('unit') else ''))
-            self.step.setText(f'{ev["name"]}' + (f' · {ev["step"]}' if ev.get('step') else '') + (f' · {count}' if count else '') + (f' · {ev["note"]}' if ev.get('note') else '')
+            self.step.setText(self.target_prefix(ev) + f'{ev["name"]}' + (f' · {ev["step"]}' if ev.get('step') else '') + (f' · {count}' if count else '') + (f' · {ev["note"]}' if ev.get('note') else '')
                               + (f' · ETA {hms(ev["eta"])}' if ev.get('eta') else ''))
             if ev.get('frac') is not None: self.prog.setRange(0, 1000); self.prog.setValue(int(ev['frac'] * 1000))
             else: self.prog.setRange(0, 0)
         elif e == 'stage_end':
-            it = self.item(ev['k'], ev['name']); ok = ev.get('ok', True)
+            it = self.item(ev['k'], ev['name'], ev.get('platform', '')); ok = ev.get('ok', True)
             it.setText(0, '✓' if ok else '✗'); it.setForeground(0, QColor('#2e7d32' if ok else '#c62828'))
             it.setText(2, ev.get('summary', '')); it.setText(3, hms(ev.get('elapsed')))
             self.prog.setRange(0, 1000); self.prog.setValue(1000 if ok else 0)
@@ -321,12 +324,17 @@ class PortTab(QWidget):
         self.update_port_button()
         self.targets.boxes_enabled(True); self.targets.refresh(clear=True); self.on_targets_changed()   # rule 11: back, never leaving zero ticked
         took = hms(time.time() - self.t0)
-        if code == 0:
+        built = [r for r in self.rows if r.status == 'ok']; failed = [r for r in self.rows if r.status == 'failed']
+        if code == 130 or self.cancelled:   # rule 24: today's line, no dialog
+            self.step.setText('cancelled'); self.append('[RED] cancelled'); self.prog.setRange(0, 1000); self.prog.setValue(0)
+        elif code == 0:   # rule 21: every target built, or another was skipped — a skip is not a failure
             self.step.setText(f'done in {took}'); self.prog.setRange(0, 1000); self.prog.setValue(1000)
-        else:
+        elif built and failed:   # rule 22: porter exits non-zero when a target failed, but something was produced, so the bar stays full
+            self.step.setText(f'finished in {took}: ' + ' and '.join(f'the {TARGET_LABEL.get(r.platform, r.platform)}' for r in failed) + ' failed')
+            self.prog.setRange(0, 1000); self.prog.setValue(1000)
+        else:   # rule 23: nothing built — today's line, the cause the error event or the last [RED] said
             cause = (self.error or {}).get('msg') or self.red
-            if code == 130 or self.cancelled: self.step.setText('cancelled'); self.append('[RED] cancelled')
-            else: self.step.setText(f'failed after {took}' + (f': {cause}' if cause else ''))
+            self.step.setText(f'failed after {took}' + (f': {cause}' if cause else ''))
             self.prog.setRange(0, 1000); self.prog.setValue(0)
 
     def clear_results(self):   # rule 15: no rows and nothing to say before a run; no heading, no placeholder
