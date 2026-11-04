@@ -13,6 +13,12 @@
 # despite barriers; fixed in the core (gfx_vk_exec.c prepare_draw, rd_read): blades left black 900-2,300 a frame -> 0, on-screen flicker 4-8 -> 0.0-0.5, 30 fps held.
 # Hundreds of its effect and model shaders are in no game file: the app captures each one a draw misses, and the next port with --install translates them
 # (260 so far, 2026-10-27, from the opening, the first field and its battles); until then such draws are skipped, so the status is wip until the shaders are ported.
+# 2026-11-04, 2.2.1 (v720896) on the Y700 with this profile: title, update notice, difficulty, the opening movie (skippable with a held X),
+# the auto-save notice, and the first field (Everblight Plain) with the full party HUD, walked for ~10 minutes: 0 shaders captured and
+# "skipped (no program 0, no target 0, no pipeline 0)" across 24M draws / 35,400 presents, i.e. the 27,055-shader bundle from base+update
+# covers that content. The captured-shader note above dates from the narrower v0/2.2.0 split, so the wip status is probably stale rather
+# than describing a live gap: raising it needs a longer play (battles, later fields) that finds no missing shader. Also unexplained and
+# worth one run without DM_NVN_ASYNC: every window reports ~300 of 300 frames "dropped" while p99 stays 33.34 ms and the picture advances.
 status	wip
 tested	v655360 Lenovo Legion Y700 TB322FC (Snapdragon 8 Elite, Adreno 830, Android 16)
 package	org.nx2a.xc3
