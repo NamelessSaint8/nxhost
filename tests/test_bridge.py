@@ -557,6 +557,17 @@ class Targets(unittest.TestCase):   # D-02 / UI-SPEC rules 1-11: two target boxe
                 self.assertEqual(args[args.index('--platform') + 1], token)
                 self.assertEqual('--install' in args, install)
 
+    def test_the_boxes_wait_for_the_run(self):   # rule 11: both boxes off while a run goes, back afterwards, the Mac box only where it is offered
+        p = self.port(False); runner.PORTER = [FAKE, '--tree', '--']
+        evs = []; p.porter.event.connect(evs.append)
+        p.run(['port', 'x', '--progress', 'json', '--platform', 'android'])
+        self.assertTrue(until(lambda: any(e.get('ev') == 'pids' for e in evs), 10000), evs)
+        pids = next(e for e in evs if e.get('ev') == 'pids'); self.addCleanup(reap, pids['detached'])
+        self.assertFalse(p.android_box.isEnabled()); self.assertFalse(p.mac_box.isEnabled()); self.assertFalse(p.install_row.isEnabled())
+        fin = QSignalSpy(p.porter.finished); p.cancel(); self.assertTrue(fin.wait(10000))
+        self.assertTrue(until(lambda: p.android_box.isEnabled(), 3000))
+        self.assertFalse(p.mac_box.isEnabled()); self.assertTrue(p.install_row.isEnabled())
+
 
 FIXTURES = REPO / 'tests/fixtures/bridge'
 
