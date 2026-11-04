@@ -81,8 +81,9 @@ const vkfmt_t *vk_fmt(int f) {
             o->is_int = e.kind == K_INT || e.kind == K_SINT; o->is_sint = e.kind == K_SINT; o->kind = 1;
             o->swz = (VkComponentMapping){VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, e.noalpha ? VK_COMPONENT_SWIZZLE_ONE : VK_COMPONENT_SWIZZLE_IDENTITY};
             // A GPU without BC textures (Mali and the other mobile GPUs of the MediaTek / Samsung tablets, Apple GPUs before the A17 Pro): the guest's blocks
-            // are decompressed at upload (dm/gfx/tex/nvn_bc.c) into the uncompressed format that stands in for them, so every BC texture becomes a plain one
-            if (!V.has_bc) {
+            // are decompressed at upload (dm/gfx/tex/nvn_bc.c) into the uncompressed format that stands in for them, so every BC texture becomes a plain one.
+            // DM_VK_NO_BC_DECODE=1 keeps the old behaviour (the texture is dropped) - the bisect for a device that misbehaves only with this path in play
+            if (!V.has_bc && !getenv("DM_VK_NO_BC_DECODE")) {
                 int unpacked = nvn_bc_unpacked_format(f);
                 if (unpacked && unpacked != 0x25 && unpacked != 0x37 && unpacked != 0x01 && unpacked != 0x02 && unpacked != 0x0D && unpacked != 0x0E) o->kind = 0;
                 else if (unpacked) {
@@ -206,23 +207,30 @@ static void pkg_upload_(vkimg_t *im, const tex_t *t, const vkfmt_t *f) {
     if (!bpb) { VKRED_ONCE(12, "packaged texture format %#x has no block size", t->d.format); return; }
     for (unsigned lv = 0; lv < im->levels; lv++) {
         uint32_t w = im->w >> lv ? im->w >> lv : 1, h = im->h >> lv ? im->h >> lv : 1, z = im->d >> lv ? im->d >> lv : 1;
-        uint32_t bx = (w + bw - 1) / bw, by = (h + bh - 1) / bh; size_t pitch = (size_t)bx * bpb, slab = pitch * by * z;
+        // A compressed 3D texture's storage holds block slices, one per bh texel slices, so the source is ceil(z/bh) slabs of pitch × by bytes and the
+        // decoder is handed bh slices at a time; a 2D texture is one slab of the level's whole height. (Reading z of them from a 3D storage read past
+        // the level and put the wrong slab in every slice after the first.)
+        int three_d = t->d.target == 2 || im->d > 1;
+        uint32_t bz = three_d ? (z + bh - 1) / bh : 1;
+        uint32_t bx = (w + bw - 1) / bw, by = (h + bh - 1) / bh; size_t pitch = (size_t)bx * bpb, slab = pitch * by * bz;
         // a BC texture is decompressed into rows of texels first: the 4×4 block becomes bw × bh texels of 4 (RGBA8), 2 (RG8) or 1 (R8) bytes,
         // so a row is padded to whole blocks (nvn_bc_row_bytes) and a block row covers bh texel rows
-        size_t dpitch = f->bc ? nvn_bc_row_bytes(f->bc, w) : pitch, dslice = f->bc ? dpitch * (size_t)by * bh : slab;
+        size_t dpitch = f->bc ? nvn_bc_row_bytes(f->bc, w) : pitch, dslice = f->bc ? dpitch * (size_t)by * (three_d ? bh : 1) : slab;
         for (unsigned ly = 0; ly < im->layers; ly++) {
-            VkBuffer sb; VkDeviceSize so; uint8_t *dst = vk_scratch(f->bc ? dslice * z : slab, 16, &sb, &so);
+            VkBuffer sb; VkDeviceSize so; uint8_t *dst = vk_scratch(f->bc ? dslice * bz : slab, 16, &sb, &so);
             uint8_t *blocks = dst;
             if (f->bc) { VkBuffer bb; VkDeviceSize bo; blocks = vk_scratch(slab, 16, &bb, &bo); }
             if (linear) {   // linear storage: rows of the texture's stride, one level, one layer
                 size_t stride = t->d.stride ? t->d.stride : pitch;
-                for (uint32_t y = 0; y < by * z; y++) memcpy(blocks + y * pitch, t->mem + (size_t)y * stride, pitch);
+                for (uint32_t y = 0; y < by * bz; y++) memcpy(blocks + y * pitch, t->mem + (size_t)y * stride, pitch);
             } else if (nvn_deswizzle(&t->d, lv, ly, t->mem, blocks, pitch)) { VKRED_ONCE(13, "deswizzle refused texture format %#x target %d", t->d.format, t->d.target); return; }
             if (f->bc) {
-                for (uint32_t k = 0; k < z; k++)
-                    if (nvn_bc_decode(f->bc, blocks + (size_t)k * pitch * by, pitch, w, h, dst + (size_t)k * dslice, dpitch)) {
+                for (uint32_t k = 0; k < bz; k++) {
+                    uint32_t rows = three_d ? (z - k * bh < bh ? z - k * bh : bh) : h;
+                    if (nvn_bc_decode(f->bc, blocks + (size_t)k * pitch * by, pitch, w, rows, dst + (size_t)k * dslice, dpitch)) {
                         VKRED_ONCE(14, "no BC decoder for texture format %#x (nvn %#x)", f->bc, t->d.format); return;
                     }
+                }
                 static uint64_t n; if (!n++ || n == 256) VKLOG("textures: this GPU has no BC formats: %llu BC texture uploads decompressed to uncompressed ones so far", (unsigned long long)n);
             }
             VkBufferImageCopy r = {so, 0, 0, {im->aspect & VK_IMAGE_ASPECT_COLOR_BIT ? VK_IMAGE_ASPECT_COLOR_BIT : VK_IMAGE_ASPECT_DEPTH_BIT, lv, ly, 1}, {0, 0, 0}, {w, h, z}};
@@ -263,7 +271,7 @@ extern uint64_t g_tex_frame;   // presents so far, for the packaged textures' la
 // last EVICT_KEEP presents go (their memory now holds another texture; one drawn again is made and filled again). Called with g_img_mu held
 enum { EVICT_KEEP = 60 };
 static uint64_t g_img_n, g_img_bytes, g_img_evicted;   // live images and their bytes, images evicted so far (vk_tex_sweep's line)
-static void img_drop(vkimg_t *im) { vk_lrz_forget(im); if (im->lin_mem) nvn_dirty_release(im->lin_mem, im->lin_len); if (im->packaged && !im->pkg_released && im->pkg_mem) nvn_dirty_release(im->pkg_mem, im->pkg_len); g_img_n--; g_img_bytes -= im->size > 0 ? (uint64_t)im->size : 0; alias_unlink(im); vk_tex_view_drop_all(im); if (im->sub) vk_defer_free_image_sub(im->img, im->sub); else vk_defer_free_image(im->img, im->mem); free(im); }
+static void img_drop(vkimg_t *im) { vk_lrz_forget(im); if (im->lin_mem) nvn_dirty_release(im->lin_mem, im->lin_len); if (im->packaged && !im->pkg_released && im->pkg_mem) nvn_dirty_release(im->pkg_mem, im->pkg_len); g_img_n--; g_img_bytes -= im->size > 0 ? (uint64_t)im->size : 0; alias_unlink(im); vk_tex_view_drop_all(im); if (im->full) vk_defer_free_view(im->full); if (im->sub) vk_defer_free_image_sub(im->img, im->sub); else vk_defer_free_image(im->img, im->mem); free(im); }
 static void evict_overlaps(uint64_t pool, int64_t off, int64_t size) {
     akey ks[64]; int n = 0;
     for (uint32_t i = 0; i < g_by_key.cap && n < 64; i++) {
