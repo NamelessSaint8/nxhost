@@ -17,8 +17,10 @@
 # the auto-save notice, and the first field (Everblight Plain) with the full party HUD, walked for ~10 minutes: 0 shaders captured and
 # "skipped (no program 0, no target 0, no pipeline 0)" across 24M draws / 35,400 presents, i.e. the 27,055-shader bundle from base+update
 # covers that content. The captured-shader note above dates from the narrower v0/2.2.0 split, so the wip status is probably stale rather
-# than describing a live gap: raising it needs a longer play (battles, later fields) that finds no missing shader. Also unexplained and
-# worth one run without DM_NVN_ASYNC: every window reports ~300 of 300 frames "dropped" while p99 stays 33.34 ms and the picture advances.
+# than describing a live gap: raising it needs a longer play (battles, later fields) that finds no missing shader. The "dropped ~300 of 300"
+# in those windows is not an accounting fault: this build asks for present interval 1 (60 fps) and the port delivers ~33 ms frames, and
+# "[perf] adaptive frame rate: 40 fps ... late on screen 61 of 64" agrees, so the game is missing its own target on this hardware (the
+# profile's measured 30 fps is the device's ceiling, not the game's request).
 status	wip
 tested	v655360 Lenovo Legion Y700 TB322FC (Snapdragon 8 Elite, Adreno 830, Android 16)
 package	org.nx2a.xc3
