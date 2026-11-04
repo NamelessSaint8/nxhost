@@ -16,6 +16,7 @@ from porter.upstream import BuildError, PROG, android_profile, game, nacp, nsp, 
 
 PY = sys.executable
 BOTH = ('android', 'mac-app')   # D-04: a both run's order — Android first, so a broken toolchain or profile fails in minutes, not after the Metal chain
+MAC_NEEDS_MAC = 'a Mac app is built on a Mac: it runs the game\'s own arm64 code natively and links with Xcode (--platform mac-app needs macOS)'
 
 
 class TargetSkipped(BuildError):
@@ -113,6 +114,9 @@ class Port:
         from porter import runlog
         rows = []
         for platform in BOTH:
+            if platform == 'mac-app' and sys.platform != 'darwin':   # D-03/D-06: a target this host cannot build is a skip, never a failure and never a crash
+                rows.append({'platform': platform, 'status': 'skipped', 'out': '', 'reason': MAC_NEEDS_MAC})
+                continue
             child = Port(replace(o, platform=platform))
             child.work, child.app, child.fam = self.work, self.app, self.fam   # inputs() sees work and keeps the scan and the lock the driver took
             child.multi_target = True
@@ -197,12 +201,16 @@ class Port:
         self.provisional = False
         if self.mac:   # a Mac app needs the game profile only: the 52 iOS profiles port as they are, and there is no package (the app is its own bundle)
             if g is None:
+                if self.multi_target: raise TargetSkipped(f'no game profile for {tid}: this game is not supported yet')   # D-06: the Mac row of a both run is a skip too
                 if not o.experimental: raise BuildError(f'no game profile for {tid}: --experimental surveys it and guesses one (it may not start; profiles: `porter profiles --all`)')
                 g, ap = self.experimental_profile(g, tid)
             self.g, self.ap, self.package = g, ap, None
             say(f'game profile: {g.id} {g.get("name", "")} (Mac app' + (f', Android: {ap.status}' if ap else '') + ')')
         else:
             if not (g and ap):
+                if self.multi_target:   # D-07: a skip for this run, in player words; --experimental is a single-target remedy and is not offered here
+                    why = f'{g.get("name", g.id)} ({g.id}) has a game profile but is not ported to Android yet' if g else f'no game profile for {tid}: this game is not supported yet'
+                    raise TargetSkipped(f'{why}: no android.tsv for this game')
                 what = f'no game profile for {tid}' if not g else f'{g.get("name", g.id)} ({g.id}) has a game profile but is not ported to Android yet (no android.tsv in {g.dir})'
                 if not o.experimental: raise BuildError(f'{what}: --experimental tries it anyway (profiles: `porter profiles`)')
                 g, ap = self.experimental_profile(g, tid)
@@ -515,7 +523,7 @@ class Port:
 
     def run_mac(self):
         o = self.o
-        if sys.platform != 'darwin': raise BuildError('a Mac app is built on a Mac: it runs the game\'s own arm64 code natively and links with Xcode (--platform mac-app needs macOS)')
+        if sys.platform != 'darwin': raise BuildError(MAC_NEEDS_MAC)   # D-03: the same sentence a both run's skip carries
         if not nsp.apple_silicon(): raise BuildError('a Mac app is built on Apple silicon: the Mac host runs the game\'s own arm64 code natively')
         nsp.check_prereqs(self.env, NXNATIVE / 'dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate', mac=True)   # Xcode, make, zstd, the Metal toolchain and the chain's binaries, before the extraction
         self.inputs()
