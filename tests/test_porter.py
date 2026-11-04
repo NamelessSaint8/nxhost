@@ -419,6 +419,58 @@ class Both(unittest.TestCase):   # --platform both: one run, two targets (D-04 A
         self.assertEqual([e.get('platform') for e in seen], ['mac-app', 'mac-app', None, None, None])
         self.assertNotIn('platform', seen[3])   # the result carries targets[], never a platform key of its own
 
+    def test_no_android_tsv_is_a_skip_in_a_both_run(self):   # D-07: 52 of 54 upstream profiles have no android.tsv, and the Mac app is still built
+        root = Path(tempfile.mkdtemp(prefix='nx2a_test_bothprof_')); gid = '0100000000AAA000'; d = root / gid; d.mkdir()
+        (d / 'game.tsv').write_text(f'title_id\t{gid}\nprogram_id\t{gid}\nname\tTest Game\nipa\tTestGame.ipa\nmodules\tmain sdk\n', encoding='utf-8')
+        before = dict(os.environ); os.environ['DM_GAMES_DIR'] = str(root)
+        try:
+            p = self.driver(); p.app = int(gid, 16); p.multi_target = True
+            with self.assertRaises(pipeline.TargetSkipped) as e: p.inputs()
+            reason = str(e.exception)
+            self.assertIn('Test Game', reason); self.assertIn('no android.tsv for this game', reason)
+            self.assertNotIn('--experimental', reason)   # a single-target remedy: not offered as a both run's skip reason
+            p.multi_target = False
+            with self.assertRaises(pipeline.BuildError) as e: p.inputs()
+            self.assertIs(type(e.exception), pipeline.BuildError)   # a single target keeps today's refusal, remedy and all
+            self.assertIn('--experimental', str(e.exception))
+        finally:
+            os.environ.clear(); os.environ.update(before); shutil.rmtree(root, ignore_errors=True)
+
+    def test_no_game_profile_is_a_skip_for_a_mac_target_too(self):   # the Mac row of a both run must not read as a failure for a game nobody supports yet
+        from unittest import mock
+        p = pipeline.Port(pipeline.Options(folder=self.t, platform='mac-app', keys=self.t / 'prod.keys'))
+        p.work, p.app, p.fam, p.multi_target = self.t / 'b', 0x0100000000FFF000, {'base': None, 'updates': [], 'dlc': []}, True
+        with mock.patch.object(pipeline.profiles, 'by_title', lambda tid: (None, None)), self.assertRaises(pipeline.TargetSkipped) as e: p.inputs()
+        self.assertIn('no game profile', str(e.exception))
+
+    def test_mac_target_is_skipped_off_macos(self):   # D-03: never a target the host cannot build, and never a failure
+        from types import SimpleNamespace
+        from unittest import mock
+        p, built = self.driver(), []
+        def run(child): built.append(child.o.platform); return {'apk': str(self.t / 'Game.apk')}
+        with mock.patch.object(pipeline, 'sys', SimpleNamespace(platform='linux')), mock.patch.object(pipeline.Port, 'begin'), \
+             mock.patch.object(pipeline.Port, 'run', run), mock.patch.object(pipeline, 'say'):
+            res = p.run_both()
+        self.assertEqual(built, ['android'])   # no Mac child was even constructed
+        self.assertEqual([r['platform'] for r in res['targets']], ['android', 'mac-app'])
+        self.assertEqual((res['targets'][1]['status'], res['targets'][1]['out'], res['targets'][1]['reason']), ('skipped', '', pipeline.MAC_NEEDS_MAC))
+        self.assertEqual((res['targets'][0]['status'], res['apk']), ('ok', str(self.t / 'Game.apk')))
+
+    def test_run_mac_refusal_is_the_skip_reason(self):   # D-03/D-07: the skip reason and the refusal are one sentence, so they cannot drift apart
+        from types import SimpleNamespace
+        from unittest import mock
+        p = pipeline.Port(pipeline.Options(folder=self.t, platform='mac-app'))
+        with mock.patch.object(pipeline, 'sys', SimpleNamespace(platform='linux')), self.assertRaises(pipeline.BuildError) as e: p.run_mac()
+        self.assertEqual(str(e.exception), pipeline.MAC_NEEDS_MAC)
+
+    def test_the_driver_takes_the_lock_and_a_child_does_not(self):   # QUAL-13: one lock per run; a child that took it again would refuse itself
+        from unittest import mock
+        p = self.driver(); p.app, p.multi_target = 0x0100000000FFF000, True   # a title with no profile: the child stops at the profile check
+        with mock.patch.object(pipeline.Port, 'begin') as begin, mock.patch.object(pipeline.profiles, 'by_title', lambda tid: (None, None)), \
+             self.assertRaises(pipeline.TargetSkipped):
+            p.inputs()
+        begin.assert_not_called()   # inputs() keeps the scan and the lock the driver took
+
 
 if __name__ == '__main__':
     unittest.main()
