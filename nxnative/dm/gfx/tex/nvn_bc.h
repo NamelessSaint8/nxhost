@@ -18,3 +18,7 @@ int nvn_bc_unpacked_format(int nvn_format);
 // multiple of four leaves the tail of each row decoded but past w (the caller's pitch covers it).
 // Returns 0, or -1 for a format this file does not decompress.
 int nvn_bc_decode(int nvn_format, const void *src, size_t src_pitch, uint32_t w, uint32_t h, void *dst, size_t dst_pitch);
+
+// Bytes one row of the decompressed level takes, for w texels of the uncompressed stand-in: a row is padded out to whole 4×4
+// blocks, so it is ceil(w/4) × 4 texels wide (a caller's copy names that width). 0 when the format is not a BC format.
+size_t nvn_bc_row_bytes(int nvn_format, uint32_t w);

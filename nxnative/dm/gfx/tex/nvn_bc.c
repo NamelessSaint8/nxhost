@@ -100,3 +100,10 @@ int nvn_bc_decode(int f, const void *src, size_t spitch, uint32_t w, uint32_t h,
             block(f, (const uint8_t *)src + (size_t)by * spitch + (size_t)bx * bpb, (uint8_t *)dst, dpitch, bx, by);
     return 0;
 }
+
+size_t nvn_bc_row_bytes(int f, uint32_t w) {
+    int u = nvn_bc_unpacked_format(f);
+    if (!u) return 0;
+    size_t bpp = u == NVN_RGBA8 || u == NVN_RGBA8_SRGB ? 4 : u == NVN_RG8 || u == NVN_RG8_SNORM ? 2 : 1;
+    return (size_t)((w + 3) / 4) * 4 * bpp;
+}

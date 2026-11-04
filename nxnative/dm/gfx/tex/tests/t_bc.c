@@ -172,9 +172,26 @@ static void groupD(void) {   // the format mapping: what each BC format becomes,
     printf("  D %-34s the same bytes for the UNORM and sRGB formats\n", "sRGB in the format only");
 }
 
+static void groupE(void) {   // the row the caller sizes its scratch and its copy by: padded to whole blocks, per channel width
+    static const struct { int fmt; uint32_t w; size_t want; } rows[] = {
+        {0x42, 1, 16}, {0x42, 3, 16}, {0x42, 4, 16}, {0x42, 5, 32}, {0x42, 7, 32}, {0x42, 8, 32}, {0x42, 1024, 4096},
+        {0x46, 1000, 4000}, {0x44, 999, 4000}, {0x49, 5, 8}, {0x4A, 4, 4}, {0x4B, 3, 8}, {0x4C, 1, 8},
+    };
+    int ok = 1;
+    for (size_t i = 0; i < sizeof rows / sizeof *rows; i++) {
+        size_t got = nvn_bc_row_bytes(rows[i].fmt, rows[i].w);
+        if (got != rows[i].want) { ok = 0; printf("  ✗ %#x width %u: %zu bytes a row, not %zu\n", rows[i].fmt, rows[i].w, got, rows[i].want); }
+    }
+    checks++; if (!ok) fails++;
+    printf("  E %-34s 13 widths, RGBA8 / RG8 / R8, padded to whole 4×4 blocks\n", "row bytes of a decompressed level");
+
+    CHECK(!nvn_bc_row_bytes(0x25, 8) && !nvn_bc_row_bytes(0x4D, 8), "a format with no decompression must have no row");
+    printf("  E %-34s uncompressed and BC7 formats give 0\n", "no decoder, no row");
+}
+
 int main(void) {
     printf("BC decompression\n");
-    groupA(); groupB(); groupC(); groupD();
+    groupA(); groupB(); groupC(); groupD(); groupE();
     printf("%s: %d checks, %d failed\n", fails ? "FAIL" : "ok", checks, fails);
     return fails ? 1 : 0;
 }

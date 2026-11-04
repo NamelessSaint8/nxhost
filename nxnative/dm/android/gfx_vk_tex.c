@@ -208,8 +208,8 @@ static void pkg_upload_(vkimg_t *im, const tex_t *t, const vkfmt_t *f) {
         uint32_t w = im->w >> lv ? im->w >> lv : 1, h = im->h >> lv ? im->h >> lv : 1, z = im->d >> lv ? im->d >> lv : 1;
         uint32_t bx = (w + bw - 1) / bw, by = (h + bh - 1) / bh; size_t pitch = (size_t)bx * bpb, slab = pitch * by * z;
         // a BC texture is decompressed into rows of texels first: the 4×4 block becomes bw × bh texels of 4 (RGBA8), 2 (RG8) or 1 (R8) bytes,
-        // so a row is padded to whole blocks and a block row covers bh texel rows
-        size_t dpitch = f->bc ? (size_t)bx * bw * f->bpb : pitch, dslice = f->bc ? dpitch * (size_t)by * bh : slab;
+        // so a row is padded to whole blocks (nvn_bc_row_bytes) and a block row covers bh texel rows
+        size_t dpitch = f->bc ? nvn_bc_row_bytes(f->bc, w) : pitch, dslice = f->bc ? dpitch * (size_t)by * bh : slab;
         for (unsigned ly = 0; ly < im->layers; ly++) {
             VkBuffer sb; VkDeviceSize so; uint8_t *dst = vk_scratch(f->bc ? dslice * z : slab, 16, &sb, &so);
             uint8_t *blocks = dst;
