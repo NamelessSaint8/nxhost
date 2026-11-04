@@ -6,7 +6,7 @@
 # Work files go where upstream's NSP script puts them, <game folder>/<title ID>_build/ (extract/, aoc/, shader/, logs/ are shared with an iOS build of the same folder),
 # with each platform's own outputs in its android/ or mac/ folder.
 import os, re, shutil, sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from porter import childenv, config, datapack, fpslocker, install, nuget, paths, pins, profiles, toolchain
@@ -15,6 +15,11 @@ from porter.paths import DM, NXNATIVE
 from porter.upstream import BuildError, PROG, android_profile, game, nacp, nsp, profile_guess, say
 
 PY = sys.executable
+BOTH = ('android', 'mac-app')   # D-04: a both run's order — Android first, so a broken toolchain or profile fails in minutes, not after the Metal chain
+
+
+class TargetSkipped(BuildError):
+    """A target this run cannot build on this host or with this profile — a reported skip, never a failure (D-06/D-07)"""
 
 
 @dataclass
@@ -84,21 +89,61 @@ class Port:
         self.cfg = config.load()
         self.result = {}
         self.env = dict(os.environ)   # until run() gives the port its child environment (dotnet on PATH); inputs() may be called first (tests do)
+        self.work = None              # set by begin(): a child of a both run inherits it, and so neither scans nor takes the lock again (QUAL-13)
+        self.multi_target = False     # a both run's target: a profile with no android.tsv is a skip for it, not a failure (D-07)
 
-    # ---- the whole port ----
-    def run(self):
+    def _preflight(self):   # the folder, the prod.keys and the output folder, resolved and checked before any tool is probed (a both run's children inherit them)
         o = self.o
-        if o.platform not in ('android', 'mac', 'mac-app'): raise BuildError(f'platform must be android or mac-app: {o.platform}')
-        if self.mac: o.platform = 'mac-app'; self.mac_options()
         o.folder = Path(o.folder).expanduser().resolve()
         if not o.folder.is_dir(): raise BuildError(f'not a folder: {o.folder}')
         keys = o.keys or self.cfg.get('keys')
         if not keys: raise BuildError('no prod.keys: give -k / --keys, or set it once with `porter config keys <path>`')
         o.keys = Path(keys).expanduser().resolve()
+        o.out = Path(o.out or self.cfg.get('out') or o.folder).expanduser().resolve()
+
+    def run_both(self):
+        """One run, two targets (D-04, D-06, D-08): Android first, then the Mac app, in one process with one scan and one lock, and one result whose targets[] sits
+        beside today's flat apk/data/app keys (install_now() reads those, RESEARCH Pitfall 7). Only BuildError is a target failure — anything else propagates as the crash
+        it is (matching cli._with_progress), so a TypeError never reads as 'the Mac app failed'"""
+        o = self.o
+        self._preflight()
+        dotnet = toolchain.find_dotnet(self.cfg)   # the one scan names a package from its meta NCA with dotnet; the NDK and Xcode are each target's own requirement
+        self.env = childenv.dotnet(dotnet, o.jobs) if dotnet else dict(os.environ)
+        self.begin()   # D-05/QUAL-13: the scan and the lock happen once, for the run, and the children inherit them (extraction is shared through its reuse key)
+        from porter import runlog
+        rows = []
+        for platform in BOTH:
+            child = Port(replace(o, platform=platform))
+            child.work, child.app, child.fam = self.work, self.app, self.fam   # inputs() sees work and keeps the scan and the lock the driver took
+            child.multi_target = True
+            runlog.set_platform(platform)
+            try:
+                res = child.run()
+            except TargetSkipped as e:   # a skip is not a failure (D-06/D-07), and it is caught before BuildError, its base
+                rows.append({'platform': platform, 'status': 'skipped', 'out': '', 'reason': str(e)})
+            except BuildError as e:   # D-06: the other target still runs, and the run's exit code carries this failure
+                rows.append({'platform': platform, 'status': 'failed', 'out': '', 'reason': str(e)})
+            else:
+                rows.append({'platform': platform, 'status': 'ok', 'out': res.get('apk') or res.get('app') or '', 'reason': ''})
+                for k in ('apk', 'data', 'app', 'title_id', 'name', 'package', 'version', 'display', 'language'):   # D-08: additive, filled from whichever targets built
+                    if res.get(k): self.result[k] = res[k]
+            finally:
+                runlog.set_platform(None)
+        self.result['platform'] = 'both'
+        self.result['targets'] = rows
+        return self.result
+
+    # ---- the whole port ----
+    def run(self):
+        o = self.o
+        if o.platform not in ('android', 'mac', 'mac-app', 'both'): raise BuildError(f'platform must be android, mac-app or both: {o.platform}')
+        if self.mac: o.platform = 'mac-app'; self.mac_options()
+        self._preflight()   # the folder, the keys and the output folder: a single target and the driver both need them before a tool is probed
+        # D-04/D-06: both is a driver over two Ports, so each target requires its own toolchain — a host without the NDK still builds the Mac app
+        if o.platform == 'both': return self.run_both()
         try: self.tools = toolchain.require(self.cfg, str(o.keys), adb=o.install or bool(o.tool_device), mac=self.mac)   # a tool device needs adb too: the heap check boots over it
         except toolchain.ToolError as e: raise BuildError(str(e)) from e
         for n in self.tools['notes']: say(n)   # D-09: a community arm64 NDK's port says so in its log
-        o.out = Path(o.out or self.cfg.get('out') or o.folder).expanduser().resolve()
         # every child gets this env and the process environment is never written (HARD-06). Windows resolves a bare program name through the parent's PATH, not the child's,
         # so dotnet always runs by absolute path: porter's own calls use self.tools['dotnet'], upstream's build_nx_extract looks it up in this env's PATH.
         # DOTNET_ROOT: where nx_extract's apphost looks for the runtime (else the system's, which may lack .NET 10).
@@ -132,7 +177,9 @@ class Port:
         return self.result
 
     # ---- inputs: the folder's games and versions, the profile, the version to pack ----
-    def inputs(self):
+    def begin(self):
+        """The run's own prologue both targets share (D-05/QUAL-13): one scan of the folder and the one-port-at-a-time lock. A single port does it from
+        inputs(); a both run does it once and gives the children its work folder, app and family, so a child neither scans nor locks again"""
         o = self.o
         say(f'game folder: {o.folder}')
         want = int(o.title_id, 16) if o.title_id else None
@@ -141,6 +188,11 @@ class Port:
         tid = f'{self.app:016X}'
         self.work = o.folder / f'{tid}_build'
         from porter import lock; self.lock = lock.take(self.work, 'port')   # D-06/D-07: one port or install of this game folder at a time, held until porter ends
+
+    def inputs(self):
+        o = self.o
+        if self.work is None: self.begin()   # a both run's child inherits work: the driver already scanned and locked
+        tid = f'{self.app:016X}'
         g, ap = profiles.by_title(self.app)
         self.provisional = False
         if self.mac:   # a Mac app needs the game profile only: the 52 iOS profiles port as they are, and there is no package (the app is its own bundle)

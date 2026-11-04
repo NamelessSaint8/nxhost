@@ -21,8 +21,9 @@ def _parser():
     po.add_argument('folder', help='the game\'s folder: its base game NSP / XCI, updates and DLC')
     po.add_argument('-k', '--keys', help='prod.keys (default: the configured one)')
     po.add_argument('-o', '--out', help='folder for the APK and the data pack (default: the game folder); with --platform mac-app, the .app or the folder it goes in')
-    po.add_argument('--platform', choices=('android', 'mac-app'), default='android',
-                    help='android = the APK and the data pack; mac-app = a double-clickable Mac app built on this Mac with Xcode (dm/mac/pack_app.py), ad-hoc signed')
+    po.add_argument('--platform', choices=('android', 'mac-app', 'both'), default='android',
+                    help='android = the APK and the data pack; mac-app = a double-clickable Mac app built on this Mac with Xcode (dm/mac/pack_app.py), ad-hoc signed; '
+                         'both = the APK and the Mac app in one run, Android first (a Mac app needs a Mac)')
     po.add_argument('-p', '--version', default='', help='version to pack, v<N> (default: the newest in the folder)')
     po.add_argument('-l', '--language', default='', help='game language, a code or a name (default: English)')
     po.add_argument('--app-name', default='', help='the app\'s name on the device (default: the game\'s name)')

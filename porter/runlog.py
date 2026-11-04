@@ -16,10 +16,14 @@ S = {}
 
 
 def reset():   # the run's state: the open log, its path, the stage it is in, the last [RED] message
-    S.clear(); S.update(f=None, path=None, stage='', red='', work=None, tools=None, t0=time.time())
+    S.clear(); S.update(f=None, path=None, stage='', red='', work=None, tools=None, platform=None, t0=time.time())
 
 
 reset()
+
+
+def set_platform(platform):   # D-08: the target a both run is building, so its stage events can be told apart (the GUI keys a row by (platform, k)); None between targets
+    S['platform'] = platform
 
 
 def _w(text):
@@ -113,6 +117,9 @@ def _wrap(prog, nsp):
 
     def _json(obj):
         if obj.get('ev') == 'result': obj = {**obj, 'log': str(S['path'])}
+        # D-08: the target rides on the stage events, never on the result (targets[] names the targets there); added here, not in the engine subtree
+        if S.get('platform') and obj.get('ev') in ('stage', 'step', 'progress', 'stage_end'):
+            obj = {**obj, 'platform': S['platform']}
         # D-26: bytes per second at upstream's last-minute rate, added here so the engine subtree's emitter is not edited
         if obj.get('ev') == 'progress' and obj.get('unit') == 'B' and obj.get('eta') and obj.get('total') and obj.get('done') is not None:
             obj = {**obj, 'rate': round((obj['total'] - obj['done']) / obj['eta'])}
