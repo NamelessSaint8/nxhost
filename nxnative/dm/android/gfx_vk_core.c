@@ -418,14 +418,30 @@ struct vksub {
     struct { uint64_t lo, hi; } gw[64]; int ngw;   // GPU writes into pool memory in this submission (sub_gpu_wrote), for pools_copy_back: nearby ones merged, and once full each joins the nearest
 };
 enum { GW_SUB = 64 };
+static uint64_t g_cb_bytes, g_cb_ns; static int g_cb_full;   // pools_copy_back's totals (its line every 300 submissions)
 static vksub_t g_slot[NSLOT]; static int g_cur = -1; uint64_t g_cmd_gen;   // g_cmd_gen: main command buffers begun (gfx_vk_exec.c bind cache)
 static void pools_copy_back(const struct vksub *s) {
+    struct timespec t0, t1; clock_gettime(CLOCK_MONOTONIC, &t0);
+    // DM_VK_COPYBACK_RANGES=1: a copied pool takes back only what the GPU wrote (30 fps instead of 1.7 on the SM-X230), which is still opt-in:
+    // on that tablet the first world load then stops with the guest waiting on its own condition variable, and whether that is this change's doing
+    // is not settled. 0 (the default): every copied pool in full before each submission, as before
+    static int ranges = -1; if (ranges < 0) { const char *e = getenv("DM_VK_COPYBACK_RANGES"); ranges = e && atoi(e); }
+    uint64_t copied = 0; int full = 0;
     pthread_rwlock_rdlock(&g_pool_mu);
     for (int i = 0; i < g_npool; i++) { vkpool_t *p = &g_pool[i]; if (!p->shadow || !p->synced) continue;
-        if (!(p->flags & 0x2)) { memcpy((void *)(uintptr_t)p->lo, p->shadow, p->hi - p->lo); continue; }
+        if (!(p->flags & 0x2) && !ranges) { memcpy((void *)(uintptr_t)p->lo, p->shadow, p->hi - p->lo); copied += p->hi - p->lo; full++; continue; }
+        // a pool the GPU writes: only the ranges this submission wrote come back. The whole pool is what a copied pool used to cost every submission:
+        // on the SM-X230 that was 525 MB of memcpy before every one (frame 583 ms, GPU 1.5 ms), and the guest's reads of the rest are unchanged
         for (int k = 0; k < s->ngw; k++) { uint64_t lo = s->gw[k].lo > p->lo ? s->gw[k].lo : p->lo, hi = s->gw[k].hi < p->hi ? s->gw[k].hi : p->hi;
-            if (lo < hi) memcpy((void *)(uintptr_t)lo, p->shadow + (lo - p->lo), hi - lo); } }
+            if (lo < hi) { memcpy((void *)(uintptr_t)lo, p->shadow + (lo - p->lo), hi - lo); copied += hi - lo; } } }
     pthread_rwlock_unlock(&g_pool_mu);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    static uint64_t n, pb, pns, pf;
+    g_cb_bytes += copied; g_cb_ns += (uint64_t)((t1.tv_sec - t0.tv_sec) * 1000000000ll + (t1.tv_nsec - t0.tv_nsec)); g_cb_full += full;
+    if (++n % 300 == 0) { double n2 = 300.0;
+        VKLOG("copied pools: back-copied %.1f MB and %.1f ms per submission (%s), %llu whole-texture passes", (g_cb_bytes - pb) / 1048576.0 / n2, (g_cb_ns - pns) / 1e6 / n2,
+              ranges ? "GPU-written ranges only" : "whole pools", (unsigned long long)(g_cb_full - pf));
+        pb = g_cb_bytes; pns = g_cb_ns; pf = g_cb_full; }
 }
 static VkCommandBuffer g_slot_main_cb(void) { return g_slot[g_cur].main; }
 // DM_VK_PASS_TIMES=1: a timestamp before and after every render pass (the replay's per-frame line then lists the passes that cost the most GPU time)
