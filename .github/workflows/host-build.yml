@@ -1,0 +1,60 @@
+# The C host compiled in CI, one job per target: the Apple arm64 host through dm/host/Makefile and the Android arm64 host through dm/android/build.py, on every push and pull request that touches
+# nxnative/ or .github/. A break in the host therefore names its target on the push that caused it (QUAL-09, D-09).
+# A separate workflow file because GitHub's path filters are workflow-level: putting paths: on fork-ci.yml would also skip the four-host Python suite on documentation-only pushes.
+# Two independent jobs, no matrix and no needs:, so one target's failure never hides or cancels the other's verdict; each job's name is the target it compiles, so a red check names that target.
+# Read-only token and no secrets; every action pinned to a commit SHA; checkout keeps no credentials. Values reach run scripts through env:, and the only game is the literal constant below —
+# never a PR-derived string, so a fork pull request cannot choose what is built or where output goes.
+name: host-build
+
+on:
+  push:
+    paths: [ 'nxnative/**', '.github/**' ]
+  pull_request:
+    paths: [ 'nxnative/**', '.github/**' ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-build-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  host-apple:
+    name: host-apple
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The repository's own entry point, so CI fails where a developer's `make` fails: the hand-listed SRC, the wildcard GFX, libvpx and dav1d, the generated profile and Metal headers, the twelve frameworks.
+      # MACOS_MIN is overridden from the SDK on the command line on purpose: dm/mac/min_os.mk pins 26.6 while this image's SDK is 26.5, and a command-line variable beats := without editing the tree.
+      # The Metal toolchain is deliberately not installed (xcodebuild -downloadComponent MetalToolchain): this job gates the C host, not MSL — host_msl.py writes a sources-only header and the host compiles
+      # its shaders at run time. Nobody should later read a green run here as proof that the MSL shaders compile.
+      # -j matches a developer's build; hw.ncpu is 3 on these runners, so the timeout is sized for a cold libvpx and dav1d build as well as the host.
+      - name: Build and link dmhost
+        run: |
+          make -C nxnative/dm/host GAME=01000A10041EA000 -j"$(sysctl -n hw.ncpu)" dmhost MACOS_MIN="$(xcrun -sdk macosx --show-sdk-version)"
+          ls -l nxnative/dm/host/dmhost
+  host-android:
+    name: host-android
+    # x64 on purpose: build.py's NDK host-folder probe only switches to linux-arm64 when the NDK has that prebuilt folder, so on an arm64 runner it would keep linux-x86_64 and execute an x86_64 clang.
+    # ubuntu-22.04 is also the image that exports ANDROID_NDK_HOME, so this job downloads no toolchain.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # build.py owns the source lists, the NDK target, the flag stamp and the post-link symbol audit, and it globs host/*.c — so this is the real link, which is what catches a source the Apple list misses
+      # and a dangling project symbol. The output goes to RUNNER_TEMP so nothing lands in the checkout.
+      - name: Build and link the Android host
+        run: |
+          python3 nxnative/dm/android/build.py --game 01000A10041EA000 --out "$RUNNER_TEMP/host-android"
+          ls -l "$RUNNER_TEMP/host-android/dmhost" "$RUNNER_TEMP/host-android/libdmhost.so"
