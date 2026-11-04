@@ -422,16 +422,23 @@ static uint64_t g_cb_bytes, g_cb_ns; static int g_cb_full;   // pools_copy_back'
 static vksub_t g_slot[NSLOT]; static int g_cur = -1; uint64_t g_cmd_gen;   // g_cmd_gen: main command buffers begun (gfx_vk_exec.c bind cache)
 static void pools_copy_back(const struct vksub *s) {
     struct timespec t0, t1; clock_gettime(CLOCK_MONOTONIC, &t0);
-    // DM_VK_COPYBACK_RANGES=1: a copied pool takes back only what the GPU wrote (30 fps instead of 1.7 on the SM-X230), which is still opt-in:
-    // on that tablet the first world load then stops with the guest waiting on its own condition variable, and whether that is this change's doing
-    // is not settled. 0 (the default): every copied pool in full before each submission, as before
+    // DM_VK_COPYBACK_RANGES=1: a copied pool takes back only what this submission's GPU work touched - a pool with a recorded write comes back whole,
+    // a pool without one not at all. Whole pools were the SM-X230's 525 MB and 514 ms before every submission (frame 583 ms, GPU 1.5 ms); the pools the
+    // submission does write are few and small. Whole and not the recorded ranges, so that a write inside a touched pool that no layer reported
+    // (sub_gpu_wrote) still reaches the guest. 0 (the default): every copied pool in full, as before
     static int ranges = -1; if (ranges < 0) { const char *e = getenv("DM_VK_COPYBACK_RANGES"); ranges = e && atoi(e); }
     uint64_t copied = 0; int full = 0;
     pthread_rwlock_rdlock(&g_pool_mu);
     for (int i = 0; i < g_npool; i++) { vkpool_t *p = &g_pool[i]; if (!p->shadow || !p->synced) continue;
-        if (!(p->flags & 0x2) && !ranges) { memcpy((void *)(uintptr_t)p->lo, p->shadow, p->hi - p->lo); copied += p->hi - p->lo; full++; continue; }
-        // a pool the GPU writes: only the ranges this submission wrote come back. The whole pool is what a copied pool used to cost every submission:
-        // on the SM-X230 that was 525 MB of memcpy before every one (frame 583 ms, GPU 1.5 ms), and the guest's reads of the rest are unchanged
+        int cached = !(p->flags & 0x2);
+        if (cached && !ranges) { memcpy((void *)(uintptr_t)p->lo, p->shadow, p->hi - p->lo); copied += p->hi - p->lo; full++; continue; }
+        int touched = 0;
+        for (int k = 0; k < s->ngw && !touched; k++) touched = s->gw[k].lo < p->hi && p->lo < s->gw[k].hi;
+        if (cached && ranges) {   // whole, if this submission wrote any of it
+            if (!touched) continue;
+            memcpy((void *)(uintptr_t)p->lo, p->shadow, p->hi - p->lo); copied += p->hi - p->lo; full++; continue;
+        }
+        // a CPU-uncached pool: only the recorded ranges (Unicorn Overlord copied 860 MB back after every submission otherwise)
         for (int k = 0; k < s->ngw; k++) { uint64_t lo = s->gw[k].lo > p->lo ? s->gw[k].lo : p->lo, hi = s->gw[k].hi < p->hi ? s->gw[k].hi : p->hi;
             if (lo < hi) { memcpy((void *)(uintptr_t)lo, p->shadow + (lo - p->lo), hi - lo); copied += hi - lo; } } }
     pthread_rwlock_unlock(&g_pool_mu);
@@ -439,8 +446,8 @@ static void pools_copy_back(const struct vksub *s) {
     static uint64_t n, pb, pns, pf;
     g_cb_bytes += copied; g_cb_ns += (uint64_t)((t1.tv_sec - t0.tv_sec) * 1000000000ll + (t1.tv_nsec - t0.tv_nsec)); g_cb_full += full;
     if (++n % 300 == 0) { double n2 = 300.0;
-        VKLOG("copied pools: back-copied %.1f MB and %.1f ms per submission (%s), %llu whole-texture passes", (g_cb_bytes - pb) / 1048576.0 / n2, (g_cb_ns - pns) / 1e6 / n2,
-              ranges ? "GPU-written ranges only" : "whole pools", (unsigned long long)(g_cb_full - pf));
+        VKLOG("copied pools: back-copied %.1f MB and %.1f ms per submission (%s), %llu whole pools written by the GPU", (g_cb_bytes - pb) / 1048576.0 / n2, (g_cb_ns - pns) / 1e6 / n2,
+              ranges ? "pools the GPU wrote" : "every copied pool", (unsigned long long)(g_cb_full - pf));
         pb = g_cb_bytes; pns = g_cb_ns; pf = g_cb_full; }
 }
 static VkCommandBuffer g_slot_main_cb(void) { return g_slot[g_cur].main; }
