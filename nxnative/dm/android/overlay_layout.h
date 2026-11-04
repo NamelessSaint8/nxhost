@@ -56,7 +56,9 @@ static inline void ov_dpad_dir(int k, float *ox, float *oy, float *r) { float s 
 static const uint64_t OV_DPAD_BITS[4] = {DM_BTN_RIGHT, DM_BTN_LEFT, DM_BTN_DOWN, DM_BTN_UP};
 
 // ---- the pause menu: a panel in the middle of the window, a title row and one row per item ----
-enum { OVM_OVERLAY, OVM_RUMBLE, OVM_FPS, OVM_MODE, OVM_RATE, OVM_RESUME, OVM_N };   // OVM_FPS: the frame rate counter; OVM_MODE: Performance (handheld) or Resolution (docked); OVM_RATE: 60 or 30 fps
+// OVM_FPS: the frame rate counter; OVM_MODE: Performance (handheld) or Resolution (docked); OVM_RATE: 60 or 30 fps;
+// OVM_CONSOLE: the command prompt (front_android.c console_open: the same grammar as DM_CTL, typed on the overlay's keyboard)
+enum { OVM_OVERLAY, OVM_RUMBLE, OVM_FPS, OVM_MODE, OVM_RATE, OVM_CONSOLE, OVM_RESUME, OVM_N };
 #define OV_MENU_ROW 0.115f   // row height, of the window's height
 #define OV_MENU_W 0.70f      // panel width, of the window's height
 #define OV_MENU_PAD 0.03f

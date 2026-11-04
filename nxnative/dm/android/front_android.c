@@ -250,11 +250,35 @@ static void menu_close(void) {
     LOG("[menu] closed: the game goes on (gamepad %s, rumble %s, frame rate %s, %s)", atomic_load(&g_set_overlay) ? "on" : "off", atomic_load(&g_set_rumble) ? "on" : "off",
         atomic_load(&g_set_fps) ? "shown" : "hidden", dm_opmode() ? "docked" : "handheld");
 }
+// ---- the console: DM_CTL's grammar typed on the overlay's keyboard, so a device without adb can still be driven and inspected ----
+// It runs on a thread of its own: front_text_input waits for the input thread to finish the entry, so calling it from the input thread would deadlock. The game
+// is held only while a line is being typed (as by the menu), so a command that acts on frames - shot, passdump, texdump - has them in the pause between two
+// prompts. An empty line, or Back on the keyboard, closes it.
+static _Atomic int g_con_on;
+static void *console_main(void *a) {
+    (void)a; char line[200];
+    for (int n = 0; n < 500; n++) {
+        memset(line, 0, sizeof line);
+        if (front_text_input("Console", "a host command: env, shot, peek, poke, dump, a key name …", "Enter runs it · an empty line closes", "", (int)sizeof line - 1, line, sizeof line) != 1 || !line[0]) break;
+        LOG("[console] %s", line);
+        if (!dm_ctl_exec(line)) LOG("[RED] [console] unknown command: %s (see hle_hid.c for the list)", line);
+        usleep(120000);   // the game presents a few frames before the next prompt, so the commands that need frames work
+    }
+    LOG("[console] closed");
+    atomic_store(&g_con_on, 0);
+    return NULL;
+}
+static void console_open(void) {
+    if (atomic_exchange(&g_con_on, 1)) return;
+    pthread_t th; if (pthread_create(&th, NULL, console_main, NULL)) { atomic_store(&g_con_on, 0); LOG("[RED] [console] could not start its thread"); return; }
+    pthread_detach(th); LOG("[console] open: one command per line, DM_CTL's grammar");
+}
 static void menu_do(int item) {
     if (item == OVM_OVERLAY) { atomic_store(&g_set_overlay, !atomic_load(&g_set_overlay)); atomic_store(&g_overlay, 1); settings_save(); }
     else if (item == OVM_RUMBLE) { int on = !atomic_load(&g_set_rumble); atomic_store(&g_set_rumble, on); dm_haptics_android_set(on); settings_save(); }
     else if (item == OVM_FPS) { atomic_store(&g_set_fps, !atomic_load(&g_set_fps)); settings_save(); }
     else if (item == OVM_MODE) { dm_set_opmode(dm_opmode() ? 0 : 1); settings_save(); }   // the game takes it when it goes on
+    else if (item == OVM_CONSOLE) { menu_close(); console_open(); return; }   // the prompt runs with the game going, so a command can act on frames
     else if (item == OVM_RATE) {   // 60 fps: one frame per display tick, the game's present interval 2 ignored; 30: the game's own interval (hle_nvn.c nvn_present_set_display)
         int on = !(atomic_load(&g_set_rate60) == 1); atomic_store(&g_set_rate60, on);
         void nvn_present_set_display(int display); nvn_present_set_display(on);
