@@ -168,3 +168,40 @@ The player asked for VRR or 60 fps once combat and magic worked. Two different a
 - **The budget is now full, which is the new constraint.** Frame work p50 **16.54 of the 16.67 ms**, GPU busy 12.30 ms, replay 4.46 ms over 2,050 draws (descriptor sets 1.26), queue submit 0.85 ms. Steady country holds 60; cities and combat will drop frames before they stutter, and the headroom to buy is in the replay.
 
 Reference entries: `nxnative/docs/reference/frame-rate.md` "A 30 fps cap that is only a present interval" (the pattern and the proof required), and the `present_interval` row in `nxnative/dm/games/README.md` (the switch's contract).
+
+## Session update: the tavern crash, classified (2026-11-03)
+
+The run that died 1,791 s in — screen recording, walking back to the tavern — is
+`CRASH sig=11 addr=main+0x115cf9c pc=main+0x34af778 lr=main+0x115cf98`, a
+`strh w0, [x1, x2]` with `x2 = 4` inside a rewriter stub: a two-byte store that
+landed 4 bytes past the return address, in `main`'s own text. Classified against
+the catalogue as **guest-side data corruption**, and the host is exonerated on
+every axis the log carries:
+
+| Check | Value before the crash | Reads as |
+|---|---|---|
+| Allocation failures | none: the only `[RED]` in 2,981 lines is `audren: a second renderer` (benign, present since boot) | no refused allocation, no OOM path |
+| Memory | `alias region mapped 2.00 GB (3.21 GB pool)`, footprint flat at 1,688 MiB across the last windows | no growth, no eviction storm |
+| Frame health | `on-screen up to frame 53400: 300 frames, dropped 0, p99 33.34 ms`; adaptive rate 40 fps, `late on screen 0 of 64` | not a timing failure |
+| Host writes into textures | `writes beside a texture only (not re-uploaded) 0`; `write-protection faults 516, pages unprotected before host writes 0` | no host write escaped its texture |
+| What the process was busy with | profiler top: libc `syscall`/`read` and `vkAllocateDescriptorSets` | I/O and descriptor churn, i.e. load, not corruption |
+
+So nothing in the host produced the bad pointer: a guest structure field held a
+code address where a data address belonged, and the value equals the current
+link register — the shape of a stack slot that held a return address being read
+as a data pointer. No log line can show which read did that; it needs the first
+corruption, not the crash.
+
+**What that means in practice:** the `text_store.c` guard (7b33cfa7) covers this
+exact fault — the target is a module's read-only text — so the same corruption
+now logs `[RED] a guest store into read-only text was dropped: main+0x115cf9c
+from main+0x34af778 by the instruction … (x1 … x2 …)` and the run continues
+instead of ending. That line is the reproduction signal to watch for: if it
+appears, the crash is back and the reported registers name the pointer.
+
+**What would settle the cause**, in order of cost: a 30-minute soak with screen
+recording to see whether it recurs at all (one occurrence is not enough to chase);
+then `DM_PROBE_WATCH` on the structure field once the dropped-store line names a
+stable `x1`, to catch the writer rather than the victim. The alias write-protect
+path is already the least likely suspect (its stale reads are image-side only),
+but disabling it (`DM_NVN_DIRTY=0`) is a one-run way to rule it in or out.
