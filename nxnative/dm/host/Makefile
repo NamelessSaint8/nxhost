@@ -15,7 +15,10 @@ endif
 endif
 GAME_H = gen/$(GAME)/game_profile.h
 include ../mac/min_os.mk
-CFLAGS=-O1 -g -Wall -Wno-unused-function -mmacosx-version-min=$(MACOS_MIN)
+# Strict on implicit function declarations, as the Android NDK already is (dm/android/build.py CFLAGS): Apple clang 21 made that class an error, while a toolchain that only warns lets a call without
+# its prototype through and hides the wrong return type behind it. This CFLAGS is the host's own compile line only (the libvpx and dav1d rules below carry their own), so third-party code is not held
+# to it, and there is no blanket -Werror, which would pull other phases' warnings into this gate
+CFLAGS=-O1 -g -Wall -Wno-unused-function -Werror=implicit-function-declaration -mmacosx-version-min=$(MACOS_MIN)
 # Service-layer takeover hle_*.c files are included by wildcard: adding a file does not touch this line (avoids merge conflicts)
 SRC=main.c loader.c hle.c crash.c probe.c text_store.c thread.c save_sync.c memstat.m haptics_apple.m $(sort $(wildcard hle_*.c)) front_mac.m entry.S
 # NVN null device + nn::vi + the Vulkan layer (dm/gfx/)

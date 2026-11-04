@@ -171,6 +171,18 @@ hard = [f for f in dt if re.search(r'192\.168\.\d+\.\d+|org\.nx2a\.neo\b', strip
 check('devtools/ has no hard-coded device or package', not hard, ', '.join(hard))
 check('devtools/device.json not committed', 'devtools/device.json' not in files)
 
+# 12. dm/host: the Makefile's hand-listed SRC against the directory. Android globs host/*.c (dm/android/build.py HOST), so a new host source compiles there unasked; the Mac list has to name each file
+# by hand (dm/gfx is the wildcard side), so the same file links on Android and breaks the Mac link only when someone on a Mac builds. That is the failure a CI link would find minutes later and this
+# check finds by name, on every host (QUAL-09). hle_*.c is the Makefile's own wildcard, so those files need no entry and are never reported.
+mk_path = R / 'nxnative/dm/host/Makefile'
+mk_lines = mk_path.read_text(encoding='utf-8', errors='replace').splitlines()
+mk_no, mk_src = next((i, l) for i, l in enumerate(mk_lines, 1) if l.startswith('SRC='))
+explicit = set(re.findall(r'[\w.-]+\.(?:c|m|S)\b', mk_src.replace('$(sort $(wildcard hle_*.c))', '')))   # the tokens of SRC=, the wildcard taken as the pattern below
+have = sorted(p.name for p in (R / 'nxnative/dm/host').iterdir() if p.suffix in ('.c', '.m', '.S'))   # the directory, not git ls-files: a file being added is the moment this rule has to fire
+missing = [n for n in have if n not in explicit and not (n.startswith('hle_') and n.endswith('.c'))]
+check(f'dm/host: every source is in the Makefile SRC (line {mk_no})', not missing,
+      '; '.join(f'{n} (add it to SRC in nxnative/dm/host/Makefile)' for n in missing))
+
 for n in notes: print('note ', n)
 print(f'\n{len(fails)} failed' if fails else '\nall checks passed')
 sys.exit(1 if fails else 0)
