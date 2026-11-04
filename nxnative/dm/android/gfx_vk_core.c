@@ -220,27 +220,32 @@ static int pool_zero_copy(vkpool_t *p, uint8_t *mem, uint64_t size) {
     AHardwareBuffer_Desc d = {(uint32_t)size, 1, 1, AHARDWAREBUFFER_FORMAT_BLOB,
         AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN | AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER, 0, 0, 0};
     if (size > 0xffffffffull) return -1;
-    AHardwareBuffer *ahb; if (AHardwareBuffer_allocate(&d, &ahb)) return -1;
-    int sv[2]; if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sv)) { AHardwareBuffer_release(ahb); return -1; }
+    AHardwareBuffer *ahb; if (AHardwareBuffer_allocate(&d, &ahb)) return -11;
+    int sv[2]; if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sv)) { AHardwareBuffer_release(ahb); return -12; }
     int fds[16], nfd = -1;
     if (!AHardwareBuffer_sendHandleToUnixSocket(ahb, sv[0])) nfd = recv_fds(sv[1], fds, 16);
     close(sv[0]); close(sv[1]);
-    if (nfd < 1) { AHardwareBuffer_release(ahb); return -1; }
-    // copy the pool's current contents into the buffer through a temporary mapping, then put the buffer's pages at the pool's address
+    if (nfd < 1) { AHardwareBuffer_release(ahb); return -13; }
+    // copy the pool's current contents into the buffer through a temporary mapping, then put the buffer's pages at the pool's address.
+    // This map is the part a Samsung driver refuses: on the SM-X230 (Mali-G615, Android 16) every usage combination allocates and locks, and a
+    // raw mmap of the gralloc fd fails with EACCES for all of them, so that device's pools are copied instead (see gfx_vk_pool_refresh's cost)
     uint8_t *tmp = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fds[0], 0);
-    int ok = tmp != MAP_FAILED;
-    if (ok) { memcpy(tmp, mem, size); munmap(tmp, size); }
-    ok = ok && mmap(mem, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fds[0], 0) == mem;
+    if (tmp == MAP_FAILED) { int e = errno; for (int i = 0; i < nfd; i++) close(fds[i]); AHardwareBuffer_release(ahb);
+                             static int said; if (!said++) VKLOG("zero-copy: the buffer allocates but does not map (errno %d)", e); return -14; }
+    memcpy(tmp, mem, size); munmap(tmp, size);
+    int at_pool = mmap(mem, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fds[0], 0) == mem;
     for (int i = 0; i < nfd; i++) close(fds[i]);
-    if (!ok) { AHardwareBuffer_release(ahb); return -1; }
+    if (!at_pool) { AHardwareBuffer_release(ahb); return -15; }
     VkAndroidHardwareBufferPropertiesANDROID ap = {VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID};
     VkExternalMemoryBufferCreateInfo eb = {VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO, NULL, VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID};
     VkBufferCreateInfo bi = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, &eb, 0, size, POOL_USAGE, VK_SHARING_MODE_EXCLUSIVE};
-    if (vkGetAndroidHardwareBufferPropertiesANDROID(V.dev, ahb, &ap) || vkCreateBuffer(V.dev, &bi, NULL, &p->buf)) { AHardwareBuffer_release(ahb); return -2; }
+    if (vkGetAndroidHardwareBufferPropertiesANDROID(V.dev, ahb, &ap)) { AHardwareBuffer_release(ahb); return -16; }
+    if (vkCreateBuffer(V.dev, &bi, NULL, &p->buf)) { AHardwareBuffer_release(ahb); return -17; }
     VkMemoryDedicatedAllocateInfo ded = {VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, NULL, VK_NULL_HANDLE, p->buf};   // the driver requires a dedicated allocation for an imported AHardwareBuffer
     VkImportAndroidHardwareBufferInfoANDROID imp = {VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID, &ded, ahb};
     VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &imp, ap.allocationSize, vk_mem_type(ap.memoryTypeBits, 0, 0)};
-    if (vkAllocateMemory(V.dev, &ai, NULL, &p->mem) || vkBindBufferMemory(V.dev, p->buf, p->mem, 0)) { vkDestroyBuffer(V.dev, p->buf, NULL); AHardwareBuffer_release(ahb); return -2; }
+    if (vkAllocateMemory(V.dev, &ai, NULL, &p->mem)) { vkDestroyBuffer(V.dev, p->buf, NULL); AHardwareBuffer_release(ahb); return -18; }
+    if (vkBindBufferMemory(V.dev, p->buf, p->mem, 0)) { vkFreeMemory(V.dev, p->mem, NULL); vkDestroyBuffer(V.dev, p->buf, NULL); AHardwareBuffer_release(ahb); return -19; }
     p->ahb = ahb; p->zero_copy = 1;
     return 0;
 }
@@ -289,6 +294,9 @@ static void pool_add_one(const void *mem, uint64_t size, uint64_t base, uint64_t
     p->lo = (uint64_t)(uintptr_t)mem; p->hi = p->lo + size; p->base = base; p->end = end; { static uint64_t ser; p->serial = ++ser; }
     int zc = ((uintptr_t)mem & 0xfff) || (size & 0xfff) ? -3 : getenv("DM_VK_NO_ZEROCOPY") ? -4 : zc_over(end - base) ? -5 : pool_zero_copy(p, (uint8_t *)mem, size);
     if (zc) {
+        // -3 unaligned / -4 DM_VK_NO_ZEROCOPY / -5 over the DM_VK_ZEROCOPY_MAX_MB budget, else from pool_zero_copy:
+        // -11 AHardwareBuffer_allocate, -12 socketpair, -13 send/receive of its handle, -14 mapping it to fill, -15 mapping it over the pool,
+        // -16 buffer properties, -17 vkCreateBuffer, -18 vkAllocateMemory, -19 vkBindBufferMemory
         static int said; if (!said++) VKLOG("[RED] memory pool %p +%#llx could not be zero-copy (%d): a GPU copy is refreshed before each submission (slow)", mem, (unsigned long long)size, zc);
         VkBufferCreateInfo bi = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, NULL, 0, size, POOL_USAGE, VK_SHARING_MODE_EXCLUSIVE};
         VKCHK(vkCreateBuffer(V.dev, &bi, NULL, &p->buf));

@@ -320,6 +320,15 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Fix:** unlock the device before a run. `wm dismiss-keyguard` is refused for a secure lock and `cmd lock_settings set-disabled true` does not take effect while a credential is set, so this one needs the owner (or a device with no lock). `adb shell run-as <package> cat /proc/<pid>/task/<tid>/syscall` names the futex; read it against the host's symbols (`nm -S libdmhost.so`, the address less the library's map base) to see which wait it is.
 - **Found on:** the SM-X230, 2026-11-04 — three runs were read as a memory wall before the lock screen was found.
 
+### A device whose AHardwareBuffer cannot be mapped copies its pools every submission (Mali)
+
+- **Symptom:** on a Mali device the game boots, presents and reads correctly but runs at a frame or two a second, while the GPU is idle: Skyrim on the SM-X230 showed `frame time p50 583 ms … GPU p50 1.46 ms`, and the `[vk] replay per frame` line showed `replay 1.43 ms … queue submit 0.11 ms`.
+- **Cause:** the port's zero-copy pools need to `mmap` the AHardwareBuffer's gralloc fd twice — to fill it and to place it over the guest's page range (`pool_zero_copy` in `gfx_vk_core.c`). Samsung's driver refuses that map: `zero-copy: the buffer allocates but does not map (errno 13)`, EACCES, for **every** usage flag combination, while `AHardwareBuffer_lock` on the same buffer succeeds (measured with a standalone test in the app's uid). A pool that cannot be zero-copy is copied instead, and a copy is refreshed before each submission: Skyrim's log said `copied 525.5 MB`, which at this tablet's copy bandwidth is the ~580 ms a frame.
+- **What is not the cause:** the GPU (1.5 ms at the logo, 10 ms at worst), the BC decompression (no upload had happened yet), MBT/memory pressure (RSS 1.6 GB of 5.7 GB), the driver's features (`nullDescriptor` and `depth clip control` are missing, and nothing failed for them), or the present pacing (`DM_VK_PACE=0` changed nothing).
+- **The way out:** when a pool cannot be zero-copy, refresh only what the guest changed — the dirty-page tracking that packaged textures already use (`nvn_dirty_*`) — instead of copying the whole pool each submission. Not done yet.
+- **Check:** the log's `memory pool %p +%#llx: copied (zero-copy X MB, copied Y MB)` line: `copied` in the hundreds of MB means every frame pays for it.
+- **Found on:** Skyrim on the Galaxy Tab SM-X230 (Dimensity 6300, Mali-G615 MC2), 2026-11-04. The same pool path is zero-copy on the Y700's Adreno 840.
+
 ### GPUs without BC textures are refused at start
 
 - **Symptom:** on an iPhone before the A17 Pro, the game runs until its first BC texture, then `failed assertion 'Texture Descriptor Validation' … MTLTextureDescriptor has invalid pixelFormat (134).` (or another number from 130 to 153, Metal's BC formats; 134 is `BC3_RGBA`) and `CRASH sig=6`, the backtrace through `tex_mtl`, `tex_by_id` and `encode_args`.
