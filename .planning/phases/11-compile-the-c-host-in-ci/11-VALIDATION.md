@@ -41,14 +41,14 @@ created: "2026-11-04"
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
 | 11-01-01 | 01 | 1 | QUAL-13 | — | N/A | unit (argv + driver with fakes) | `python -m unittest tests.test_porter.Both` | ❌ W0 | ⬜ pending |
-| 11-01-02 | 01 | 1 | QUAL-13 | — | N/A | unit (`run_both` with a child raising `BuildError`) | `python -m unittest tests.test_porter.Both` | ❌ W0 | ⬜ pending |
-| 11-01-03 | 01 | 1 | QUAL-13 | — | N/A | unit (fake profile dir) | `python -m unittest tests.test_porter.Both` | ❌ W0 | ⬜ pending |
-| 11-01-04 | 01 | 1 | QUAL-13 | — | N/A | unit (`mock.patch('sys.platform', ...)`) | `python -m unittest tests.test_porter.Both` | ❌ W0 | ⬜ pending |
-| 11-02-01 | 02 | 2 | QUAL-07 | — | N/A | unit (construct `PortTab`, click) | `python -m unittest tests.test_bridge` | ⚠️ extend | ⬜ pending |
-| 11-02-02 | 02 | 2 | QUAL-07 | — | N/A | replay | `python -m unittest tests.test_bridge.Replay.test_port_both` | ❌ W0 | ⬜ pending |
-| 11-03-01 | 03 | 1 | QUAL-09 | — | N/A | static | `python tests/arch_rules.py` (via `tests.test_architecture`) | ❌ W0 | ⬜ pending |
-| 11-03-02 | 03 | 1 | QUAL-09 | — | N/A | unit (patched `LOCK` + `tools_now`) | `python -m unittest tests.test_tool_lock` | ❌ W0 | ⬜ pending |
-| 11-03-03 | 03 | 1 | QUAL-09 | — | N/A | CI job | `host-build.yml` (no local command needed) | ❌ W0 | ⬜ pending |
+| 11-01-02 | 01 | 1 | QUAL-13 | — | N/A | unit (`run_both` with a child raising `BuildError`, fake profile dir, patched `sys.platform`) | `python -m unittest tests.test_porter.Both` | ❌ W0 | ⬜ pending |
+| 11-01-03 | 01 | 1 | QUAL-13 | T-11-01 | N/A | unit (exit code per target status) | `python -m unittest tests.test_porter.Both` | ❌ W0 | ⬜ pending |
+| 11-02-01 | 02 | 2 | QUAL-07 | T-11-05 | N/A | unit (construct `PortTab`, click, argv) | `python -m unittest tests.test_bridge.Targets` | ❌ W0 | ⬜ pending |
+| 11-03-01 | 03 | 3 | QUAL-07 | T-11-09 | N/A | unit (rows, Reveal, plain-text reason) | `python -m unittest tests.test_bridge.Results` | ❌ W0 | ⬜ pending |
+| 11-03-02 | 03 | 3 | QUAL-07 | — | N/A | replay | `python -m unittest tests.test_bridge.Replay` | ❌ W0 (needs `port_both.jsonl`) | ⬜ pending |
+| 11-04-01 | 04 | 1 | QUAL-09 | T-11-13 | N/A | static CI rules + push observation | `python -m unittest tests.test_workflows` | ❌ W0 | ⬜ pending |
+| 11-04-02 | 04 | 1 | QUAL-09 | — | N/A | static tree check | `python tests/arch_rules.py` (via `tests.test_architecture`) | ❌ W0 | ⬜ pending |
+| 11-04-03 | 04 | 1 | QUAL-09 | T-11-17 | N/A | unit (patched `LOCK` + `tools_now`) | `python -m unittest tests.test_tool_lock` | ❌ W0 | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 

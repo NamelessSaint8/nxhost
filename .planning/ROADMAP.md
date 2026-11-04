@@ -323,7 +323,21 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 **Note** (2026-11-04): widened by discussion. The user asked for one-or-both targets chosen in the UI with the work following that choice, so this phase absorbed Phase 9's GUI half (QUAL-07) and gained QUAL-13. The phase name still says "CI" because the directory and requirement QUAL-09 are keyed to it; the plan covers both halves.
 
-**Plans**: TBD
+**Plans**: 0/4 plans complete
+
+Plans:
+**Wave 1**
+
+- [ ] 11-01-PLAN.md — `--platform both`: one run, Android then the Mac app, per-target result and exit code (QUAL-13)
+- [ ] 11-04-PLAN.md — `host-build.yml`'s two blocking jobs, `SRC` drift check, `dmsh_chain.lock` refusal test (QUAL-09)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 11-02-PLAN.md — Port view Targets row, host-appropriate default, one `--platform` token (QUAL-07)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 11-03-PLAN.md — per-target result rows with their own Reveal, `(platform, k)` stage keys, golden stream (QUAL-07)
 
 ### Phase 12: One command that verifies a change
 
