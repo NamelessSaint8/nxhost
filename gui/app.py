@@ -18,6 +18,10 @@ from gui.runner import Porter, call_json
 
 STATUS_COLOUR = {'playable': '#2e7d32', 'wip': '#ef6c00', 'boots': '#ef6c00', 'experimental': '#ef6c00', 'ios only': '#757575'}
 MAC_HOST = sys.platform == 'darwin'   # the view's one host fact (D-02, D-03): it decides whether a box is offered, never whether a game can be ported
+TARGET_LABEL = {'android': 'Android APK', 'mac-app': 'Mac app'}   # D-06, UI-SPEC rules 12-19: the noun a result row, the stage prefix and the status line reuse
+STATUS_WORD = {'ok': 'built', 'failed': 'failed', 'skipped': 'skipped'}   # rule 18: the run's own vocabulary, lower case, never computed here (T-11-10)
+STATUS_GLYPH = {'ok': '✓', 'failed': '✗', 'skipped': '–'}
+STATUS_KEY = {'ok': 'ok', 'failed': 'bad', 'skipped': 'note'}   # every row has a glyph and a word: colour is never the only signal
 
 
 def hms(s):
@@ -87,11 +91,34 @@ class TargetChoice(QWidget):   # the Targets row (D-02, D-03, QUAL-07): two boxe
         self.android_box.setEnabled(on); self.mac_box.setEnabled(on and MAC_HOST)
 
 
+class TargetRow(QWidget):   # one target's outcome (D-06, rules 17-19): glyph, `Target · word`, its package, its own Reveal, and porter's reason on a second line
+    def __init__(self, platform, status, out='', reason=''):
+        super().__init__()
+        self.platform, self.status, self.out = platform, status, out or ''
+        name, word = TARGET_LABEL.get(platform, platform), STATUS_WORD.get(status, status)
+        head = QHBoxLayout(); head.setContentsMargins(0, 0, 0, 0); head.setSpacing(8)
+        self.glyph = QLabel(STATUS_GLYPH.get(status, '')); self.glyph.setStyleSheet(f'color: {firstrun.colour(self, STATUS_KEY.get(status, "note"))}')
+        self.glyph.setFixedWidth(self.glyph.fontMetrics().horizontalAdvance('✗') + 4)
+        self.name = QLabel(f'{name} · {word}'); self.name.setTextFormat(Qt.PlainText)
+        self.path = firstrun.Elided(self.out); self.path.setVisible(bool(self.out))   # no package: no path (rule 17)
+        self.reveal = QPushButton('Reveal'); self.reveal.setEnabled(status == 'ok' and bool(self.out)); self.reveal.clicked.connect(self.open)
+        self.reveal.setToolTip(f'Show the {name} in your file manager'); self.reveal.setAccessibleName(f'Reveal the {name}')
+        head.addWidget(self.glyph, 0, Qt.AlignTop); head.addWidget(self.name, 0, Qt.AlignTop); head.addWidget(self.path, 1); head.addWidget(self.reveal)
+        self.reason = QLabel(reason or ''); self.reason.setTextFormat(Qt.PlainText); self.reason.setWordWrap(True)   # T-11-09: text, never markup
+        self.reason.setStyleSheet(f'color: {firstrun.colour(self, STATUS_KEY.get(status, "note"))}')
+        self.reason.setVisible(bool(reason) and status != 'ok')
+        v = QVBoxLayout(self); v.setContentsMargins(0, 0, 0, 0); v.setSpacing(4); v.addLayout(head); v.addWidget(self.reason)
+
+    def open(self):   # rule 19: the folder holding that target's package, exactly today's open_out once per row
+        if self.out: QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(self.out).parent)))
+
+
 # ---------------- Port ----------------
 class PortTab(QWidget):
     def __init__(self, win):
         super().__init__()
-        self.win, self.info, self.result, self.items, self.t0 = win, None, None, {}, 0
+        self.win, self.info, self.result, self.items, self.rows, self.t0 = win, None, None, {}, [], 0
+        self.red, self.cancelled = '', False   # run() resets them; on_finished reads them, so they exist before a run too
         self.porter = Porter(self); self.porter.event.connect(self.on_event); self.porter.finished.connect(self.on_finished)
         v = QVBoxLayout(self)
 
@@ -128,16 +155,17 @@ class PortTab(QWidget):
         f2 = self.port_btn.font(); f2.setPointSize(f2.pointSize() + 2); f2.setBold(True); self.port_btn.setFont(f2)
         self.port_btn.clicked.connect(self.start)
         self.cancel_btn = QPushButton('Cancel'); self.cancel_btn.setEnabled(False); self.cancel_btn.clicked.connect(self.cancel)
-        self.open_btn = QPushButton('Open output folder'); self.open_btn.setEnabled(False); self.open_btn.clicked.connect(self.open_out)
         self.log_btn = QPushButton('Open log'); self.log_btn.setEnabled(False); self.log_btn.clicked.connect(self.open_log); self.log_path = self.error = None; self.args = []
         self.inst_btn = QPushButton('Install on device'); self.inst_btn.setEnabled(False); self.inst_btn.clicked.connect(self.install_now)
         for b in (self.port_btn, self.cancel_btn): bar.addWidget(b)
         bar.addStretch(1)
-        for b in (self.open_btn, self.log_btn, self.inst_btn): bar.addWidget(b)
+        for b in (self.log_btn, self.inst_btn): bar.addWidget(b)   # rule 19-20: the single output button is gone; each result row has its own Reveal
         v.addLayout(bar)
 
         self.step = QLabel(''); self.step.setTextFormat(Qt.PlainText); self.prog = QProgressBar(); self.prog.setTextVisible(True); self.prog.setRange(0, 1000); self.prog.setValue(0)
         v.addWidget(self.step); v.addWidget(self.prog)
+        self.results = QWidget(); self.results_layout = QVBoxLayout(self.results)   # rules 15-19: one row per target, hidden until a result arrives
+        self.results_layout.setContentsMargins(0, 16, 0, 0); self.results_layout.setSpacing(8); self.results.setVisible(False); v.addWidget(self.results)
         split = QSplitter(Qt.Vertical)
         self.stages = QTreeWidget(); self.stages.setHeaderLabels(['', 'Stage', 'Result', 'Time']); self.stages.setRootIsDecorated(False)
         hh = self.stages.header(); hh.setSectionResizeMode(0, QHeaderView.ResizeToContents); hh.setSectionResizeMode(1, QHeaderView.ResizeToContents); hh.setSectionResizeMode(2, QHeaderView.Stretch)
@@ -190,6 +218,7 @@ class PortTab(QWidget):
 
     def on_targets_changed(self):   # rule 10: the Install row belongs to the Android APK, and only while nothing runs
         self.install_row.setEnabled(self.android_box.isChecked() and not self.porter.running())
+        self.update_install_button()   # rule 20: and so does the bar's Install button, once a row says the APK built
 
     def platform_arg(self) -> str:   # rule 8, QUAL-07: the one place the two boxes become porter's --platform token
         a, m = self.android_box.isChecked(), self.mac_box.isChecked()
@@ -231,9 +260,9 @@ class PortTab(QWidget):
         self.run(args)
 
     def run(self, args):
-        self.stages.clear(); self.items = {}; self.log.clear(); self.prog.setValue(0); self.step.setText('starting…')
+        self.stages.clear(); self.items = {}; self.log.clear(); self.prog.setValue(0); self.step.setText('starting…'); self.clear_results()   # rule 15: no previous run's rows survive
         self.result = None; self.t0 = time.time(); self.cancelled = False; self.log_path = self.error = None; self.args = args; self.red = ''
-        for b in (self.port_btn, self.open_btn, self.log_btn, self.inst_btn): b.setEnabled(False)
+        for b in (self.port_btn, self.log_btn, self.inst_btn): b.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.targets.boxes_enabled(False); self.install_row.setEnabled(False); self.targets.refresh(clear=True)   # rule 11: no target changes mid-run
         self.append('$ porter ' + ' '.join(f'"{a}"' if ' ' in a else a for a in args))
@@ -279,7 +308,7 @@ class PortTab(QWidget):
         elif e == 'error':
             self.error = ev
         elif e == 'result':
-            self.result = ev; self.log_path = ev.get('log') or self.log_path; self.log_btn.setEnabled(bool(self.log_path))
+            self.result = ev; self.log_path = ev.get('log') or self.log_path; self.log_btn.setEnabled(bool(self.log_path)); self.show_results(ev)   # rules 15-16
 
     def on_tick(self):   # the running stage's elapsed time
         if not self.porter.running(): return
@@ -294,15 +323,28 @@ class PortTab(QWidget):
         took = hms(time.time() - self.t0)
         if code == 0:
             self.step.setText(f'done in {took}'); self.prog.setRange(0, 1000); self.prog.setValue(1000)
-            if self.result: self.open_btn.setEnabled(True); self.inst_btn.setEnabled(True)
         else:
             cause = (self.error or {}).get('msg') or self.red
             if code == 130 or self.cancelled: self.step.setText('cancelled'); self.append('[RED] cancelled')
             else: self.step.setText(f'failed after {took}' + (f': {cause}' if cause else ''))
             self.prog.setRange(0, 1000); self.prog.setValue(0)
 
-    def open_out(self):
-        if self.result: QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(self.result['apk']).parent)))
+    def clear_results(self):   # rule 15: no rows and nothing to say before a run; no heading, no placeholder
+        while self.results_layout.count():
+            w = self.results_layout.takeAt(0).widget()
+            if w: w.setParent(None); w.deleteLater()
+        self.rows = []; self.results.setVisible(False)
+
+    def show_results(self, res):   # rules 16-19: one row per target in the run's order; a single-target result draws one row from its flat fields (today's shape)
+        self.clear_results()
+        rows = res.get('targets') or [{'platform': res.get('platform') or 'android', 'status': 'ok', 'out': res.get('apk') or res.get('data') or res.get('app') or '', 'reason': ''}]
+        for r in rows:
+            row = TargetRow(r.get('platform') or 'android', r.get('status') or 'ok', r.get('out') or '', r.get('reason') or '')
+            self.results_layout.addWidget(row); self.rows.append(row)
+        self.results.setVisible(bool(self.rows)); self.update_install_button()
+
+    def update_install_button(self):   # rule 20: the bar's Install button exists only for a built Android row, while the player still asks for the APK
+        self.inst_btn.setEnabled(self.android_box.isChecked() and any(r.platform == 'android' and r.status == 'ok' for r in self.rows))
 
     def open_log(self):
         if self.log_path: QDesktopServices.openUrl(QUrl.fromLocalFile(self.log_path))
