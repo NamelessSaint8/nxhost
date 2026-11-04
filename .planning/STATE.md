@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 11
 current_phase_name: Compile the C host in CI
 status: executing
-stopped_at: Completed 11-04-PLAN.md
-last_updated: "2026-11-04T16:12:20.588Z"
+stopped_at: Completed 11-02-PLAN.md
+last_updated: "2026-11-04T16:34:11.920Z"
 last_activity: 2026-11-04
 last_activity_desc: 11-04-PLAN.md complete
 progress:
   total_phases: 11
   completed_phases: 3
   total_plans: 42
-  completed_plans: 40
+  completed_plans: 41
 state_head: ddc31a8fbec161010ac84b951068ad70f77b9fe3
 ---
 
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-10-31)
 ## Current Position
 
 Phase: 11 (Compile the C host in CI)
-Plan: 4 of 4
-Status: Executing — 11-01 and 11-04 complete; 11-02 and 11-03 remaining
-Last activity: 2026-11-04 — 11-04-PLAN.md complete
+Plan: 3 of 4 (11-03 remaining)
+Status: Executing — 11-01, 11-02 and 11-04 complete; 11-03 remaining
+Last activity: 2026-11-04 — 11-02-PLAN.md complete
 
-Progress: [██████████] 95%
+Progress: [██████████] 98%
 
 ## Performance Metrics
 
@@ -100,6 +100,7 @@ Progress: [██████████] 95%
 | Phase 03 P15 | 8 min | 3 tasks | 10 files |
 | Phase 11 P01 | 20min | 3 tasks | 5 files |
 | Phase 11 P04 | 3min | 3 tasks | 6 files |
+| Phase 11 P02 | 15min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -208,6 +209,7 @@ Recent decisions affecting current work:
 - [Phase 11]: The host compiles in CI as two independent path-filtered jobs named for their target (host-apple on macos-26 through the Makefile, host-android on ubuntu-22.04 through build.py); MACOS_MIN comes from the runner's SDK on the make command line, so dm/mac/min_os.mk keeps 26.6
 - [Phase 11]: dm/host CFLAGS carries -Werror=implicit-function-declaration (never a blanket -Werror), and tests/arch_rules.py rule 12 fails by name when a dm/host source is missing from the hand-listed SRC that Android's glob would compile
 - [Phase 11]: tool_lock.main(argv) returns 0 clean / 1 mismatch / 2 usage with the [RED] sentence in the MISMATCH constant; usage exiting 2 instead of 1 is the refactor's only code change
+- [Phase 11]: Phase 11-02 target default (option-a, D-02 rule 4): on macOS only Mac app is ticked, everywhere else only Android APK; the other box stays tickable where the host offers it
 
 ### Roadmap Evolution
 
@@ -237,6 +239,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-04T16:12:16.153Z
-Stopped at: Completed 11-04-PLAN.md
+Last session: 2026-11-04T16:34:11.905Z
+Stopped at: Completed 11-02-PLAN.md
 Resume file: None

@@ -92,7 +92,7 @@ Added 2026-11-04 with roadmap Phases 7–14 (plan of record: `docs/TOOLING_PLAN.
 - [ ] **QUAL-04**: Shader worker count is capped by available RAM as well as core count, with the per-worker footprint measured, so a 16-core/16 GB host neither swaps nor runs out of memory
 - [ ] **QUAL-05**: Cross-target shader reuse is settled by measurement: either a second run is demonstrably warm, or the reason reuse cannot happen is documented in `dmsh_build.py`
 - [ ] **QUAL-06**: `porter port --platform android|mac-app` is the only entry point for either package, with reuse keys namespaced per target and build folders written with today's keys still usable
-- [ ] **QUAL-07**: The GUI's Port view offers the target through porter — Android, the Mac app, or both as two checkboxes defaulting to what suits the host, with the Mac app disabled off macOS — and one run shows one result with a row per target, with no second code path from view to pipeline
+- [x] **QUAL-07**: The GUI's Port view offers the target through porter — Android, the Mac app, or both as two checkboxes defaulting to what suits the host, with the Mac app disabled off macOS — and one run shows one result with a row per target, with no second code path from view to pipeline
 - [ ] **QUAL-08**: `porter saves list|export|import` moves saves between Android and the Mac with a manifest, and refuses a build-ID mismatch with a precise reason instead of writing an unloadable save
 - [x] **QUAL-09**: CI compiles `dm/host` for Apple arm64 and Android arm64 on every push, as two blocking jobs path-filtered to `nxnative/**` and `.github/**`; a source missing from `SRC` fails naming the file; implicit function declarations are errors on every toolchain; the `dmsh_chain.lock` refusal is covered by a test
 - [ ] **QUAL-10**: `python devtools/verify.py` runs the suite, a warm re-port per engine family and a device smoke that asserts no `[RED]` and no crash, and prints one verdict with every skip named
@@ -236,7 +236,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | QUAL-04 | Phase 8 | Pending |
 | QUAL-05 | Phase 8 | Pending |
 | QUAL-06 | Phase 9 | Pending |
-| QUAL-07 | Phase 11 | Pending |
+| QUAL-07 | Phase 11 | Complete |
 | QUAL-08 | Phase 10 | Pending |
 | QUAL-09 | Phase 11 | Complete |
 | QUAL-10 | Phase 12 | Pending |
