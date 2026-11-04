@@ -374,7 +374,8 @@ def build_id(nso):
         f.seek(0x40); return f.read(16).hex()
 
 
-def _gone(func, path, exc):   # shutil.rmtree's onexc hook (Python 3.12+, the script's floor)
+def _gone(func, path, exc):   # shutil.rmtree's hook: onexc on 3.12+, onerror (an exc_info tuple) below it
+    if isinstance(exc, tuple): exc = exc[1]   # onerror hands over sys.exc_info(), onexc the exception itself
     if not (isinstance(exc, OSError) and exc.errno == errno.ENOENT): raise exc   # anything but "already gone" is a real failure
 
 
@@ -382,7 +383,9 @@ def rmtree(p):
     """Make p gone. An entry that vanishes between the listing and its unlink is the goal reached, not an error: on an exFAT / FAT drive macOS keeps each AppleDouble `._x` beside `x`
     and drops it when `x` is deleted, so the walk's later unlink of `._x` raised FileNotFoundError and left the folder half deleted"""
     if p.is_symlink() or p.is_file(): p.unlink()
-    elif p.exists(): shutil.rmtree(p, onexc=_gone)   # Python 3.13 and later pass these by themselves
+    elif p.exists():
+        if sys.version_info >= (3, 12): shutil.rmtree(p, onexc=_gone)   # the porter CLI still runs on 3.11, where only onerror exists
+        else: shutil.rmtree(p, onerror=_gone)
 
 
 def build_nx_extract(repo, work, logs, env):
