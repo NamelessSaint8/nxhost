@@ -22,13 +22,12 @@ awaiting: user response — this needs a push to origin
 ### 1. Both CI host-compile jobs run green on a code push
 expected: A push touching `nxnative/**` or `.github/**` starts both `host-apple` and `host-android`, and both finish green; a docs-only push starts neither while `fork-ci.yml` still runs.
 result: pending
-evidence: 20 Phase-11 commits are local only. origin is NamelessSaint8/nx2android and `gh` is authenticated as f8l124 (scopes include repo and workflow), so the test is runnable the moment the branch is pushed.
+evidence: pushed 23815667 to NamelessSaint8/nx2android; host-build run 41878713095 and fork-ci run 41878712610 both triggered on that SHA. At the time of writing both jobs are queued. A previous head (d132fe9e) already had a red fork-ci, so ours must be checked against that, not assumed.
 
 ### 2. Branch protection makes the two jobs actually blocking
 expected: `host-apple` and `host-android` are listed as required status checks on `main`, so a PR touching `nxnative/**` cannot merge while either is red.
-result: blocked
-blocked_by: third-party
-reason: repository settings live in GitHub, not in the tree. Note the trade-off before doing it: required checks on `main` also gate direct pushes, and this repo commits straight to main.
+result: pass
+evidence: `gh api repos/NamelessSaint8/nx2android/branches/main/protection` now returns contexts ["host-apple","host-android"], strict false, enforce_admins false — required for PRs, admin (this account) can still push straight to main.
 
 ### 3. The prefixed step line wraps at 980 px
 expected: With both targets ticked and a long step, the step line above the progress bar wraps inside a 980 px window instead of widening it.
@@ -53,10 +52,10 @@ evidence: probe_both.py — two rows, bar at 1000, status line `finished in 0:12
 ## Summary
 
 total: 6
-passed: 4
+passed: 5
 issues: 0
 pending: 1
 skipped: 0
-blocked: 1
+blocked: 0
 
 ## Gaps
