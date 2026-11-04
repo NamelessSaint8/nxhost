@@ -1,4 +1,15 @@
-# Written by porter for an experimental port: the game has not been brought up on Android
-status	experimental
+# The Elder Scrolls V: Skyrim (01000A10041EA000), update v262144 (1.1.177): Bethesda's Creation Engine on NVN, through the Vulkan replay.
+# Tested 2026-11-03 on the Legion Y700 (HA2M2W71, Snapdragon 8 Elite, Adreno 840, Android 16), played by hand: a save loaded (CONTINUE), Riverwood to Whiterun on
+# foot, building interiors in and out, fast travel both ways, combat and magic, with a GameSir G8+ pad. 60 fps (0 dropped, p99 16.67 ms; frame work 16.5 of a
+# 16.67 ms budget, GPU 12.3 ms, replay 4.5 ms over ~2,050 draws) with 200-900 ms load frames at a cell change: 150-420 ms of replay and 200-850 ms of the
+# guest's own streaming. Footprint settles near 1.6-1.7 GB; audio clean (0 underruns); saves and 12.9 GB of data pack as the profile describes.
+# What it needed from the core: a BSA v0x69 reader for the 89 shader archives (23,133 keys); the depth prepass built as a depth-only pipeline (a draw with no
+# pixel shader still rasterizes on the hardware -- without it every actor's skin, the tree trunks and the player's own legs were invisible); and the replay
+# profiler's SIGPROF frame moved onto an alternate stack (its signal frame was overwriting the x18 stubs' register saves). present_interval display reaches
+# 60 fps because the 30 fps cap is only the game's own NVN present interval and its logic is time-based; the pause menu's Frame rate row switches 60/30 live.
+# Known gaps: saves live in the app's internal storage and a release build cannot export them (adb backup only); the Anniversary Edition prompt stays
+# because our DLC NSP is licence-only; a cell load's replay cost is not addressed; no iOS/macOS packaging for this profile yet.
+status	playable
+tested	v262144 Lenovo Legion Y700 HA2M2W71 (Snapdragon 8 Elite, Adreno 840, Android 16)
 package	org.nx2a.t01000a10041ea000
 orientation	landscape
