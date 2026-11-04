@@ -16,6 +16,7 @@
 #include <signal.h>
 #include <sys/mman.h>
 #include <time.h>
+#include <unistd.h>   // getpagesize: Apple clang 21 refuses the implicit declaration that older toolchains accepted
 #include <mach/mach.h>
 #include <pthread/qos.h>
 #include <dlfcn.h>
