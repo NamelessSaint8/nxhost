@@ -1,0 +1,11 @@
+# Persona 4 Golden on Android (keys in docs/ARCHITECTURE.md "Game profiles on Android")
+# Atlus's own engine with CRIWARE on NVN, SDK 14.3.0; 26 BNSH shaders under sysdat.cpk. Upstream brought the game up on
+# the Mac on 1.0.2 (v131072); this dump is 1.0.1 (v65536), whose modules and shaders are byte-identical (the same NSO build
+# IDs and the same shader tables), so both build rows are registered and the shader tables serve either.
+# On the Y700 (2026-11-03): boots, the opening movie plays with sound, and the title screen and its menu draw at 58-60 fps
+# (frame time p50 17.09 ms, GPU p50 2.05 ms) over 4,500 frames with no red log line. A new game, a save, the pause menu,
+# the on-screen gamepad and text entry are not tested yet.
+status	boots
+tested	v65536 Lenovo Legion Y700 TB323FU (Snapdragon 8 Elite Gen 5, Adreno 840, Android 16)
+package	org.nx2a.p4g
+orientation	landscape

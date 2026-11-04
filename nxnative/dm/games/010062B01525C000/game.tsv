@@ -4,9 +4,10 @@ name	Persona 4 Golden
 ipa	Persona4Golden.ipa
 app_category	public.app-category.role-playing-games
 pad_layout	full
+build	v65536	1.0.1	main=66b2b6d53549a6364a43f69e282e3882	subsdk0=c781dd63daf0ddcdb9975da50a198f93	sdk=2aef2cffb104ee7c9e212fd2f4c731e9
 build	v131072	1.0.2	main=66b2b6d53549a6364a43f69e282e3882	subsdk0=c781dd63daf0ddcdb9975da50a198f93	sdk=2aef2cffb104ee7c9e212fd2f4c731e9
 package	v131072
-shader_versions	v131072
+shader_versions	v65536
 modules	main subsdk0 sdk
 romfs_marker	data.cpk
 zip_store	.cpk:.metallib

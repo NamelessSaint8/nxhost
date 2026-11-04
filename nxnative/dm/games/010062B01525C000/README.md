@@ -53,6 +53,21 @@ iPhone: no IPA was built, and the touch layout is untested.
 
 - The memory keys are the provisional ones; they hold through the tested route
   and were not measured further.
-- Only the 1.0.2 build (`v131072`) is registered. The base 1.0.0 build and
-  the 1.0.1 update are not.
+- Both the 1.0.1 (`v65536`) and 1.0.2 (`v131072`) builds are registered. Their
+  NSO build IDs are identical and their shaders split to identical tables, so
+  the update is data-only and one set of constants and tables serves both; the
+  base 1.0.0 build is not registered. `shader_versions` names 1.0.1, the dump
+  the tables were checked against: a folder holding only 1.0.2 derives a
+  profile (the split wants every named version present) whose tables come out
+  identical.
 - iPhone: not built, not installed, not tested.
+
+## Android
+
+Brought up on a Lenovo Legion Y700 (`TB323FU`, Snapdragon 8 Elite Gen 5,
+Adreno 840, Android 16) on 2026-11-03 with the 1.0.1 dump: it boots, the
+opening movie plays with sound, and the title screen and its menu draw at
+58–60 fps (frame p50 17.09 ms, GPU p50 2.05 ms) with no `[RED]` line. A new game,
+a save, the pause menu, the gamepad layout and text entry are not tested yet;
+the profile's [`android.tsv`](android.tsv) says `boots` until they are.
+
