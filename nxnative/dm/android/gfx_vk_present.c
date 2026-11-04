@@ -124,7 +124,9 @@ static void barrier(VkCommandBuffer cb, VkImage img, VkImageLayout from, VkImage
 enum { SP_DISC = OV_N, SP_BLACK, SP_N };
 #define OV_FPS_CHARS "0123456789 FPS-"
 static struct { VkImage img; VkDeviceMemory mem; VkImageView view; VkSampler samp; VkDescriptorSetLayout dsl; VkPipelineLayout layout; VkDescriptorPool pool; VkDescriptorSet set;
-                VkPipeline pipe; VkFormat pfmt; uint32_t w, h, sh, pw, ph, gh, gs; VkBuffer up; VkDeviceMemory upm; uint8_t *px; int uploaded, panel; float sp[SP_N][3];
+                VkDescriptorPool pic_pool; VkDescriptorSet pic_set[8];   // the game's picture, drawn through the same pipeline when the window origin is lower left
+                VkPipeline pipe; VkPipeline pipe_pic;   // pipe_pic: the same shaders with blending off, for the opaque picture
+                VkFormat pfmt; uint32_t w, h, sh, pw, ph, gh, gs; VkBuffer up; VkDeviceMemory upm; uint8_t *px; int uploaded, panel; float sp[SP_N][3];
                 VkRenderPass rp; VkFramebuffer fb[8]; VkImageView fbview[8]; VkExtent2D fbext[8]; } g_ov;
 // Without dynamic rendering (a Vulkan 1.1 / 1.2 device, V.has_dynrender) the overlay draws in a render pass object over the swapchain image: one pass for the swapchain's
 // format (load and store, the image already in COLOR_ATTACHMENT_OPTIMAL), and a framebuffer per swapchain image, made again when its view or the extent changes
@@ -276,13 +278,18 @@ static void ov_panel(int st) {   // the pause menu, for menu state st (dm_menu_s
     int ts = (int)fmaxf(2, roundf(rh * 0.30f / 7)), is = (int)fmaxf(2, roundf(rh * 0.22f / 7));
     float ty = pad + rh / 2; cv_text(&cv, (W - cv_text_w("PAUSED", ts)) / 2, ty, "PAUSED", ts, C_WHITE);
     cv_rrect(&cv, pad, pad + rh - 1, W - pad, pad + rh, 0.5f, line);
-    static const char *labels[OVM_N] = {"Controller overlay", "Rumble", "Show FPS", "Mode", "Frame rate", "Resume"};
+    static const char *labels[OVM_N] = {"Controller overlay", "Rumble", "Show FPS", "Mode", "Frame rate", "Console", "Resume"};
     int sel = (st >> 4 & 15) - 1;
     for (int i = 0; i < OVM_N; i++) {
         float y0 = pad + (i + 1) * rh, cy = y0 + rh / 2;
         if (i == sel) cv_rrect(&cv, pad * 0.6f, y0 + rh * 0.08f, W - pad * 0.6f, y0 + rh * 0.92f, rh * 0.14f, hi);
         if (i == OVM_RESUME) { cv_text(&cv, (W - cv_text_w(labels[i], is)) / 2, cy, labels[i], is, C_ACCENT); continue; }
         cv_text(&cv, pad * 1.6f, cy, labels[i], is, i == sel ? C_WHITE : dim);
+        if (i == OVM_CONSOLE) {   // a prompt, not a switch: the word on the right says what picking it does
+            const char *word = "Open";
+            cv_text(&cv, W - pad * 1.6f - cv_text_w(word, is), cy, word, is, C_ACCENT);
+            continue;
+        }
         if (i == OVM_MODE) {   // two segments, the current one filled: Performance (handheld) | Resolution (docked)
             static const char *seg[2] = {"Performance", "Resolution"}; int docked = st >> 2 & 1;
             float sh = rh * 0.46f, sw = fmaxf(cv_text_w(seg[0], is), cv_text_w(seg[1], is)) + sh, x1 = W - pad * 1.6f, x0 = x1 - 2 * sw;
@@ -407,6 +414,16 @@ static int overlay_ready(VkCommandBuffer cb, uint32_t k, int menu) {   // k: thi
             VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE};
         VKCHK(vkCreateSampler(V.dev, &si, NULL, &g_ov.samp));
     }
+    if (!g_ov.pic_pool) {   // the game's picture: one descriptor set per present slot, so an update never races a frame still in flight
+        VkDescriptorPoolSize ps = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8};
+        VkDescriptorPoolCreateInfo pi = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, NULL, 0, 8, 1, &ps};
+        VKCHK(vkCreateDescriptorPool(V.dev, &pi, NULL, &g_ov.pic_pool));
+    }
+    if (!g_ov.pic_set[k]) {
+        VkDescriptorSetLayout l = g_ov.dsl;
+        VkDescriptorSetAllocateInfo ai = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, NULL, g_ov.pic_pool, 1, &l};
+        if (vkAllocateDescriptorSets(V.dev, &ai, &g_ov.pic_set[k])) { VKRED_ONCE(95, "picture descriptor set failed"); return 0; }
+    }
     if (g_ov.pfmt != g_sfmt) {   // the pipeline renders into the swapchain's format
         VkShaderModule vm, fm;
         VkShaderModuleCreateInfo vc = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, NULL, 0, sizeof overlay_vert_spv, overlay_vert_spv}; VKCHK(vkCreateShaderModule(V.dev, &vc, NULL, &vm));
@@ -427,8 +444,10 @@ static int overlay_ready(VkCommandBuffer cb, uint32_t k, int menu) {   // k: thi
         if (!V.has_dynrender && !orp) return 0;
         VkGraphicsPipelineCreateInfo ci = {VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, orp ? NULL : &rci, 0, 2, ss, &vi, &ia, NULL, &vs, &rs, &ms, NULL, &cbs, &dy, g_ov.layout, orp};
         VkResult r = vkCreateGraphicsPipelines(V.dev, V.pcache, 1, &ci, NULL, &g_ov.pipe);
+        ba.blendEnable = 0;   // the game's picture goes through the same shaders, opaque: exactly the bytes the blit used to copy
+        VkResult r2 = vkCreateGraphicsPipelines(V.dev, V.pcache, 1, &ci, NULL, &g_ov.pipe_pic);
         vkDestroyShaderModule(V.dev, vm, NULL); vkDestroyShaderModule(V.dev, fm, NULL);
-        if (r) { VKRED_ONCE(92, "overlay pipeline failed: %d", r); return 0; }
+        if (r || r2) { VKRED_ONCE(92, "overlay pipeline failed: %d / %d", r, r2); return 0; }
         g_ov.pfmt = g_sfmt;
     }
     if (g_ov.w != w || g_ov.h != h) {   // (re)rasterize for this window size
@@ -518,6 +537,19 @@ static uint64_t pace_desired(double period) {   // the frame's desired present t
     g_pace_target = t;
     return t - g_refresh_ns / 2;
 }
+static int present_flip(void) {   // DM_VK_PRESENT_FLIP=0/1 forces the blit or the flipped draw; unset: the window origin decides
+    const char *e = getenv("DM_VK_PRESENT_FLIP");
+    return e ? atoi(e) != 0 : mtl_origin_lower_left();
+}
+static int pic_view(vkimg_t *im) {   // a view of the whole window image for the flipped draw; kept with the image (img_drop frees it)
+    if (im->full) return 1;
+    VkImageViewCreateInfo vi = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, NULL, 0, im->img, VK_IMAGE_VIEW_TYPE_2D, im->fmt,
+                                {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY},
+                                {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+    VkResult r = vkCreateImageView(V.dev, &vi, NULL, &im->full);
+    if (r) { VKRED_ONCE(96, "window view for the present flip failed: %d", r); im->full = VK_NULL_HANDLE; return 0; }
+    return 1;
+}
 static void present_window(vkimg_t *im, const int crop[4], double period, uint64_t ticket) {   // period: the game's frame period (s); < 0 for a redraw (ticket 0)
     uint32_t k = g_pi++ % 8;
     vkWaitForFences(V.dev, 1, &g_pfence[k], 1, UINT64_MAX);
@@ -536,11 +568,17 @@ static void present_window(vkimg_t *im, const int crop[4], double period, uint64
     int cx = crop ? crop[0] : 0, cy = crop ? crop[1] : 0, cw = crop && crop[2] ? crop[2] : (int)im->w, ch = crop && crop[3] ? crop[3] : (int)im->h;
     double s = fmin((double)g_sext.width / cw, (double)g_sext.height / ch); int dw = (int)(cw * s), dh = (int)(ch * s), dx = ((int)g_sext.width - dw) / 2, dy = ((int)g_sext.height - dh) / 2;
     vk_pic_set((float)dx / g_sext.width, (float)dy / g_sext.height, (float)dw / g_sext.width, (float)dh / g_sext.height);
-    VkImageBlit b = {{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {{cx, cy, 0}, {cx + cw, cy + ch, 1}}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {{dx, dy, 0}, {dx + dw, dy + dh, 1}}};
-    vkCmdBlitImage(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, g_simg[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b, VK_FILTER_LINEAR);
-    VkImageLayout lay = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     int ovm = dm_overlay_visible(), menu = dm_menu_state(), fps = dm_overlay_fps();
-    if ((ovm || menu >= 0 || fps) && overlay_ready(cb, k, menu) && (V.has_dynrender || ov_fb(idx))) {   // without dynamic rendering, only with the image's framebuffer
+    // A lower-left origin game (NVN's default, kept by any game that never calls nvnDeviceSetWindowOriginMode) renders GL-style into a top-left Vulkan image,
+    // so its window texture is stored bottom-up: Metal and GL flip it at present, and here the picture is drawn through the quad pipeline with V flipped instead
+    // of blitted. The overlay still draws on top, upright. DM_VK_PRESENT_FLIP=0/1 forces the blit or the flip (P4G keeps the lower-left origin)
+    int flip = present_flip() && im->samples == 1 && (im->aspect & VK_IMAGE_ASPECT_COLOR_BIT) && im->img;
+    int ov_ok = (ovm || menu >= 0 || fps || flip) && overlay_ready(cb, k, menu) && (V.has_dynrender || ov_fb(idx));   // without dynamic rendering, only with the image's framebuffer
+    if (flip && (!ov_ok || (!im->full && !pic_view(im)))) flip = 0;   // no drawing path or no view to sample: keep the blit rather than show nothing
+    if (!flip) { VkImageBlit b = {{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {{cx, cy, 0}, {cx + cw, cy + ch, 1}}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {{dx, dy, 0}, {dx + dw, dy + dh, 1}}};
+                 vkCmdBlitImage(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, g_simg[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b, VK_FILTER_LINEAR); }
+    VkImageLayout lay = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    if (ov_ok) {
         barrier(cb, g_simg[idx], lay, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL); lay = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         VkRenderingAttachmentInfo ca = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, NULL, g_sview[idx], lay, 0, NULL, VK_IMAGE_LAYOUT_UNDEFINED, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE};
         VkRenderingInfo ri = {VK_STRUCTURE_TYPE_RENDERING_INFO, NULL, 0, {{0, 0}, g_sext}, 1, 0, 1, &ca, NULL, NULL};
@@ -548,10 +586,21 @@ static void present_window(vkimg_t *im, const int crop[4], double period, uint64
         if (V.has_dynrender) vkCmdBeginRendering(cb, &ri);
         else { VkRenderPassBeginInfo rbi = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, NULL, g_ov.rp, ofb, {{0, 0}, g_sext}, 0, NULL};
                vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE); }
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_ov.pipe);
-        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_ov.layout, 0, 1, &g_ov.set, 0, NULL);
         VkViewport vp = {0, 0, (float)g_sext.width, (float)g_sext.height, 0, 1}; VkRect2D sc = {{0, 0}, g_sext};
         vkCmdSetViewport(cb, 0, 1, &vp); vkCmdSetScissor(cb, 0, 1, &sc);
+        if (flip) {   // the picture: the crop, sampled bottom-up (Metal's uv flip), opaque
+            VkDescriptorImageInfo ii = {g_ov.samp, im->full, VK_IMAGE_LAYOUT_GENERAL};
+            VkWriteDescriptorSet wr = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, NULL, g_ov.pic_set[k], 0, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &ii};
+            vkUpdateDescriptorSets(V.dev, 1, &wr, 0, NULL);
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_ov.pipe_pic);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_ov.layout, 0, 1, &g_ov.pic_set[k], 0, NULL);
+            float W = (float)g_sext.width, H = (float)g_sext.height;
+            ov_quad q = {{(float)dx / W * 2 - 1, (float)dy / H * 2 - 1, (float)(dx + dw) / W * 2 - 1, (float)(dy + dh) / H * 2 - 1},
+                         {(float)cx / im->w, (float)(cy + ch) / im->h, (float)(cx + cw) / im->w, (float)cy / im->h}, 1.0f};
+            ov_draw(cb, &q);
+        }
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_ov.pipe);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_ov.layout, 0, 1, &g_ov.set, 0, NULL);
         ov_render(cb, ovm, menu, fps);
         if (V.has_dynrender) vkCmdEndRendering(cb); else vkCmdEndRenderPass(cb);
     }
@@ -597,7 +646,7 @@ static void shot(vkimg_t *im, uint64_t n) {
     fprintf(f, "P6\n%u %u\n255\n", w, h);
     int bgra = im->fmt == VK_FORMAT_B8G8R8A8_UNORM || im->fmt == VK_FORMAT_B8G8R8A8_SRGB;
     uint8_t *row = malloc((size_t)w * 3);
-    for (uint32_t y = 0; y < h; y++) { const uint8_t *s = p + (size_t)y * w * 4; for (uint32_t x = 0; x < w; x++) { row[3 * x] = s[4 * x + (bgra ? 2 : 0)]; row[3 * x + 1] = s[4 * x + 1]; row[3 * x + 2] = s[4 * x + (bgra ? 0 : 2)]; } fwrite(row, 1, (size_t)w * 3, f); }
+    for (uint32_t y = 0; y < h; y++) { const uint8_t *s = p + (size_t)(present_flip() ? h - 1 - y : y) * w * 4; for (uint32_t x = 0; x < w; x++) { row[3 * x] = s[4 * x + (bgra ? 2 : 0)]; row[3 * x + 1] = s[4 * x + 1]; row[3 * x + 2] = s[4 * x + (bgra ? 0 : 2)]; } fwrite(row, 1, (size_t)w * 3, f); }
     free(row); fclose(f);
     VKLOG("frame %llu written to %s (%ux%u)", (unsigned long long)n, path, w, h);
 }
