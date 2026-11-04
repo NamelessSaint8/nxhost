@@ -1,0 +1,44 @@
+# The Elder Scrolls V: Skyrim (01000A10041EA000), update v262144 (1.1.177.3285177), SDK 14.3.0, main build 771bdfb65f8d0af7203ad4dfeeb548fa.
+# Started as the survey's provisional profile; the memory numbers, the 60 fps decision and the shader split below were then measured on the Y700 (2026-11-03) and the
+# profile plays end to end on Android. It is not in dm/games of upstream, and the Metal (iOS / macOS) shader chain has not been built for it.
+
+# ---- Identity ----
+title_id	01000A10041EA000
+program_id	01000A10041EA000
+
+# ---- App ----
+name	The Elder Scrolls V: Skyrim
+ipa	TheElderScrollsVSkyrim.ipa
+app_category	public.app-category.games
+
+# ---- Versions ----
+build	v262144	1.1.177.3285177	main=771bdfb65f8d0af7203ad4dfeeb548fa	sdk=2aef2cffb104ee7c9e212fd2f4c731e9
+package	v262144
+shader_versions	v262144
+
+# ---- Files ----
+# every module main imports from
+modules	main sdk
+romfs_marker	Data/Skyrim - Voices_en0.bsa
+zip_store	.bik:.bsa:.esm:.metallib
+
+# ---- Memory ----
+# the NPDM declares 8 MB of system resource (virtual address memory) and main never sets a heap: the game maps its memory itself. By the main menu it had reserved 7.4 GB of
+# address regions (measured on the Y700 with DM_ALIAS_SIZE=0x1000000000 and DM_REGIONS: 24 regions, the last ending at alias +0x1baa00000); 16 GB leaves room for streaming
+mem_reserve	0x440000000
+mem_alias	0x400000000
+mem_stack	0x10000000
+app_pool	0xCD500000
+# the NPDM declares 8 MB of system resource
+sys_resource	0x800000
+
+# ---- Shader split ----
+shader_groups	/Data/=data /BatchFiles/=batchfiles
+shader_note	The Elder Scrolls V: Skyrim shaders: Creation Engine .fxp records in the RomFS's BSA archives and 53 built-in ones in main, 23,133 keys in total
+
+# ---- Frame rate ----
+# 60 fps: the game caps itself only by asking NVN for present interval 2 on a 60 Hz tick, and its logic is time-based.
+# At 60 the player measured walk pace, NPC animation, combat and magic timing and the in-game clock as normal speed
+# (2026-11-03), with 0 dropped frames and p99 16.67 ms in a loaded save. The budget is full (frame work 16.5 of
+# 16.67 ms), so cities and combat will drop frames first; present_interval game goes back to 30 fps.
+present_interval	display
