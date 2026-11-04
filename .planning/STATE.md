@@ -1,19 +1,20 @@
 ---
-gsd_state_version: "1.0"
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
 current_phase: 03
 current_phase_name: Host Toolchains and Guided First Run
 status: verifying
-stopped_at: Completed 03-15-PLAN.md
-last_updated: "2026-10-31T19:08:53.097Z"
-last_activity: 2026-10-31
-last_activity_desc: Phase 03 execution started
-state_head: ddc31a8fbec161010ac84b951068ad70f77b9fe3
+stopped_at: Phase 11 context gathered
+last_updated: "2026-11-04T05:51:38.687Z"
+last_activity: 2026-11-04
+last_activity_desc: Added Phases 7-14 (tooling and code quality workstream)
 progress:
-  total_phases: 6
-  completed_phases: 2
+  total_phases: 11
+  completed_phases: 3
   total_plans: 38
   completed_plans: 38
-  percent: 33
+state_head: ddc31a8fbec161010ac84b951068ad70f77b9fe3
 ---
 
 # Project State
@@ -32,11 +33,12 @@ Plan: 15 of 15
 Status: Phase complete — ready for verification
 Last activity: 2026-10-31 — Phase 03 execution started
 
-Progress: [███░░░░░░░] 33%
+Progress: [█░░░░░░░░░] 14%
 
 ## Performance Metrics
 
 **Velocity:**
+
 - Total plans completed: 23
 - Average duration: -
 - Total execution time: 0.0 hours
@@ -49,6 +51,7 @@ Progress: [███░░░░░░░] 33%
 | 02 | 13 | - | - |
 
 **Recent Trend:**
+
 - Last 5 plans: -
 - Trend: -
 
@@ -197,6 +200,11 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-15: the Setup tab's Save and check writes only fields changed since the last load; every re-check reloads untouched fields from config.json (CR-01)
 - [Phase 03]: 03-15: Porter.start refuses a second run (returns False) and emits started before QProcess.start; the Setup tab asks setup --json one at a time (WR-03/WR-04)
 
+### Roadmap Evolution
+
+- Phases 7–14 added (2026-11-04): the tooling and code quality workstream, plan of record `docs/TOOLING_PLAN.md` whose T0–T7 are these phases in order — measure what a port costs, make the cold shader stage predictable, one entry point for Android and Mac, saves between devices, the C host in CI, one command that verifies a change, guards from past incidents, upstream cadence. Requirements QUAL-01…QUAL-12; coverage 60 → 72. One edge into the GUI milestone: Phase 9 must land before Phase 4 is planned.
+- Phase 11 re-scoped (2026-11-04, discuss-phase): the user asked for one-or-both targets chosen in the UI with the work following that choice, so Phase 11 now also delivers `--platform both`, the Port view's two checkboxes and per-target results. It absorbed Phase 9's GUI half (QUAL-07) and gained QUAL-13; Phase 9 keeps QUAL-06, whose CLI half already landed. Coverage 72 → 73.
+
 ### Pending Todos
 
 None yet.
@@ -220,6 +228,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-31T19:08:52.842Z
-Stopped at: Completed 03-15-PLAN.md
-Resume file: None
+Last session: 2026-11-04T05:51:38.663Z
+Stopped at: Phase 11 context gathered
+Resume file: .planning/phases/11-compile-the-c-host-in-ci/11-CONTEXT.md
