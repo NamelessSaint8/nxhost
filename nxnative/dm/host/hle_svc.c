@@ -173,7 +173,6 @@ static int64_t alias_unmapped(uint64_t off, uint64_t n) {
     return c;
 }
 static _Atomic int64_t g_alias_mapped;   // bytes mapped in the alias region (page bitmap)
-static pthread_mutex_t g_phys_mu = PTHREAD_MUTEX_INITIALIZER;   // mem_map_limit: the pool check and the map it allows are one step
 // The alias region and the bytes mapped in it (hle_os.c's address region counts)
 void svc_alias_range(uint8_t **base, size_t *size, uint64_t *mapped) { mem_init(); *base = g_alias; *size = g_alias_cap; *mapped = (uint64_t)atomic_load(&g_alias_mapped); }
 
@@ -730,7 +729,7 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         if (changed && mhi > mlo) {
             if (commit) {
                 if (mprotect((void *)mlo, mhi - mlo, PROT_READ | PROT_WRITE)) {
-                    int err = errno; if (DM_GAME_MEM_MAP_LIMIT && num == 0x2C) pthread_mutex_unlock(&g_phys_mu);
+                    int err = errno;
                     FILE *mf = fopen("/proc/self/maps", "r"); char ml[256]; int nm = 0;   // what the host's address space holds around the range (ENOMEM: a part of it is not mapped)
                     if (mf) { while (fgets(ml, sizeof ml, mf)) { unsigned long long b0, b1; nm++; if (sscanf(ml, "%llx-%llx", &b0, &b1) == 2 && b1 > mlo - 0x400000 && b0 < mhi + 0x400000) LOG("[mem] map: %s", ml); } fclose(mf); }
                     die("SVC %#x mprotect %p+%#zx errno=%d (%d mappings)", num, (void *)a, size, err, nm); }
