@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 03
-current_phase_name: Host Toolchains and Guided First Run
+current_phase: 11
+current_phase_name: Compile the C host in CI
 status: executing
-stopped_at: Phase 11 context gathered
-last_updated: "2026-11-04T08:34:16.077Z"
+stopped_at: Completed 11-01-PLAN.md
+last_updated: "2026-11-04T16:08:13.379Z"
 last_activity: 2026-11-04
-last_activity_desc: Added Phases 7-14 (tooling and code quality workstream)
+last_activity_desc: Completed 11-01-PLAN.md (--platform both: one run, two targets)
 progress:
   total_phases: 11
   completed_phases: 3
   total_plans: 42
-  completed_plans: 38
+  completed_plans: 39
 state_head: ddc31a8fbec161010ac84b951068ad70f77b9fe3
 ---
 
@@ -24,16 +24,16 @@ state_head: ddc31a8fbec161010ac84b951068ad70f77b9fe3
 See: .planning/PROJECT.md (updated 2026-10-31)
 
 **Core value:** A tester on any supported host (Windows x64, macOS Apple Silicon, Linux x64, Linux arm64) can take their own Switch dump and get a working port onto their Android device through the GUI, without help.
-**Current focus:** Phase 03 — Host Toolchains and Guided First Run
+**Current focus:** Phase 11 — Compile the C host in CI
 
 ## Current Position
 
-Phase: 03 (Host Toolchains and Guided First Run) — EXECUTING
-Plan: 15 of 15
-Status: Ready to execute
-Last activity: 2026-10-31 — Phase 03 execution started
+Phase: 11 (Compile the C host in CI)
+Plan: 1 of 4
+Status: Executing — 11-01 complete, 11-02/11-03/11-04 remaining
+Last activity: 2026-11-04 — 11-01-PLAN.md complete
 
-Progress: [█░░░░░░░░░] 14%
+Progress: [█████████░] 93%
 
 ## Performance Metrics
 
@@ -98,6 +98,7 @@ Progress: [█░░░░░░░░░] 14%
 | Phase 03 P13 | 3 min | 3 tasks | 5 files |
 | Phase 03 P14 | 10 min | 3 tasks | 2 files |
 | Phase 03 P15 | 8 min | 3 tasks | 10 files |
+| Phase 11 P01 | 20min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -199,6 +200,10 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-14: the banner restyles on the host window's PaletteChange (Gate.paint via an event filter), not on a setup --json answer
 - [Phase 03]: 03-15: the Setup tab's Save and check writes only fields changed since the last load; every re-check reloads untouched fields from config.json (CR-01)
 - [Phase 03]: 03-15: Porter.start refuses a second run (returns False) and emits started before QProcess.start; the Setup tab asks setup --json one at a time (WR-03/WR-04)
+- [Phase 11]: A both run's result is additive: targets[] ({platform,status,out,reason}) sits beside the flat apk/data/app keys, because gui install_now() reads those and the bridge goldens pin the single-target shape (D-08)
+- [Phase 11]: Both is a driver over two Port objects, each requiring its own toolchain: a host without the Android NDK fails Android and still builds the Mac app (D-04, D-06)
+- [Phase 11]: Port.begin() owns the folder scan and the one-port-at-a-time lock; a both run's children inherit work/app/fam and never take the lock again (QUAL-13)
+- [Phase 11]: MAC_NEEDS_MAC is one sentence shared by run_mac()'s refusal and a both run's skip reason, so the two cannot drift (D-03)
 
 ### Roadmap Evolution
 
@@ -228,6 +233,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-04T05:51:38.663Z
-Stopped at: Phase 11 context gathered
-Resume file: .planning/phases/11-compile-the-c-host-in-ci/11-CONTEXT.md
+Last session: 2026-11-04T16:08:10.396Z
+Stopped at: Completed 11-01-PLAN.md
+Resume file: None
