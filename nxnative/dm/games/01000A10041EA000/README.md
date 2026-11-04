@@ -29,8 +29,12 @@ A cell load reads **100–260 MB** out of the data pack — the `DM_FSLOG` of a 
 
 Footprint settles near 1.6–1.7 GB and stays flat; the alias region maps 2.00 GB of the 3.21 GB pool.
 
+## Packaging
+
+`porter port <game folder> --experimental --install` produces the release APK (**1.85 MB**, `lib/arm64-v8a` only) and the 12.9 GB data pack; adding `--debug` gives the 8.2 MB development build with `DM_CTL` (key presses and screenshots from a shell). The release build was verified on the Y700 on 2026-11-03: 60 fps, 0 dropped frames, the pause menu's Frame rate row present, `DM_CTL` stripped from `env.txt`, and the saves taken in a debug session still listed under `CONTINUE` after the swap — the same package and signer keep the app's data.
+
 ## Known gaps
 
-- **Saves live inside the app** (`files/save/Saves`, about 2.6 MB each, readable only with `run-as`): an uninstall or Clear data deletes them, and a release build cannot pull them out.
+- **Saves live inside the app** (`files/save/Saves`, about 2.6 MB each). On the debug build they can be copied out with `run-as`; on the release build that is refused (`run-as: package not debuggable`), and an uninstall or Clear data deletes them. The manifest carries `ALLOW_BACKUP`, so `adb backup -f saves.ab org.nx2a.t01000a10041ea000` is the only export path the port offers today — a real export/import in the host is still missing.
 - **The unexplained crash** was the `DM_VK_PROF` sampling profiler's SIGPROF frame landing on guest registers (fixed in `android/gfx_vk_exec.c`); no crash has recurred since, and a guest store into read-only text is now reported and dropped rather than fatal.
 - **No iOS/macOS chain**: the Metal shader libraries for this game have never been built, and the translation chain's tool lock wants a newer Metal than the development Mac has.
