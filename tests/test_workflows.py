@@ -94,6 +94,21 @@ class Ci(unittest.TestCase):   # every workflow file, so the release workflow is
         self.assertTrue([r for r in runs if 'unittest discover' in r])
         self.assertTrue([r for r in runs if 'Ran [1-9]' in r], 'a run that collects no tests must fail')
 
+    def test_host_build_jobs(self):   # QUAL-09/D-09: the C host compiles once per target, path-filtered, in two independent jobs named for what they build
+        w = self.wf['host-build.yml']; on = w.get('on', w.get(True))
+        self.assertEqual(set(w['jobs']), {'host-apple', 'host-android'})
+        for n, j in w['jobs'].items():
+            self.assertNotIn('needs', j, n)      # one target's failure never hides or cancels the other's verdict
+            self.assertNotIn('strategy', j, n)   # a matrix's fail-fast could
+        self.assertEqual(w['jobs']['host-apple']['runs-on'], 'macos-26')
+        self.assertEqual(w['jobs']['host-android']['runs-on'], 'ubuntu-22.04')   # x64: build.py would keep linux-x86_64 on an arm64 runner
+        for ev in ('push', 'pull_request'):
+            self.assertEqual(sorted(on[ev]['paths']), ['.github/**', 'nxnative/**'], ev)
+        self.assertIn('workflow_dispatch', on)
+        runs = {n: '\n'.join(s['run'] for s in j['steps'] if 'run' in s) for n, j in w['jobs'].items()}
+        self.assertIn('make -C nxnative/dm/host GAME=01000A10041EA000', runs['host-apple'])   # the repo's own entry point, never a bespoke clang line
+        self.assertIn('build.py --game 01000A10041EA000', runs['host-android'])
+
 
 class Release(unittest.TestCase):   # fork-release.yml: who can start it, where the signing secrets reach, and what a draft needs
     @classmethod
