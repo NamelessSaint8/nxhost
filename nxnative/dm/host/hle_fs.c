@@ -774,6 +774,42 @@ static void fadvise_run(int fd, int64_t at, long n) {
 #endif
     atomic_store(&adv_fd[k], fd); atomic_store(&adv_until[k], at + n);
 }
+// DM_READWINDOW=<bytes> (0 = off; 1048576 is the window measured on the device): serve the guest's small reads from one larger pread.
+// A cell load reads 100-260 MB, 78.7% of its reads 4-16 KB and 67% continuing where the last one ended, and through FUSE each read is a round
+// trip. Measured on Skyrim's save load with the page cache evicted before every arm: 766/781 ms without the window against 704/744 ms with a
+// 1 MB one, i.e. about 6%, and a noisy but one-sided improvement on the cell load after boot (257/230 ms against 124/205 ms). The ceiling is
+// low because those small reads carry only about a tenth of the load's bytes -- weight an fslog by bytes before reaching for this. A write, a
+// close or a read outside the window drops it; a slot per fd, behind one lock, because games do read the same file from more than one thread.
+#define RW_SLOTS 16
+static struct { _Atomic int key; int64_t off, len; uint8_t *buf; } g_rw[RW_SLOTS];   // key = fd + 1, 0 = the slot is free (fd 0 is a real one)
+static pthread_mutex_t g_rw_mu = PTHREAD_MUTEX_INITIALIZER;
+static long readwindow_bytes(void) { static long n = -1; if (n < 0) { const char *e = getenv("DM_READWINDOW"); n = e ? strtol(e, NULL, 0) : 0; } return n; }
+static void rw_drop(int fd) {   // after a write or a close: what is in the window may no longer be what the file holds
+    if (readwindow_bytes() <= 0) return;
+    pthread_mutex_lock(&g_rw_mu);
+    for (int i = 0; i < RW_SLOTS; i++) if (atomic_load(&g_rw[i].key) == fd + 1) { atomic_store(&g_rw[i].key, 0); g_rw[i].off = g_rw[i].len = 0; }
+    pthread_mutex_unlock(&g_rw_mu);
+}
+static ssize_t rw_pread(int fd, void *dst, size_t n, int64_t at) {   // pread, through the window when it can serve
+    long w = readwindow_bytes();
+    if (w <= 0 || (size_t)w < n) return pread(fd, dst, n, at);
+    pthread_mutex_lock(&g_rw_mu);
+    int slot = -1, free_slot = -1;
+    for (int i = 0; i < RW_SLOTS && slot < 0; i++) {
+        int k = atomic_load(&g_rw[i].key);
+        if (k == fd + 1) slot = i; else if (free_slot < 0 && !k) free_slot = i;
+    }
+    if (slot < 0) { slot = free_slot; if (slot < 0) { pthread_mutex_unlock(&g_rw_mu); return pread(fd, dst, n, at); } atomic_store(&g_rw[slot].key, fd + 1); }
+    if (at >= g_rw[slot].off && g_rw[slot].buf && at + (int64_t)n <= g_rw[slot].off + g_rw[slot].len) { memcpy(dst, g_rw[slot].buf + (at - g_rw[slot].off), n); pthread_mutex_unlock(&g_rw_mu); return (ssize_t)n; }
+    if (!g_rw[slot].buf && !(g_rw[slot].buf = malloc((size_t)w))) { atomic_store(&g_rw[slot].key, 0); pthread_mutex_unlock(&g_rw_mu); return pread(fd, dst, n, at); }
+    ssize_t r = pread(fd, g_rw[slot].buf, (size_t)w, at);   // one read for the window; the guest's own read comes out of it
+    g_rw[slot].off = at; g_rw[slot].len = r > 0 ? r : 0;
+    if (r <= 0) { pthread_mutex_unlock(&g_rw_mu); return r; }
+    size_t m = (size_t)r < n ? (size_t)r : n;
+    memcpy(dst, g_rw[slot].buf, m);
+    pthread_mutex_unlock(&g_rw_mu);
+    return (ssize_t)m;
+}
 HLE_FORCE("_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvm", "fsp-srv → pread(2)", Result, h_fs_ReadFile, size_t *out, uint64_t h, int64_t off, void *buf, size_t sz) { dm_thread_service_request(); h = FH_IN(h);
     if (!h) { *out = 0; return RES_FAIL; }   // a file handle is an fd; 0 is stdin and never a file the game opened: the null handle the game keeps using after a failed open
     size_t got = 0; int reprep = 0, fd = (int)h; int64_t base = 0;
@@ -784,7 +820,7 @@ HLE_FORCE("_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvm", "fsp-srv → pread(2)", 
     }
     dm_guest_write_prepare(buf, sz);   // The destination may be a texture pool page write-protected by the graphics layer: a kernel write to a read-only page returns EFAULT instead of page-faulting, so unprotect and mark dirty first
     while (got < sz) {
-        ssize_t r = pread(fd, (uint8_t *)buf + got, sz - got, base + off + got);
+        ssize_t r = rw_pread(fd, (uint8_t *)buf + got, sz - got, base + off + got);
         if (r < 0) { if (errno == EINTR) continue;
             // The graphics layer write-protects tracked pages again after each upload (nvn_dirty.c), so a page made writable above can be read-only again by the time pread
             // writes it: a plain write would fault into the tracker's handler, a system call gets EFAULT. Prepare the rest again (unprotect, mark dirty) and read on. Monster Train 2
@@ -820,6 +856,7 @@ HLE_FORCE("_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvm", "fsp-srv → pread(2)", 
 HLE_FORCE("_ZN2nn2fs9WriteFileENS0_10FileHandleElPKvmRKNS0_11WriteOptionE", "fsp-srv → pwrite(2)", Result, h_fs_WriteFile, uint64_t h, int64_t off, const void *buf, size_t sz, const void *opt) { dm_thread_service_request(); h = FH_IN(h);
     if (!h || IMG_H(h)) return RES_FAIL;
     int fd = (int)h & 0xffff; uint16_t token = atomic_load(&g_ftxn[fd]); int txn = token ? token - 1 : -1;
+    rw_drop(fd);   // DM_READWINDOW: a read after this must not be served from what the file held before the write
     pthread_rwlock_t *txn_guard __attribute__((cleanup(txn_unlock))) = NULL;
     if (txn >= 0) { txn_guard = &g_txn_lock[txn]; pthread_rwlock_rdlock(txn_guard); }
     (void)opt; size_t put = 0;
@@ -856,6 +893,7 @@ HLE_FORCE("_ZN2nn2fs11SetFileSizeENS0_10FileHandleEl", "fsp-srv → ftruncate(2)
 HLE_FORCE("_ZN2nn2fs9FlushFileENS0_10FileHandleE", "fsp-srv; host writes are already in the page cache, flushing is a no-op", Result, h_fs_FlushFile, uint64_t h) { dm_thread_service_request(); (void)h; return RES_OK; }
 HLE_FORCE("_ZN2nn2fs9CloseFileENS0_10FileHandleE", "fsp-srv → close(2)", void, h_fs_CloseFile, uint64_t h) { dm_thread_service_request(); h = FH_IN(h);
     if (!h || IMG_H(h)) return;   // the null handle after a failed open (see ReadFile): do not touch fd 0; an image entry holds no descriptor
+    rw_drop((int)h & 0xffff);   // a later open may reuse the number for another file
     g_fmode[(int)h & 0xffff] = 0; atomic_store(&g_ftxn[(int)h & 0xffff], 0);
     close((int)h); }
 HLE_FORCE("_ZN2nn2fs15GetFileOpenModeENS0_10FileHandleE", "fsp-srv; the open mode is recorded by the host", int, h_fs_GetFileOpenMode, uint64_t h) { h = FH_IN(h); return IMG_H(h) ? MODE_READ : g_fmode[(int)h & 0xffff]; }
