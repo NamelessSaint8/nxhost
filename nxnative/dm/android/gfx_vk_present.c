@@ -276,7 +276,7 @@ static void ov_panel(int st) {   // the pause menu, for menu state st (dm_menu_s
     int ts = (int)fmaxf(2, roundf(rh * 0.30f / 7)), is = (int)fmaxf(2, roundf(rh * 0.22f / 7));
     float ty = pad + rh / 2; cv_text(&cv, (W - cv_text_w("PAUSED", ts)) / 2, ty, "PAUSED", ts, C_WHITE);
     cv_rrect(&cv, pad, pad + rh - 1, W - pad, pad + rh, 0.5f, line);
-    static const char *labels[OVM_N] = {"Controller overlay", "Rumble", "Show FPS", "Mode", "Resume"};
+    static const char *labels[OVM_N] = {"Controller overlay", "Rumble", "Show FPS", "Mode", "Frame rate", "Resume"};
     int sel = (st >> 4 & 15) - 1;
     for (int i = 0; i < OVM_N; i++) {
         float y0 = pad + (i + 1) * rh, cy = y0 + rh / 2;
@@ -289,6 +289,14 @@ static void ov_panel(int st) {   // the pause menu, for menu state st (dm_menu_s
             cv_rrect(&cv, x0, cy - sh / 2, x1, cy + sh / 2, sh / 2, off);
             cv_rrect(&cv, x0 + docked * sw, cy - sh / 2, x0 + (docked + 1) * sw, cy + sh / 2, sh / 2, C_ACCENT);
             for (int k = 0; k < 2; k++) cv_text(&cv, x0 + k * sw + (sw - cv_text_w(seg[k], is)) / 2, cy, seg[k], is, k == docked ? C_WHITE : dim);
+            continue;
+        }
+        if (i == OVM_RATE) {   // the same two-segment shape: 60 fps | 30 fps (bit 8 is 60). A live change, no relaunch: hle_nvn's present interval mode
+            static const char *seg[2] = {"60 fps", "30 fps"}; int low = !(st >> 8 & 1);
+            float sh = rh * 0.46f, sw = fmaxf(cv_text_w(seg[0], is), cv_text_w(seg[1], is)) + sh, x1 = W - pad * 1.6f, x0 = x1 - 2 * sw;
+            cv_rrect(&cv, x0, cy - sh / 2, x1, cy + sh / 2, sh / 2, off);
+            cv_rrect(&cv, x0 + low * sw, cy - sh / 2, x0 + (low + 1) * sw, cy + sh / 2, sh / 2, C_ACCENT);
+            for (int k = 0; k < 2; k++) cv_text(&cv, x0 + k * sw + (sw - cv_text_w(seg[k], is)) / 2, cy, seg[k], is, k == low ? C_WHITE : dim);
             continue;
         }
         int on = st >> (i == OVM_OVERLAY ? 0 : i == OVM_RUMBLE ? 1 : 3) & 1; float sh = rh * 0.40f, sw = sh * 1.85f, sx1 = W - pad * 1.6f, sx0 = sx1 - sw;   // the switch

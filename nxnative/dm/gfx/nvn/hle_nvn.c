@@ -1806,6 +1806,12 @@ static void sleep_until_ns(uint64_t dl) {   // absolute time on the monotonic cl
 // 4181 SaveIndicatorPanel entries and capped at 60 fps gives 0, which matches the ground truth), so uncapped is a semantically wrong way to run and must not be used as a criterion / cross-check / default. Unit tests set it directly with nvn_present_config
 static int g_hz = -1, g_display_mode;
 static _Atomic int g_game_itv = 1;   // when pacing by the game's interval, the interval the game currently sets (in game mode 2 = 30 fps; nvn_game_fps reports it to the graphics layer, which sets the display link from it)
+static _Atomic int g_forced_display = -1;   // the pause menu's frame rate row (front_android.c): 1 = one frame per display tick, 0 = the game's own present interval, -1 = whatever the profile or env says
+void nvn_present_set_display(int display) {   // A live change: present_itv() and nvn_game_fps() read the mode per present, so the next frame follows with no relaunch
+    atomic_store(&g_forced_display, display ? 1 : 0);
+    if (g_hz >= 0) g_display_mode = display ? 1 : 0;
+}
+int nvn_present_get_display(void) { int f = atomic_load(&g_forced_display); return f >= 0 ? f : g_display_mode ? 1 : 0; }   // what presentation follows now (the menu shows it before a first start)
 void nvn_present_config(int hz, int display_mode) { g_hz = hz; g_display_mode = display_mode; }
 static _Atomic uint64_t g_itv2_since;   // start of the game's current run of intervals >= 2 (now_ns; 0 = it is 1 now)
 // The frame rate the game itself asks for: 30 in game mode when the present interval has been >= 2 for a full second (the display link follows at 30 Hz, mtl_fps_target), otherwise 60; back to 60 at once when the interval returns to 1. Intervals of 3 or more (20 fps or less) have no matching display-link mode and run at 30.
@@ -1888,6 +1894,7 @@ static void present_cfg(const win_t *o) {
     // with the same save and the same input, the UI message streams of the two modes match message by message. Proof (before character select): r9 game / display 60 ×3 / display 120 ×2, 6 groups in total, uicmp consistent
     // (the save indicator is exempted as a timing race), and the timing differences of key messages are within game mode's own noise band; proof after entering a run is still missing, pending action script coverage
     const char *m = getenv("DM_PRESENT_INTERVAL"); g_display_mode = m ? !strcmp(m, "display") : DM_GAME_PRESENT_DISPLAY;
+    { int f = atomic_load(&g_forced_display); if (f >= 0) g_display_mode = f; }   // the pause menu's choice (saved in settings.txt) wins over profile and env
     LOG("[nvn] present tick %d Hz, interval mode %s (%s; present interval set by the game %d; %s)", g_hz, g_display_mode ? "display (one frame per tick, a cut)" : "game (original semantics)",
         m ? "DM_PRESENT_INTERVAL" : "game profile present_interval", o->interval, scr > 0 ? "window, fixed 60 Hz" : "no window, fixed 60 Hz");
 }

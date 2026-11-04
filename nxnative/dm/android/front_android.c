@@ -46,6 +46,7 @@ void dm_focus_set(int st); void dm_audio_suspend(int on); void guest_clock_freez
 // ---- settings (the pause menu's), kept in the files folder as KEY=VALUE lines ----
 static char g_root[512];
 static _Atomic int g_set_overlay = 1, g_set_rumble = 1, g_set_fps;   // the gamepad shown; rumble and tap vibration; the frame rate counter (top left)
+static _Atomic int g_set_rate60 = -1;   // the pause menu's frame rate: 1 = 60 fps (one frame per display tick), 0 = 30 (the game's own present interval 2). -1 until the profile or settings.txt decides
 static _Atomic int g_mpos[2] = {-1, -1};   // where the player dragged the menu button: its centre in 1/10000 of the window's width and height, -1 the table's
 int dm_opmode(void); void dm_set_opmode(int m);   // hle_oe.c: 0 handheld, 1 docked; a change reaches the game as the Switch's operation mode notification
 static void settings_load(void) {
@@ -53,6 +54,7 @@ static void settings_load(void) {
     if (!f) return;
     while (fgets(line, sizeof line, f)) { int v; if (sscanf(line, "overlay=%d", &v) == 1) atomic_store(&g_set_overlay, v != 0); else if (sscanf(line, "rumble=%d", &v) == 1) atomic_store(&g_set_rumble, v != 0);
         else if (sscanf(line, "fps=%d", &v) == 1) atomic_store(&g_set_fps, v != 0);
+        else if (sscanf(line, "rate60=%d", &v) == 1) atomic_store(&g_set_rate60, v != 0);
         else if (sscanf(line, "docked=%d", &v) == 1) setenv("DM_OPMODE", v ? "1" : "0", 1);   // over env.txt's: the host reads it once, at its first query
         else if (sscanf(line, "menu_x=%d", &v) == 1 && v >= 0 && v <= 10000) atomic_store(&g_mpos[0], v); else if (sscanf(line, "menu_y=%d", &v) == 1 && v >= 0 && v <= 10000) atomic_store(&g_mpos[1], v); }
     fclose(f);
@@ -61,6 +63,7 @@ static void settings_save(void) {
     char p[600], tmp[610]; snprintf(p, sizeof p, "%s/settings.txt", g_root); snprintf(tmp, sizeof tmp, "%s.new", p);
     FILE *f = fopen(tmp, "w"); if (!f) { LOG("[RED] cannot write %s", tmp); return; }
     fprintf(f, "overlay=%d\nrumble=%d\ndocked=%d\nfps=%d\n", atomic_load(&g_set_overlay), atomic_load(&g_set_rumble), dm_opmode() != 0, atomic_load(&g_set_fps));
+    { int r = atomic_load(&g_set_rate60); if (r >= 0) fprintf(f, "rate60=%d\n", r); }   // only once the player (or the profile) has chosen
     if (atomic_load(&g_mpos[0]) >= 0 && atomic_load(&g_mpos[1]) >= 0) fprintf(f, "menu_x=%d\nmenu_y=%d\n", atomic_load(&g_mpos[0]), atomic_load(&g_mpos[1]));
     fclose(f); rename(tmp, p);
 }
@@ -225,7 +228,7 @@ static _Atomic int g_tx_ver;   // the text entry's edit count: the panel is draw
 int dm_menu_state(void) {
     if (atomic_load(&g_tx_on)) return 1 << 16 | (atomic_load(&g_tx_ver) & 0xffff);   // the text entry's panel (gfx_vk_present.c ov_text_panel)
     if (!atomic_load(&g_menu)) return -1;
-    return atomic_load(&g_set_overlay) | atomic_load(&g_set_rumble) << 1 | (dm_opmode() != 0) << 2 | atomic_load(&g_set_fps) << 3 | (atomic_load(&g_menu_hi) + 1) << 4;
+    return atomic_load(&g_set_overlay) | atomic_load(&g_set_rumble) << 1 | (dm_opmode() != 0) << 2 | atomic_load(&g_set_fps) << 3 | (atomic_load(&g_menu_hi) + 1) << 4 | (atomic_load(&g_set_rate60) != 0) << 8;
 }
 int dm_overlay_fps(void) { return atomic_load(&g_set_fps) && !atomic_load(&g_menu); }   // gfx_vk_present.c draws the counter (not while the menu holds the game)
 static void menu_open(int hi) {
@@ -252,6 +255,12 @@ static void menu_do(int item) {
     else if (item == OVM_RUMBLE) { int on = !atomic_load(&g_set_rumble); atomic_store(&g_set_rumble, on); dm_haptics_android_set(on); settings_save(); }
     else if (item == OVM_FPS) { atomic_store(&g_set_fps, !atomic_load(&g_set_fps)); settings_save(); }
     else if (item == OVM_MODE) { dm_set_opmode(dm_opmode() ? 0 : 1); settings_save(); }   // the game takes it when it goes on
+    else if (item == OVM_RATE) {   // 60 fps: one frame per display tick, the game's present interval 2 ignored; 30: the game's own interval (hle_nvn.c nvn_present_set_display)
+        int on = !(atomic_load(&g_set_rate60) == 1); atomic_store(&g_set_rate60, on);
+        void nvn_present_set_display(int display); nvn_present_set_display(on);
+        LOG("[menu] frame rate %d fps: %s", on ? 60 : 30, on ? "one frame per display tick (the game's present interval 2 ignored)" : "the game's own present interval");
+        settings_save();
+    }
     if (item >= 0 && item < OVM_N) dm_haptics_android_tap();
     if (item == OVM_RESUME) menu_close(); else dm_overlay_redraw();
 }
@@ -542,6 +551,9 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
     unsetenv("DM_CTL");   // a release build takes no remote key presses (the control file is a development tool)
 #endif
     settings_load(); dm_haptics_android_start(act, atomic_load(&g_set_rumble));
+    { int r = atomic_load(&g_set_rate60); void nvn_present_set_display(int display); int nvn_present_get_display(void);
+      if (r >= 0) { nvn_present_set_display(r); LOG("[menu] the saved frame rate choice applies: %d fps", r ? 60 : 30); }        // settings.txt
+      else atomic_store(&g_set_rate60, nvn_present_get_display()); }   // no choice yet: the menu shows what the profile decided (60 for a display-interval port)
     { pthread_t w; if (!pthread_create(&w, NULL, pad_watch, act->vm)) pthread_detach(w); }
     LOG("NX2A host on Android: files %s, saves %s", g_root, act->internalDataPath);
     pthread_t t; pthread_create(&t, NULL, input_thread, NULL); pthread_detach(t);
