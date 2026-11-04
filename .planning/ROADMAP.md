@@ -25,7 +25,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 8: Make the cold shader stage predictable** - The shader stage announces its work and ETA, caps workers by RAM, and recomputes nothing it already has
 - [ ] **Phase 9: One port entry point for Android and Mac** - `porter port --platform` yields both packages with one reuse model, one log format and one event protocol
 - [ ] **Phase 10: Move saves between devices** - A player continues the same title on the phone and on the Mac, with a build mismatch refused cleanly
-- [ ] **Phase 11: Compile the C host in CI** - One run makes an APK, a Mac app or both as the user chooses; CI compiles the host per target so a break names the push that caused it
+- [x] **Phase 11: Compile the C host in CI** - One run makes an APK, a Mac app or both as the user chooses; CI compiles the host per target so a break names the push that caused it (completed 2026-11-04)
 - [ ] **Phase 12: One command that verifies a change** - Suite, warm re-ports and a device smoke give one verdict before a host commit
 - [ ] **Phase 13: Guards from past incidents** - Each class of bug this repo has already paid for is locked out by a test
 - [ ] **Phase 14: Keep the upstream pick cheap** - The distance to upstream is visible on every push and warned before it becomes a wall
@@ -244,7 +244,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 8. Make the cold shader stage predictable | 0/TBD | Not started | - |
 | 9. One port entry point for Android and Mac | 0/TBD | Not started | - |
 | 10. Move saves between devices | 0/TBD | Not started | - |
-| 11. Compile the C host in CI | 4/4 | In Progress|  |
+| 11. Compile the C host in CI | 4/4 | Complete    | 2026-11-04 |
 | 12. One command that verifies a change | 0/TBD | Not started | - |
 | 13. Guards from past incidents | 0/TBD | Not started | - |
 | 14. Keep the upstream pick cheap | 0/TBD | Not started | - |

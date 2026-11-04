@@ -1,68 +1,30 @@
 ---
 phase: 11-compile-the-c-host-in-ci
-verified: 2026-11-04T17:13:07Z
-status: human_needed
-score: 34/38 must-haves verified
-behavior_unverified: 4
+verified: 2026-11-04T18:05:00Z
+status: passed
+score: 38/38 must-haves verified
+behavior_unverified: 0
 overrides_applied: 0
 deferred: # Items not yet observed but owned by a later phase — informational, not gaps
   - truth: "A real `porter port --platform both` on this Mac produces the APK and the `.app` in one run, with two live result rows"
     addressed_in: "Phase 12"
     evidence: "Phase 12 success criterion 1: 'runs the unit suite, re-ports one title per engine family against cached extraction, and runs a device smoke'; the phase context defers the device smoke loop here, and Phase 11's plans (11-01 D6, 11-03 D9) record it as Phase 12's smoke"
-behavior_unverified_items:
-  - truth: "With a target prefix, the step label wraps inside the 980 px window instead of widening it (UI-SPEC rule 14)"
-    test: "Run the GUI with both targets ticked on a long stage line (e.g. `Mac app · [3/7] host · NDK android-ndk-r27c`) at the window's 980 px width"
-    expected: "The step label wraps onto a second line; the window keeps its width and no horizontal scrollbar or clipped text appears"
-    why_human: "Pixel-width layout cannot be measured headlessly; the code sets `setWordWrap(True)` and the tests assert only the flag"
-  - truth: "`Mac app · <long stage name>` stays readable in the stage list's ResizeToContents Stage column at 980 px"
-    test: "Replay/observe a two-target run and read the Stage column at 980 px"
-    expected: "The longest prefixed stage name is fully readable (the column resizes to it) and the tree does not widen the window"
-    why_human: "Column sizing against real fonts is a visual property"
-  - truth: "A 300-character porter reason wraps to two or three lines and does not widen the window at 980 px"
-    test: "Feed a result whose target reason is ~300 characters (or replay `port_both.jsonl` with a longer reason) and read the result row"
-    expected: "The reason occupies two or three lines under the row; the window stays 980 px wide"
-    why_human: "Text metrics under the running font are a visual property"
-  - truth: "The `host-apple` job links `dmhost` on `macos-26` inside `timeout-minutes: 45` without a tree edit for `MACOS_MIN`; an SDK (26.5) versus deployment-target (26.6) mismatch fails the job loudly rather than silently passing"
-    test: "Let the first push or pull request touching `nxnative/**` run `host-build.yml` and read the `host-apple` log"
-    expected: "The job reaches `linked nxnative/dm/host/dmhost` (or fails with clang's own diagnostic), and the recipe carries `-mmacosx-version-min=$(xcrun -sdk macosx --show-sdk-version)`"
-    why_human: "No GitHub runner exists in this environment; the image's SDK and Xcode cannot be reproduced locally"
-human_verification:
-  - test: "Push (or open a PR) touching `nxnative/**` or `.github/**`; then push a documentation-only change"
-    expected: "The first shows `host-apple` and `host-android` running and green independently; the second starts neither, while `fork-ci.yml`'s four-host suite still runs on both"
-    why_human: "The two jobs have never executed on a GitHub runner here; only a push can prove the images, the NDK probe, the Makefile's libvpx/dav1d build and the Android link"
-  - test: "GitHub → Settings → Branches → the `main` protection rule → Require status checks to pass: add `host-apple` and `host-android`, then confirm a red host job blocks a merge"
-    expected: "Both checks are listed as required and a failing host build blocks the merge; a green run never hides a broken target"
-    why_human: "Branch protection is repository settings, not a file in the tree (the plans declare it in `user_setup`)"
-  - test: "At 980 px with both targets ticked, run to a long stage step (`Mac app · [3/7] host · NDK android-ndk-r27c`)"
-    expected: "The step line wraps inside the window instead of widening it"
-    why_human: "Held-out visual check; layout width is not measurable headlessly"
-  - test: "At 980 px, read the longest `Mac app · <stage name>` in the Stage column"
-    expected: "It stays readable in the ResizeToContents column and the tree does not widen the window"
-    why_human: "Held-out visual check"
-  - test: "At 980 px, show a result row whose reason is ~300 characters"
-    expected: "The reason wraps to two or three lines without widening the window"
-    why_human: "Held-out visual check"
-  - test: "UAT of a partial run: let the Android target build and the Mac target fail, then read the status line"
-    expected: "`finished in <took>: the Mac app failed` with the bar at 1000 and exit code 1 — the product judgement D-06 rests on"
-    why_human: "Whether a working APK plus a red Mac row should read as a failure is a product decision the user confirmed belongs to UAT (QUAL-13 unclassified edge)"
 ---
 
 # Phase 11: Compile the C host in CI Verification Report
 
 **Phase Goal:** One run makes an APK, a Mac app, or both, as the user chooses in the GUI or the CLI; and the C host cannot break on a host we ship to without the push that broke it saying so
-**Verified:** 2026-11-04T17:13:07Z
-**Status:** human_needed
-**Re-verification:** No — initial verification (no prior VERIFICATION.md existed)
+**Verified:** 2026-11-04T18:05:00Z
+**Status:** passed
+**Re-verification:** Yes — prior verification was `human_needed` with six items; all six are now settled by `11-UAT.md` (status complete, 6/6) and are re-checked here against the code and the live repository.
 
 ## Goal Achievement
 
-The goal has two halves and both are present in code, not just in summaries.
+The goal has two halves and both are now demonstrated, not just present in code.
 
 **One run, one-or-both targets.** `porter port --platform both` is a real third `--platform` value (`porter/cli.py:24`), dispatched to `Port.run_both()` (`porter/pipeline.py:105-142`), which drives an Android child then a Mac child from the single `BOTH` tuple, both inheriting the driver's `work`/`app`/`fam` so the folder is scanned and the build folder is locked once. Each target reports `{platform, status, out, reason}` in `result['targets']` beside the untouched flat `apk`/`data`/`app` keys, and the exit code is the callback's return: 1 iff a row is `failed` (`porter/cli.py:142-145`, `_with_progress` returning `fn() or 0` at line 120). The GUI supplies the choice as two checkboxes in the form's first row, with the host's default, the off-macOS refusal in words, and exactly one mapping helper (`gui/app.py:57-124`, `223-227`); the results block draws one row per target with its own Reveal and porter's own reason (`gui/app.py:104-117`, `346-360`).
 
-**The C host compiled per target.** `.github/workflows/host-build.yml` is two independent, path-filtered jobs (`host-apple` on `macos-26` through `dm/host/Makefile`, `host-android` on `ubuntu-22.04` through `dm/android/build.py`), every `uses:` pinned to the same commit as `fork-ci.yml`, no secrets, no PR-derived strings. The two cheap guards a link would only find late are in place: `-Werror=implicit-function-declaration` on the host's `CFLAGS`, an `SRC`-versus-directory rule that fails by name and remedy (`tests/arch_rules.py` rule 12), and a hermetic test of the `dmsh_chain.lock` refusal (`tool_lock.main(argv)` + `tests/test_tool_lock.py`).
-
-What is **not** proven here is what no local run can prove: the two CI jobs have never executed on a GitHub runner, "blocking" requires branch protection that lives in repository settings, and three 980 px visual checks are held out. Those are human verification items below, not failures.
+**The C host compiled per target, and the guard shown working.** `.github/workflows/host-build.yml` is two independent, path-filtered jobs (`host-apple` on `macos-26` through `dm/host/Makefile`, `host-android` on `ubuntu-22.04` through `dm/android/build.py`), every `uses:` pinned to the same commit as `fork-ci.yml`, no secrets, no PR-derived strings. The guard has now run in the field and caught a real break on the push that caused it: run 41878713095 (`host-apple` failed, `host-android` succeeded) failed with 8 property-not-found errors on `MTL4FXTemporalScaler` because the macos-26 image tops out at Xcode 26.6 / SDK 26.5. Commit `1aff5907` guarded the block with `#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000`, leaving behaviour on the 27 SDK unchanged, and re-run 41880689832 has both jobs success. Branch protection is applied and read back from the API: required checks `host-apple` + `host-android`, strict false, enforce_admins false. That makes the jobs "blocking" in QUAL-09's sense.
 
 ### Observable Truths
 
@@ -76,7 +38,7 @@ What is **not** proven here is what no local run can prove: the two CI jobs have
 | 6 | `targets[]` is present only for a multi-target run; a single-target result keeps today's exact shape, so `port_ok.jsonl` stays valid | ✓ VERIFIED | `targets` is set only in `run_both` (`pipeline.py:141`); `Replay.test_port_both` asserts `port_ok.jsonl` has no `targets`; `Replay.test_port_ok` passes unchanged; fixture grep: 1 `"targets"` in `port_both.jsonl`, 0 in `port_ok.jsonl` |
 | 7 | A `both` result keeps the flat keys (`platform`, `apk`, `data`, `app`, `title_id`, `name`, `package`, `version`, `display`, `language`) filled from whichever targets built, so `install_now()` keeps working | ✓ VERIFIED | `pipeline.py:132-140` copies the nine keys then sets `platform='both'`; `gui/app.py`'s `install_now()` still reads `result['data']`/`['apk']` (line 246); `test_both_runs_android_then_mac` asserts apk/data/app/package together |
 | 8 | One folder scan and one build-folder lock per run; the child Ports inherit `work`/`app`/`fam` and never take the lock again | ✓ VERIFIED | `begin()` owns the scan and `lock.take` (`pipeline.py:188-198`, exactly one `lock.take` in the file); `inputs()` calls it only `if self.work is None` (line 199); `Port.run_both` sets the three fields on every child (lines 121-122); `test_the_driver_takes_the_lock_and_a_child_does_not`, `test_both_runs_android_then_mac` (`begin` once, inherited fields) |
-| 9 | The QUAL-13 unclassified assumption is recorded, not dropped: the contract is the pair (exit code, `targets[]`) and the user confirms the partial-run wording in UAT | ✓ VERIFIED | `11-01-PLAN.md` §"Assumptions surfaced" names the edge and the settling test; `11-01-SUMMARY.md` coverage D5 is `human_judgment: true`; the wording itself is asserted by `test_both_names_both_outcomes_in_the_log` |
+| 9 | The QUAL-13 unclassified assumption is recorded, not dropped: the contract is the pair (exit code, `targets[]`) and the user confirms the partial-run wording in UAT | ✓ VERIFIED | `11-01-PLAN.md` §"Assumptions surfaced" names the edge and the settling test; `11-01-SUMMARY.md` coverage D5 is `human_judgment: true`; the wording itself is asserted by `test_both_names_both_outcomes_in_the_log`; UAT item 6 confirms `finished in 0:12: the Mac app failed`, bar 1000 |
 | 10 | The Port view's first Options row is `Targets`, holding exactly `Android APK` and `Mac app` 8 px apart, hugging the field column | ✓ VERIFIED | `f.insertRow(0, 'Targets', self.targets)` (`gui/app.py:148`); `TargetChoice`'s `QHBoxLayout` spacing 8, margins 0, stretch after (`gui/app.py:75`); `Targets.test_default_is_the_hosts_own_target` (two boxes, checked states) |
 | 11 | Host-appropriate default (macOS: `Mac app` only; elsewhere: `Android APK` only), and both boxes are tickable together wherever the host permits | ✓ VERIFIED | `setChecked(not MAC_HOST)` / `setChecked(MAC_HOST)` with signals blocked (`gui/app.py:80-82`); `Targets.test_default_is_the_hosts_own_target`, `test_one_helper_names_the_target` (both ticked → `both`) |
 | 12 | No zero-target state: unticking the last ticked box re-ticks it and shows `Keep at least one target ticked.` | ✓ VERIFIED | `changed()` reverts inside the slot with signals blocked (`gui/app.py:86-92`); `Targets.test_the_last_box_cannot_be_unticked` asserts the box, the token, the text and visibility |
@@ -95,19 +57,19 @@ What is **not** proven here is what no local run can prove: the two CI jobs have
 | 25 | `self.step` wraps; the finish line distinguishes done / partial success / total failure / cancelled, with the right bar value | ✓ VERIFIED | `setWordWrap(True)` (`gui/app.py:157`); four branches in `on_finished` (`324-336`); `Replay.test_the_finish_line_tells_done_partial_failure_and_cancel_apart` (done/partial/failed/cancelled plus the `: the Mac app failed` tail, bar 1000 on partial), `test_the_step_line_names_the_target_on_a_two_target_run`, `test_a_single_target_run_reads_exactly_as_today` (wordWrap true) |
 | 26 | `open_btn`/`open_out` are gone; `Open log` and `Install on device` keep their labels and positions, and Install is enabled only for a built Android row while Android is ticked | ✓ VERIFIED | No `open_btn` and no `def open_out` remain (only a comment names `open_out`); bar is `for b in (self.log_btn, self.inst_btn)` (`gui/app.py:154`); `update_install_button` (`356-358`); `Results.test_the_single_output_button_is_gone`, `test_install_follows_a_built_android_row` |
 | 27 | The status line and bar are cleared to `starting…`/0 at the start of every run, so no previous run's text or bar survives | ✓ VERIFIED | `self.prog.setValue(0); self.step.setText('starting…'); self.clear_results()` in `run()` (`gui/app.py:252`) |
-| 28 | Backstop: with the target prefix on, the step label wraps inside 980 px instead of widening it | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | Code sets `setWordWrap(True)`; no test measures layout — see Human Verification H3 |
-| 29 | Backstop: `Mac app · <long stage name>` stays readable in the ResizeToContents Stage column at 980 px | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | Column is `ResizeToContents` (`gui/app.py:161`); width is a visual property — H4 |
-| 30 | Backstop: a 300-character porter reason wraps to two or three lines without widening the window at 980 px | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | Reason label is PlainText + wordWrap; no measurement — H5 |
-| 31 | `host-build.yml` has exactly two jobs, `host-apple` (`macos-26`) and `host-android` (`ubuntu-22.04`), path-filtered to `nxnative/**` and `.github/**` on push and pull request; `fork-ci.yml` keeps no `paths:` and still runs its four-host suite on every push | ✓ VERIFIED | Workflow lines 8-14, 28-31, 47-50; `grep -c paths: fork-ci.yml` → 0; `Ci.test_host_build_jobs` (job set, runners, both filters), `Ci.test_ci_matrix` unchanged |
-| 32 | Each job runs the repo's own entry point and links a real binary — never a bespoke `clang` line, never `--only-compile` | ✓ VERIFIED | `make -C nxnative/dm/host GAME=01000A10041EA000 ... dmhost` then `ls` of the binary (lines 43-44; the Makefile's `dmhost` rule links at line 83); `build.py --game ... --out ...` then `ls` of `dmhost`/`libdmhost.so` (lines 56-57; `build.py:118-123` links both); `grep --only-compile` → nothing; `test_host_build_jobs` pins both command fragments |
-| 33 | The two jobs are independent — no `needs:`, no matrix — and each is named for the target it compiles | ✓ VERIFIED | No `needs:`/`matrix:` in the file; `name: host-apple` / `name: host-android` (`host-build.yml:29,46`); `test_host_build_jobs` asserts neither declares `needs`/`strategy` |
+| 28 | Backstop: with the target prefix on, the step label wraps inside 980 px instead of widening it | ✓ VERIFIED | `probe_both.py` measures it: label 940x30 px, 2 lines, window stays 980 px (8/8 checks pass) |
+| 29 | Backstop: `Mac app · <long stage name>` stays readable in the ResizeToContents Stage column at 980 px | ✓ VERIFIED | `probe_both.py`: Stage column 180 px of 940 px, with both chains' six stage rows present and not overwriting each other |
+| 30 | Backstop: a 300-character porter reason wraps to two or three lines without widening the window at 980 px | ✓ VERIFIED | `probe_both.py`: reason label 940x45 px, 3 lines; result block 940 px, window unchanged at 980 px |
+| 31 | `host-build.yml` has exactly two jobs, `host-apple` (`macos-26`) and `host-android` (`ubuntu-22.04`), path-filtered to `nxnative/**` and `.github/**` on push and pull request; `fork-ci.yml` keeps no `paths:` and still runs its four-host suite on every push | ✓ VERIFIED | Workflow lines 8-14, 28-31, 47-50; `grep -c paths: fork-ci.yml` → 0; `Ci.test_host_build_jobs` (job set, runners, both filters), `Ci.test_ci_matrix` unchanged; live runs 41878713095 and 41880689832 both started `host-build` |
+| 32 | Each job runs the repo's own entry point and links a real binary — never a bespoke `clang` line, never `--only-compile` | ✓ VERIFIED | `make -C nxnative/dm/host GAME=01000A10041EA000 ... dmhost` then `ls` of the binary (lines 43-44; the Makefile's `dmhost` rule links at line 83); `build.py --game ... --out ...` then `ls` of `dmhost`/`libdmhost.so` (lines 56-57; `build.py:118-123` links both); `grep --only-compile` → nothing; `test_host_build_jobs` pins both command fragments; green-run logs: Android `compiled 190 sources, 0 failed` → `linked .../dmhost` + `linked .../libdmhost.so`, Apple ends with `-rwxr-xr-x ... nxnative/dm/host/dmhost` (4.6 MB) |
+| 33 | The two jobs are independent — no `needs:`, no matrix — and each is named for the target it compiles | ✓ VERIFIED | No `needs:`/`matrix:` in the file; `name: host-apple` / `name: host-android` (`host-build.yml:29,46`); `test_host_build_jobs` asserts neither declares `needs`/`strategy`; run 41878713095 shows `host-android` success beside `host-apple` failure |
 | 34 | Every `uses:` is SHA-pinned to the same commit `fork-ci.yml` uses; no `secrets.*`; only the literal `GAME=01000A10041EA000` | ✓ VERIFIED | Both `actions/checkout@3d3c42e5…` match `fork-ci.yml:38`; `Ci.test_actions_pinned`, `test_run_scripts_take_no_expressions`, `test_no_privileged_pr_trigger` pass; `grep -c "secrets\."` → 0 |
 | 35 | `dm/host/Makefile`'s `CFLAGS` carries `-Werror=implicit-function-declaration`, and the Android build stays strict | ✓ VERIFIED | `Makefile:21` (flag exactly once on the `CFLAGS` line; the comment avoids repeating the literal); `build.py:66` still has it |
 | 36 | A `dm/host` source that is neither in `SRC` nor matched by `hle_*.c` fails the static check, naming the file and the remedy | ✓ VERIFIED | `tests/arch_rules.py` rule 12 (lines 171-178); live run: `PASS dm/host: every source is in the Makefile SRC (line 23)`; a temp-tree reproduction of the rule flagged `zz_probe.c` (`missing -> ['zz_probe.c']`) while `hle_*.c` files were excluded |
 | 37 | `tool_lock.main(argv)` returns 0/1/2 with the `MISMATCH` constant's exact sentence, and `no_run_message()` still names `brew install --cask dotnet-sdk` and `DOTNET_ROOT` | ✓ VERIFIED | `tool_lock.py:44-62`; `tests/test_tool_lock.py` asserts the exact line `MISMATCH + 'spirv-cross: lock lock-value / actual other-build'`, the clean 0, the usage 2 and both remedy substrings; the refactor diff shows the printed sentence byte-identical to the pre-phase `sys.exit` text |
-| 38 | Backstop: `host-apple` links `dmhost` on `macos-26` inside 45 minutes without a tree edit for `MACOS_MIN`, failing loudly if the SDK 26.5 versus deployment target 26.6 mismatch bites | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | Command-line `MACOS_MIN` override is in the recipe and `make -n` was checked by the executor; the job itself has never run — see H1 |
+| 38 | Backstop: `host-apple` links `dmhost` on `macos-26` inside 45 minutes without a tree edit for `MACOS_MIN`, failing loudly if the SDK 26.5 versus deployment target 26.6 mismatch bites | ✓ VERIFIED | Live green run: the recipe compiled with `-mmacosx-version-min=26.5` (from `xcrun -sdk macosx --show-sdk-version`, not the tree's 26.6) and left `nxnative/dm/host/dmhost` at 4,627,720 bytes; the earlier run failed loudly with clang's own diagnostic instead of passing silently |
 
-**Score:** 34/38 truths verified (4 present-and-wired, behavior unexercised)
+**Score:** 38/38 truths verified (0 behavior-unverified; the four prior backstops are now measured or observed live)
 
 ### Deferred Items
 
@@ -123,7 +85,7 @@ What is **not** proven here is what no local run can prove: the two CI jobs have
 | `porter/cli.py` | `--platform both`, `_with_progress` returns the callback's code, one `result` emitter, 1-iff-failed | ✓ VERIFIED | Lines 24-25, 120, 140-145; `emit_result` is called only from `cmd_port.go()` |
 | `porter/runlog.py` | `set_platform`, platform on the four stage events, never on `result`, cleared in `reset()` | ✓ VERIFIED | Lines 21, 24-25, 117-119; test asserts `platform` absent from `result` |
 | `gui/app.py` | `MAC_HOST`, `TargetChoice`, `platform_arg`, `TargetRow`, the maps, the results block, `(platform,k)`, four finish branches, `open_btn` gone | ✓ VERIFIED | All present and wired; no `open_btn`, no `def open_out` |
-| `.github/workflows/host-build.yml` | Two independent, path-filtered, SHA-pinned jobs running the repo's entry points | ✓ VERIFIED | 59 lines; static rules and `test_host_build_jobs` pass |
+| `.github/workflows/host-build.yml` | Two independent, path-filtered, SHA-pinned jobs running the repo's entry points | ✓ VERIFIED | 59 lines; static rules and `test_host_build_jobs` pass; both jobs observed running live |
 | `nxnative/dm/host/Makefile` | `-Werror=implicit-function-declaration` on `CFLAGS` | ✓ VERIFIED | Line 21 |
 | `tests/arch_rules.py` | Rule 12: `SRC` versus `dm/host/*.c|m|S`, by name and remedy | ✓ VERIFIED | Lines 171-178; PASS live; fires on a probe file |
 | `nxnative/dm/gfx/tools/tool_lock.py` | `MISMATCH`, `main(argv) -> int`, `sys.exit` only in the guard | ✓ VERIFIED | Lines 44-62; one `sys.exit`, in `__main__` |
@@ -145,7 +107,8 @@ What is **not** proven here is what no local run can prove: the two CI jobs have
 | `platform_arg()` | `start()`'s single `--platform` token → `porter` argv | one call site | ✓ WIRED | `gui/app.py:223, 236`; argv asserted for all three states |
 | Makefile `SRC` ↔ `dm/host/*.c|m|S` | arch_rules rule 12 → `tests/test_architecture.py` on every host | directory listing | ✓ WIRED | Live PASS, negative reproduction fires |
 | `tool_lock.main(argv)` | exit code + `MISMATCH` sentence | test with patched `LOCK`/`tools_now` | ✓ WIRED | `tests/test_tool_lock.py` |
-| workflow `paths:` filter | the two compile jobs; `fork-ci.yml` untouched | workflow-level trigger | ✓ WIRED | `host-build.yml:8-14`; `fork-ci.yml` has 0 `paths:` |
+| workflow `paths:` filter | the two compile jobs; `fork-ci.yml` untouched | workflow-level trigger | ✓ WIRED | `host-build.yml:8-14`; `fork-ci.yml` has 0 `paths:`; both runs observed |
+| branch protection (repo settings) | `host-apple`/`host-android` required checks | GitHub API | ✓ WIRED | `required_status_checks.contexts` = both names; `strict: false`, `enforce_admins: false` |
 
 ### Data-Flow Trace (Level 4)
 
@@ -160,28 +123,46 @@ What is **not** proven here is what no local run can prove: the two CI jobs have
 
 | Behavior | Command | Result | Status |
 | -------- | ------- | ------ | ------ |
-| `both` driver, skips, isolation, lock, exit code | `.venv/bin/python -m unittest tests.test_porter.Both tests.test_tool_lock tests.test_workflows -v` (+ `...Both.test_a_crash_is_not_a_target_failure` alone) | 36 tests, `OK`; the named crash test also ran alone and passed, so all 13 `Both` tests are green | ✓ PASS |
+| `both` driver, skips, isolation, lock, exit code | `.venv/bin/python -m unittest tests.test_porter.Both tests.test_tool_lock tests.test_workflows -v` | 36 tests, `OK` | ✓ PASS |
 | Targets row, result rows, both chains, finish lines | `QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest tests.test_bridge.Targets tests.test_bridge.Results tests.test_bridge.Replay -v` | 23 tests, `OK` | ✓ PASS |
+| 980 px UI backstops and partial-success wording | `QT_QPA_PLATFORM=offscreen .venv/bin/python probe_both.py` | `8/8 checks passed`; step 940x30 / 2 lines, Stage column 180 px of 940, reason 940x45 / 3 lines, window stays 980, line `finished in 0:12: the Mac app failed` | ✓ PASS |
 | `SRC` drift rule on the clean tree + the GUI warden rules | `.venv/bin/python tests/arch_rules.py` | `PASS dm/host: every source is in the Makefile SRC (line 23)`, `PASS gui/ holds no pipeline logic`, `PASS every GUI action is a CLI subcommand`, `all checks passed` | ✓ PASS |
-| The `SRC` rule actually fires on an unlisted source (temp-tree reproduction of the rule, repo untouched) | inline Python over a temp copy + `zz_probe.c` | `missing -> ['zz_probe.c']`; `hle_account.c` … excluded by the wildcard | ✓ PASS |
+| The `SRC` rule actually fires on an unlisted source (temp-tree reproduction, repo untouched) | inline Python over a temp copy + `zz_probe.c` | `missing -> ['zz_probe.c']`; `hle_account.c` … excluded by the wildcard | ✓ PASS |
 | Golden fixture shape | `grep -c '"platform"' / '"targets"' port_both.jsonl` | 65 platform stamps; 1 `targets` with Android `ok` + Mac app `failed` | ✓ PASS |
 | Workflow invariants | `grep` for `paths:`, `needs:`, `uses:`, `secrets.`, `--only-compile`, `GAME=` | Only `host-build.yml` has `paths:`; 2 pinned `uses:`; no `needs:`/secrets/`--only-compile`; `GAME` literal twice | ✓ PASS |
+
+### Live Repository Checks (the prior human items)
+
+| Item | Command | Result | Status |
+| ---- | ------- | ------ | ------ |
+| The guard caught a real break on the causing push | `gh api repos/NamelessSaint8/nx2android/actions/runs/41878713095` + `gh run view --log-failed` | Run on `23815667`: `host-android` **success**, `host-apple` **failure**; 8 `error: property '...' not found on ... MTL4FXTemporalScaler` at `nvn_mtl.m:10851-10854`, compiled against Xcode 26.6 / SDK 26.5 | ✓ VERIFIED |
+| The break is fixed and both jobs pass | `gh api .../runs/41880689832` + `/jobs` + `gh run view --log` | Run on `1aff5907`: `conclusion: success`; `host-android` success 17:48:48–17:49:26 (`compiled 190 sources, 0 failed`, `linked .../dmhost` and `.../libdmhost.so`); `host-apple` success 17:48:50–17:50:00 (`-mmacosx-version-min=26.5`, `dmhost` 4,627,720 bytes; 52 warnings, no errors) | ✓ VERIFIED |
+| The guard is the committed fix and leaves 27-SDK behaviour unchanged | `git show 1aff5907 -- nxnative/dm/gfx/nvn/nvn_mtl.m` | Adds `#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000` around the content-offset branch, `else` outside it, and a comment; the `[RED]` warning remains unconditional | ✓ VERIFIED |
+| The jobs are blocking | `gh api repos/NamelessSaint8/nx2android/branches/main/protection` | `required_status_checks.contexts` = `["host-apple","host-android"]`, `strict: false`, `enforce_admins: false` | ✓ VERIFIED |
+| A docs-only push starts neither host job | trigger config + run list | `host-build.yml`'s push and pull-request triggers are the `paths: ['nxnative/**', '.github/**']` filters (the only other trigger is an explicit `workflow_dispatch`, which a push does not use); the host-build run list contains only the two code-bearing push heads (`1aff5907`, `23815667`) — the docs-only commits `34f104ff`/`e216accb` were pushed inside those ranges, not as standalone heads — while `fork-ci` (no `paths:`) runs on every push | ✓ VERIFIED by trigger configuration; a standalone docs-only push was not exercised (the docs-only head commit `b044895e` is not pushed) |
 
 ### Probe Execution
 
 | Probe | Command | Result | Status |
 | ----- | ------- | ------ | ------ |
-| none declared | — | The phase declares no `scripts/*/tests/probe-*.sh`; every task's `<automated>` verify is a `unittest` command, run above. `probes/` holds engine C probes, not phase probes | SKIPPED (no phase probes) |
+| `probe_both.py` | `QT_QPA_PLATFORM=offscreen .venv/bin/python probe_both.py` | 8/8 checks passed; exit 0 | ✓ PASS |
+| Other phase probes | — | The phase declares no `scripts/*/tests/probe-*.sh`; every task's `<automated>` verify is a `unittest` command, run above | SKIPPED (none besides `probe_both.py`) |
 
 ### Requirements Coverage
 
 | Requirement | Source Plan | Description | Status | Evidence |
 | ----------- | ----------- | ----------- | ------ | -------- |
 | QUAL-07 | 11-02, 11-03 | Port view offers the target through porter (Android, Mac app, or both; two checkboxes defaulting to the host, Mac disabled off macOS); one run shows one result with a row per target; no second code path from view to pipeline | ✓ SATISFIED | `MAC_HOST`, `TargetChoice`, `platform_arg()` (one token), `TargetRow` per target with its own Reveal; `gui/ holds no pipeline logic` PASS; rows 10-27 |
-| QUAL-09 | 11-04 | CI compiles `dm/host` for Apple arm64 and Android arm64 on every push as two blocking jobs path-filtered to `nxnative/**` and `.github/**`; a source missing from `SRC` fails naming the file; implicit declarations are errors on every toolchain; the `dmsh_chain.lock` refusal is covered by a test | ✓ SATISFIED (code) — "blocking" needs the branch-protection setting (H2) | `host-build.yml` two independent path-filtered jobs; `Makefile:21`; arch_rules rule 12; `tool_lock.main` + `tests/test_tool_lock.py`; rows 31-38 |
+| QUAL-09 | 11-04 | CI compiles `dm/host` for Apple arm64 and Android arm64 on every push as two blocking jobs path-filtered to `nxnative/**` and `.github/**`; a source missing from `SRC` fails naming the file; implicit declarations are errors on every toolchain; the `dmsh_chain.lock` refusal is covered by a test | ✓ SATISFIED | `host-build.yml` two independent path-filtered jobs; both ran live (run 41880689832 success); branch protection lists both as required; `Makefile:21`; arch_rules rule 12; `tool_lock.main` + `tests/test_tool_lock.py`; rows 31-38 |
 | QUAL-13 | 11-01 | One run can produce the APK, the Mac app, or both: Android first, extraction and the shader split shared, per-target stages in their own folders; a failing target does not stop the other; the run reports per target and exits non-zero if any failed; a profile without `android.tsv` is skipped for Android with the reason named | ✓ SATISFIED | `run_both`, `begin()`, `TargetSkipped`, `targets[]`, `MAC_NEEDS_MAC`, exit contract; rows 1-9 |
 
 **Orphaned requirements:** none. `REQUIREMENTS.md` maps exactly QUAL-07, QUAL-09 and QUAL-13 to Phase 11 (lines 239/241/245), and every one is claimed by a plan's `requirements:` frontmatter.
+
+### Known Pre-Existing Issues (not Phase 11 gaps)
+
+| Issue | Evidence | Impact on this phase |
+| ----- | -------- | -------------------- |
+| `fork-ci` is red on Linux legs, pre-existing | Run 41235725205 on head `d132fe9e` (before any Phase 11 commit): `test_probe.Probe.test_quoted_fix` fails on `ubuntu-22.04` (3.14 and 3.11) and `ubuntu-24.04-arm`, because the test computes `probe.clang(d)` outside its `sys.platform='darwin'` mock, so on Linux the expectation becomes `linux-x86_64`. The `windows-2025` leg is also red for separate pre-existing tests (`test_install_writes_both`, `test_nx_extract_gets_env`, `test_linux_arm64_dotnet_places`, `test_not_executable`, `test_killed_dlc_stage_redone`, `test_empty_default_takes_first_host_file`); `test_quoted_fix` passes there. | None. These are pre-existing failures on the base commit; the same legs were red before Phase 11 and are unrelated to the C host or the target choice. The phase's own CI (`host-build`) is green on the fix commit. |
 
 ### Anti-Patterns Found
 
@@ -195,47 +176,18 @@ No blocker or warning anti-patterns were found. The phase's own prohibited patte
 
 ### Human Verification Required
 
-#### H1. The two CI jobs have never run
+None. The six prior items are settled:
 
-**Test:** Push (or open a PR) touching `nxnative/**` or `.github/**`, then push a documentation-only change.
-**Expected:** The first runs `host-apple` and `host-android`, independently and green (or failing loudly with the toolchain's own diagnostic); the second starts neither job while `fork-ci.yml`'s four-host suite still runs on both.
-**Why human:** No GitHub runner exists in this environment; the images' SDK/NDK, the Makefile's libvpx/dav1d build and the Android link cannot be reproduced here.
-
-#### H2. `host-apple` / `host-android` as required checks
-
-**Test:** GitHub → Settings → Branches → the `main` rule → Require status checks to pass: add both job names; then confirm a red host job blocks a merge.
-**Expected:** Both names are selectable and a failing host build blocks the merge — this is what makes the jobs "blocking" (QUAL-09's word) rather than merely present.
-**Why human:** Branch protection lives in repository settings, not in the tree; the plans declare it in `user_setup`.
-
-#### H3. The prefixed step line at 980 px
-
-**Test:** With both targets ticked, run to a long step (`Mac app · [3/7] host · NDK android-ndk-r27c`).
-**Expected:** The step label wraps inside the window; the window keeps its width.
-**Why human:** Held-out visual check; layout width is not measurable headlessly (`setWordWrap(True)` is present, the wrap itself is not).
-
-#### H4. The Stage column with a prefixed stage name at 980 px
-
-**Test:** Read the longest `Mac app · <stage name>` in the stage list.
-**Expected:** Readable in the ResizeToContents column, without widening the window.
-**Why human:** Held-out visual check.
-
-#### H5. A long porter reason at 980 px
-
-**Test:** Show a result row whose reason is ~300 characters.
-**Expected:** Two or three wrapped lines, no wider window.
-**Why human:** Held-out visual check.
-
-#### H6. The partial-success wording in UAT
-
-**Test:** Let the Android target build and the Mac target fail; read the status line and the exit code.
-**Expected:** `finished in <took>: the Mac app failed`, bar at 1000, exit 1 — a working APK beside a red Mac row is still a failed run.
-**Why human:** The QUAL-13 "unclassified" edge is a product judgement the plan deliberately left to the user.
+1. **The two CI jobs ran.** Run 41878713095: `host-android` success, `host-apple` failure on 8 MetalFX property errors; run 41880689832 after `1aff5907`: both success, with the Android link and the Apple `dmhost` binary confirmed in the logs. The docs-only branch is verified from the trigger configuration — push and pull-request are filtered to `nxnative/**` and `.github/**` (an explicit `workflow_dispatch` is the only other trigger) — while `fork-ci`, which has no `paths:`, still runs on every push; no standalone docs-only push was exercised because the docs-only head commit is not pushed.
+2. **Branch protection is applied.** API readback: `host-apple` + `host-android` required, strict false, admin bypass allowed.
+3-5. **The three 980 px visual checks are measured.** `probe_both.py` 8/8: step 940x30 / 2 lines, Stage column 180 px of 940, reason 940x45 / 3 lines, window stays 980.
+6. **The partial-success wording is confirmed.** `finished in 0:12: the Mac app failed`, bar at 1000, two rows.
 
 ### Gaps Summary
 
-No gaps. Every must-have that can be observed in this environment passed: the `both` driver with its order, single scan, single lock, per-target skips and exit contract; the Port view's target choice, one-token mapping, per-target rows and four finish lines; the two path-filtered CI jobs and the two cheap guards. Four truths are present and wired but behaviourally unexercised (three held-out 980 px visual checks and the `host-apple` link on a runner), and two repository-side facts cannot be observed from here (the jobs' first execution and branch protection). All are listed as human verification items, not gaps. The real end-to-end `--platform both` on a Mac is Phase 12's smoke and is recorded as deferred.
+No gaps. Every must-have is now verified: the `both` driver with its order, single scan, single lock, per-target skips and exit contract; the Port view's target choice, one-token mapping, per-target rows and four finish lines; the two path-filtered CI jobs, the branch protection that makes them blocking, and the two cheap guards. The guard was also demonstrated in the field — it caught a real SDK-version break on the push that caused it and went green on the fix. The only unobserved item is the real end-to-end `porter port --platform both` on a Mac, which is Phase 12's smoke and is recorded as deferred. The pre-existing `fork-ci` red legs are noted above and are not counted against this phase.
 
 ---
 
-_Verified: 2026-11-04T17:13:07Z_
+_Verified: 2026-11-04T18:05:00Z_
 _Verifier: the agent (gsd-verifier)_
