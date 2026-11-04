@@ -471,6 +471,61 @@ class Both(unittest.TestCase):   # --platform both: one run, two targets (D-04 A
             p.inputs()
         begin.assert_not_called()   # inputs() keeps the scan and the lock the driver took
 
+    def test_a_failed_target_does_not_stop_the_other(self):   # D-06: a working Mac app is not discarded because the Android toolchain is unhappy
+        from types import SimpleNamespace
+        from unittest import mock
+        p = self.driver()
+        def run(child):
+            if child.o.platform == 'android': raise pipeline.BuildError('the Android NDK is missing')
+            return {'app': str(self.t / 'Game.app')}
+        with mock.patch.object(pipeline, 'sys', SimpleNamespace(platform='darwin')), mock.patch.object(pipeline.Port, 'begin'), \
+             mock.patch.object(pipeline.Port, 'run', run), mock.patch.object(pipeline, 'say'):
+            res = p.run_both()
+        self.assertEqual([(r['platform'], r['status']) for r in res['targets']], [('android', 'failed'), ('mac-app', 'ok')])
+        self.assertEqual(res['targets'][0]['reason'], 'the Android NDK is missing')
+        self.assertEqual(res['app'], str(self.t / 'Game.app'))
+
+    def test_a_crash_is_not_a_target_failure(self):   # a TypeError must not read as 'the Mac app failed' and lose its traceback (RESEARCH Pattern 1)
+        from types import SimpleNamespace
+        from unittest import mock
+        p = self.driver()
+        def run(child): raise RuntimeError('boom')
+        with mock.patch.object(pipeline, 'sys', SimpleNamespace(platform='darwin')), mock.patch.object(pipeline.Port, 'begin'), \
+             mock.patch.object(pipeline.Port, 'run', run), mock.patch.object(pipeline, 'say'), self.assertRaises(RuntimeError):
+            p.run_both()
+
+    def test_both_names_both_outcomes_in_the_log(self):   # D-08: the run log says what each target did, and the [RED] line is what runlog reports
+        from types import SimpleNamespace
+        from unittest import mock
+        said, p = [], self.driver()
+        def run(child):
+            if child.o.platform == 'android': return {'apk': str(self.t / 'Game.apk')}
+            raise pipeline.BuildError('no Xcode here')
+        with mock.patch.object(pipeline, 'sys', SimpleNamespace(platform='darwin')), mock.patch.object(pipeline.Port, 'begin'), \
+             mock.patch.object(pipeline.Port, 'run', run), mock.patch.object(pipeline, 'say', said.append):
+            p.run_both()
+        self.assertTrue([s for s in said if s.startswith('done: ') and 'the APK built' in s and 'the Mac app failed' in s], said)
+        self.assertTrue([s for s in said if s.startswith('[RED] ') and 'the Mac app failed' in s and 'no Xcode here' in s], said)
+
+    def cmd_port_code(self, result):   # cmd_port's callback's return is the process's exit code (Pitfall 6)
+        from unittest import mock
+        from porter import cli
+        a = cli._parser().parse_args(['port', str(self.t), '--platform', 'both', '--progress', 'json', '-k', str(self.t / 'prod.keys')])
+        with mock.patch.object(pipeline.Port, 'run', lambda port: result), mock.patch.object(pipeline, 'emit_result'), \
+             mock.patch.object(cli, '_with_progress', lambda mode, fn: fn() or 0):
+            return cli.cmd_port(a)
+
+    def test_exit_code_one_when_a_target_failed(self):   # T-11-01/D-06: a green exit must never hide a broken target
+        code = self.cmd_port_code({'platform': 'both', 'targets': [{'platform': 'android', 'status': 'ok'}, {'platform': 'mac-app', 'status': 'failed'}]})
+        self.assertEqual(code, 1)
+
+    def test_exit_code_zero_when_none_failed(self):
+        for statuses in (('ok', 'ok'), ('ok', 'skipped'), ('skipped', 'skipped')):
+            with self.subTest(statuses=statuses):
+                rows = [{'platform': p, 'status': s} for p, s in zip(('android', 'mac-app'), statuses)]
+                self.assertEqual(self.cmd_port_code({'platform': 'both', 'targets': rows}), 0)
+        self.assertEqual(self.cmd_port_code({'apk': 'x', 'data': 'y'}), 0)   # a single-target result keeps today's shape, and its 0
+
 
 if __name__ == '__main__':
     unittest.main()

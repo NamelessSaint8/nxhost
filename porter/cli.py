@@ -118,7 +118,7 @@ def _with_progress(mode, fn):
     PROG.mode = nsp.progress_mode(mode)
     environ = dict(os.environ)
     try:
-        fn(); return 0
+        return fn() or 0   # D-06/Pitfall 6: the callback's code is the process's (a both run returns 1 when a target failed); None stays 0
     except BuildError as e:
         PROG.close(ok=False); PROG.say(f'[RED] {e}'); return 1
     except KeyboardInterrupt:
@@ -138,7 +138,11 @@ def cmd_port(a):
     opts = pipeline.Options(folder=Path(a.folder), keys=Path(a.keys) if a.keys else None, out=Path(a.out) if a.out else None, version=a.version, language=a.language,
                             app_name=a.app_name, install=a.install, device=a.device, replace_signer=a.replace_signer, debug=a.debug, experimental=a.experimental, package=a.package, fps60=a.fps60, jobs=a.jobs, title_id=a.title_id,
                             tool_device=getattr(a, 'tool_device', ''), platform=getattr(a, 'platform', 'android'), allow_other_metal=getattr(a, 'allow_other_metal', False))
-    return _with_progress(a.progress, lambda: pipeline.emit_result(pipeline.Port(opts).run()))
+    def go():   # D-06/Pitfall 6: a failed target is the exit code, never a raise (raising would put an error event after result and lose the other target's outcome)
+        res = pipeline.Port(opts).run()
+        pipeline.emit_result(res)
+        return 1 if any(r['status'] == 'failed' for r in res.get('targets', ())) else 0
+    return _with_progress(a.progress, go)
 
 
 def cmd_install(a):

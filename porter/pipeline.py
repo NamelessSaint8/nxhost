@@ -1,5 +1,5 @@
 # The port: a game folder (NSP / XCI) + prod.keys + the game's profile → <App>.apk and <App>-data/ (docs/ARCHITECTURE.md "The port"), or with --platform mac-app a
-# double-clickable <App>.app for the Mac that runs the port (nxnative's dm/mac/pack_app.py).
+# double-clickable <App>.app for the Mac that runs the port (nxnative's dm/mac/pack_app.py); --platform both builds the two from one run (run_both, Android first).
 # The steps every platform shares are upstream's (porter.upstream.nsp: scan, extraction, the shader split, stage reuse, progress); the Android ones are here:
 # the rewrite for DM_TARGET=android, the Vulkan shader bundle, the host built with the player's NDK, the APK, the data pack and the install. The Mac ones are
 # upstream's Mac-only build (DM_TARGET=apple, the Metal shader chain, the host Xcode builds, the app) driven from run_mac().
@@ -133,6 +133,10 @@ class Port:
                     if res.get(k): self.result[k] = res[k]
             finally:
                 runlog.set_platform(None)
+        words = {'android': 'the APK', 'mac-app': 'the Mac app'}   # player words: the log names what was built, not the flag's spelling (D-08)
+        for row in rows:
+            if row['status'] == 'failed': say(f'[RED] {words[row["platform"]]} failed: {row["reason"]}')   # runlog reads the [RED] line for the run's error event
+        say('done: ' + ' / '.join(f'{words[r["platform"]]} built ({r["out"]})' if r['status'] == 'ok' else f'{words[r["platform"]]} {r["status"]}: {r["reason"]}' for r in rows))
         self.result['platform'] = 'both'
         self.result['targets'] = rows
         return self.result
