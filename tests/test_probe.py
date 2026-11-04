@@ -96,8 +96,9 @@ class Probe(unittest.TestCase):
     def test_quoted_fix(self):   # WR-06: porter's own NDK on a Mac lives under ~/Library/Application Support
         with mock.patch.object(probe, 'sys', types.SimpleNamespace(platform='darwin')):
             d = ndk(self.t / 'Application Support' / 'ndk'); r, _ = self.run_probe(d, link=PermissionError(errno.EACCES, 'Permission denied'))
+            want = probe.clang(d).parent   # inside the mock: host_folder() reads sys.platform, so the expected path is the Mac one here
         chmod, xattr = r['fix'].split(';', 1)
-        self.assertEqual(shlex.split(chmod), ['chmod', '+x', f'{probe.clang(d).parent}/*']); self.assertIn(shlex.quote(str(d)), xattr)
+        self.assertEqual(shlex.split(chmod), ['chmod', '+x', f'{want}/*']); self.assertIn(shlex.quote(str(d)), xattr)
 
     @unittest.skipIf(os.name == 'nt', 'POSIX exec format')
     def test_real_enoexec(self):   # a real file the kernel cannot run, as an NDK built for another CPU is
