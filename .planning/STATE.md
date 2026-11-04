@@ -4,16 +4,16 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 11
 current_phase_name: Compile the C host in CI
-status: executing
-stopped_at: Completed 11-02-PLAN.md
-last_updated: "2026-11-04T16:34:11.920Z"
+status: verifying
+stopped_at: Completed 11-03-PLAN.md
+last_updated: "2026-11-04T17:09:39.190Z"
 last_activity: 2026-11-04
-last_activity_desc: 11-04-PLAN.md complete
+last_activity_desc: 11-03-PLAN.md complete — all four plans of Phase 11 executed
 progress:
   total_phases: 11
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 42
-  completed_plans: 41
+  completed_plans: 42
 state_head: ddc31a8fbec161010ac84b951068ad70f77b9fe3
 ---
 
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-10-31)
 ## Current Position
 
 Phase: 11 (Compile the C host in CI)
-Plan: 3 of 4 (11-03 remaining)
-Status: Executing — 11-01, 11-02 and 11-04 complete; 11-03 remaining
-Last activity: 2026-11-04 — 11-02-PLAN.md complete
+Plan: 4 of 4
+Status: Phase complete — ready for verification
+Last activity: 2026-11-04 — 11-03-PLAN.md complete
 
-Progress: [██████████] 98%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -101,6 +101,7 @@ Progress: [██████████] 98%
 | Phase 11 P01 | 20min | 3 tasks | 5 files |
 | Phase 11 P04 | 3min | 3 tasks | 6 files |
 | Phase 11 P02 | 15min | 2 tasks | 2 files |
+| Phase 11 P03 | 45min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -210,6 +211,9 @@ Recent decisions affecting current work:
 - [Phase 11]: dm/host CFLAGS carries -Werror=implicit-function-declaration (never a blanket -Werror), and tests/arch_rules.py rule 12 fails by name when a dm/host source is missing from the hand-listed SRC that Android's glob would compile
 - [Phase 11]: tool_lock.main(argv) returns 0 clean / 1 mismatch / 2 usage with the [RED] sentence in the MISMATCH constant; usage exiting 2 instead of 1 is the refactor's only code change
 - [Phase 11]: Phase 11-02 target default (option-a, D-02 rule 4): on macOS only Mac app is ticked, everywhere else only Android APK; the other box stays tickable where the host offers it
+- [Phase 11]: 11-03: the per-target rows are drawn on the `result` event and cleared by every `run()`, so the block has no empty state and a run that dies before `result` shows none (rules 15-16, 25)
+- [Phase 11]: 11-03: `targets[].status` crosses exactly one map (STATUS_WORD / STATUS_GLYPH / STATUS_KEY) — the view never decides a target's outcome itself — and the stage tree is keyed by `(platform, k)` with the `<Target> · ` prefix only on events that carry a platform, so a single-target run reads exactly as before
+- [Phase 11]: 11-03: `record.py` drives the both fixture as a real `porter port --platform both` (`cmd='port'`), because `runlog.run` only wraps — and so only stamps `platform` — when the command is `port` or `install`; it also takes a fixture name so one golden can be regenerated without rewriting the others
 
 ### Roadmap Evolution
 
@@ -239,6 +243,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-04T16:34:11.905Z
-Stopped at: Completed 11-02-PLAN.md
+Last session: 2026-11-04T17:09:39.175Z
+Stopped at: Completed 11-03-PLAN.md
 Resume file: None

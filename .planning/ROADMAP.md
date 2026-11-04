@@ -244,7 +244,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 8. Make the cold shader stage predictable | 0/TBD | Not started | - |
 | 9. One port entry point for Android and Mac | 0/TBD | Not started | - |
 | 10. Move saves between devices | 0/TBD | Not started | - |
-| 11. Compile the C host in CI | 3/4 | In Progress|  |
+| 11. Compile the C host in CI | 4/4 | In Progress|  |
 | 12. One command that verifies a change | 0/TBD | Not started | - |
 | 13. Guards from past incidents | 0/TBD | Not started | - |
 | 14. Keep the upstream pick cheap | 0/TBD | Not started | - |
@@ -323,7 +323,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 **Note** (2026-11-04): widened by discussion. The user asked for one-or-both targets chosen in the UI with the work following that choice, so this phase absorbed Phase 9's GUI half (QUAL-07) and gained QUAL-13. The phase name still says "CI" because the directory and requirement QUAL-09 are keyed to it; the plan covers both halves.
 
-**Plans**: 3/4 plans executed
+**Plans**: 4/4 plans executed
 
 Plans:
 **Wave 1**
@@ -337,7 +337,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 11-03-PLAN.md — per-target result rows with their own Reveal, `(platform, k)` stage keys, golden stream (QUAL-07)
+- [x] 11-03-PLAN.md — per-target result rows with their own Reveal, `(platform, k)` stage keys, golden stream (QUAL-07)
 
 ### Phase 12: One command that verifies a change
 
