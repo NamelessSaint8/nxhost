@@ -17,6 +17,7 @@ from gui import firstrun
 from gui.runner import Porter, call_json
 
 STATUS_COLOUR = {'playable': '#2e7d32', 'wip': '#ef6c00', 'boots': '#ef6c00', 'experimental': '#ef6c00', 'ios only': '#757575'}
+MAC_HOST = sys.platform == 'darwin'   # the view's one host fact (D-02, D-03): it decides whether a box is offered, never whether a game can be ported
 
 
 def hms(s):
@@ -47,6 +48,45 @@ def path_row(edit, pick):   # a line edit with a Browse button
     return w
 
 
+class TargetChoice(QWidget):   # the Targets row (D-02, D-03, QUAL-07): two boxes, the host's default, the refusal, and the one note under them (UI-SPEC rules 1-7)
+    ANDROID_TIP = 'The APK and the data pack for your Android device'
+    MAC_TIP = 'A double-clickable Mac app, built on this Mac with Xcode'
+    MAC_OFF_TIP = 'A Mac app is built on a Mac: this host builds the Android APK'
+    REFUSED = 'Keep at least one target ticked.'
+    OFF_MAC = 'A Mac app is built on a Mac. This host builds the Android APK.'
+    NO_ANDROID = 'Install on the device and the device list apply to the Android APK.'
+
+    def __init__(self, port):
+        super().__init__()
+        self.port, self.refused = port, False
+        self.android_box = QCheckBox('Android APK'); self.android_box.setToolTip(self.ANDROID_TIP)
+        self.mac_box = QCheckBox('Mac app'); self.mac_box.setToolTip(self.MAC_TIP if MAC_HOST else self.MAC_OFF_TIP); self.mac_box.setEnabled(bool(MAC_HOST))
+        h = QHBoxLayout(); h.setContentsMargins(0, 0, 0, 0); h.setSpacing(8); h.addWidget(self.android_box); h.addWidget(self.mac_box); h.addStretch(1)
+        self.targets_note = QLabel(''); self.targets_note.setTextFormat(Qt.PlainText); self.targets_note.setWordWrap(True)
+        self.targets_note.setStyleSheet(f'color: {firstrun.colour(self, "note")}')
+        v = QVBoxLayout(self); v.setContentsMargins(0, 0, 0, 0); v.setSpacing(4); v.addLayout(h); v.addWidget(self.targets_note)
+        for box in (self.android_box, self.mac_box): box.blockSignals(True)   # rule 4, option-a: the Mac app alone on macOS, the APK everywhere else
+        self.android_box.setChecked(not MAC_HOST); self.mac_box.setChecked(MAC_HOST)
+        for box in (self.android_box, self.mac_box): box.blockSignals(False)
+        self.android_box.toggled.connect(self.changed); self.mac_box.toggled.connect(self.changed)
+        self.refresh()
+
+    def changed(self, _checked=False):   # rule 5: a change that would leave neither box ticked is reverted here (signals blocked), so a run is never targetless
+        if not (self.android_box.isChecked() or self.mac_box.isChecked()):
+            box = self.sender() or (self.mac_box if MAC_HOST else self.android_box)
+            box.blockSignals(True); box.setChecked(True); box.blockSignals(False); self.refused = True
+        else: self.refused = False
+        self.refresh(); self.port.on_targets_changed()
+
+    def refresh(self, clear=False):   # rule 6: one note, first match wins; it is the only label, so the three can never stack
+        if clear: self.refused = False
+        text = self.REFUSED if self.refused else self.OFF_MAC if not MAC_HOST else self.NO_ANDROID if not self.android_box.isChecked() else ''
+        self.targets_note.setText(text); self.targets_note.setVisible(bool(text))
+
+    def boxes_enabled(self, on):   # rule 11: both boxes off for a run, back afterwards with the Mac box only where it is offered
+        self.android_box.setEnabled(on); self.mac_box.setEnabled(on and MAC_HOST)
+
+
 # ---------------- Port ----------------
 class PortTab(QWidget):
     def __init__(self, win):
@@ -72,9 +112,13 @@ class PortTab(QWidget):
         self.device = QComboBox(); self.device.setMinimumWidth(260)
         refresh = QPushButton('Refresh'); refresh.clicked.connect(self.refresh_devices)
         dev = QWidget(); dh = QHBoxLayout(dev); dh.setContentsMargins(0, 0, 0, 0); dh.addWidget(self.install); dh.addWidget(self.device, 1); dh.addWidget(refresh)
+        self.install_row = dev   # rule 10: its checkbox, the device combo and Refresh live or die with the Android target
         self.debug = QCheckBox('Development build (debuggable, debug information, DM_CTL key presses)')
         self.experimental = QCheckBox('Experimental: try a game that is not ported to Android yet (it may not start)')
         self.experimental.toggled.connect(lambda _: self.update_port_button())
+        self.targets = TargetChoice(self)   # rules 1-7: the form's first row
+        self.android_box, self.mac_box, self.targets_note = self.targets.android_box, self.targets.mac_box, self.targets.targets_note
+        f.insertRow(0, 'Targets', self.targets)
         f.addRow('App name', self.app_name); f.addRow('Game language', self.language)
         f.addRow('Output folder', path_row(self.out, self.pick_out)); f.addRow('Device', dev); f.addRow('', self.debug); f.addRow('', self.experimental)
         v.addWidget(o)
@@ -102,6 +146,7 @@ class PortTab(QWidget):
         v.addWidget(split, 1)
         self.tick = QTimer(self); self.tick.timeout.connect(self.on_tick); self.tick.start(1000)
         self.refresh_devices()
+        self.on_targets_changed()
 
     # ---- the game folder ----
     def pick_folder(self):
@@ -143,6 +188,13 @@ class PortTab(QWidget):
         i = self.info or {}
         self.port_btn.setEnabled(bool(i.get('supported') or (i.get('experimental') and self.experimental.isChecked())) and not self.porter.running())
 
+    def on_targets_changed(self):   # rule 10: the Install row belongs to the Android APK, and only while nothing runs
+        self.install_row.setEnabled(self.android_box.isChecked() and not self.porter.running())
+
+    def platform_arg(self) -> str:   # rule 8, QUAL-07: the one place the two boxes become porter's --platform token
+        a, m = self.android_box.isChecked(), self.mac_box.isChecked()
+        return 'both' if a and m else 'android' if a else 'mac-app'
+
     def refresh_devices(self):
         cur = self.device.currentData() or config.load().get('device')
         def got(rows, code, fail):
@@ -161,11 +213,11 @@ class PortTab(QWidget):
         cfg = config.load()
         if not cfg.get('keys'):
             QMessageBox.warning(self, 'prod.keys', 'Set the path of your prod.keys on the Setup tab first.'); self.win.tabs.setCurrentIndex(1); return
-        args = ['port', self.folder.text().strip(), '--progress', 'json']
+        args = ['port', self.folder.text().strip(), '--progress', 'json', '--platform', self.platform_arg()]
         if self.app_name.text().strip(): args += ['--app-name', self.app_name.text().strip()]
         if self.language.currentData(): args += ['--language', self.language.currentData()]
         if self.out.text().strip(): args += ['--out', self.out.text().strip()]
-        if self.install.isChecked():
+        if self.android_box.isChecked() and self.install.isChecked():   # rule 9: a Mac-only run installs nothing
             args.append('--install')
             if self.device.currentData(): args += ['--device', self.device.currentData()]
         if self.debug.isChecked(): args.append('--debug')
@@ -183,6 +235,7 @@ class PortTab(QWidget):
         self.result = None; self.t0 = time.time(); self.cancelled = False; self.log_path = self.error = None; self.args = args; self.red = ''
         for b in (self.port_btn, self.open_btn, self.log_btn, self.inst_btn): b.setEnabled(False)
         self.cancel_btn.setEnabled(True)
+        self.targets.boxes_enabled(False); self.install_row.setEnabled(False); self.targets.refresh(clear=True)   # rule 11: no target changes mid-run
         self.append('$ porter ' + ' '.join(f'"{a}"' if ' ' in a else a for a in args))
         self.porter.start(args)
 
@@ -237,6 +290,7 @@ class PortTab(QWidget):
     def on_finished(self, code):
         self.cancel_btn.setEnabled(False)
         self.update_port_button()
+        self.targets.boxes_enabled(True); self.targets.refresh(clear=True); self.on_targets_changed()   # rule 11: back, never leaving zero ticked
         took = hms(time.time() - self.t0)
         if code == 0:
             self.step.setText(f'done in {took}'); self.prog.setRange(0, 1000); self.prog.setValue(1000)
