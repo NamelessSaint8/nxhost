@@ -499,6 +499,65 @@ class Escaping(unittest.TestCase):   # the game card shows porter's strings as t
         self.assertIsNone(re.search(r'^LANGUAGES\b', (REPO / 'gui/app.py').read_text(encoding='utf-8'), re.M))
 
 
+class Targets(unittest.TestCase):   # D-02 / UI-SPEC rules 1-11: two target boxes, the host's own default, one note, one --platform token
+    def setUp(self):
+        keep = runner.PORTER; self.addCleanup(setattr, runner, 'PORTER', keep); runner.PORTER = [FAKE, '--']   # the stand-in answers the start-up one-shots
+
+    def port(self, mac):   # a PortTab built as if on macOS (mac=True) or on Windows/Linux; MAC_HOST stays patched for the test
+        m = mock.patch.object(app, 'MAC_HOST', mac); m.start(); self.addCleanup(m.stop)
+        return window(self).port
+
+    def test_default_is_the_hosts_own_target(self):   # rule 4, option-a: the Mac app alone on macOS, the APK everywhere else
+        for mac in (True, False):
+            with self.subTest(mac=mac):
+                p = self.port(mac)
+                self.assertEqual((p.android_box.isChecked(), p.mac_box.isChecked()), (not mac, mac))
+                self.assertTrue(p.android_box.isEnabled()); self.assertEqual(p.mac_box.isEnabled(), mac)
+                self.assertTrue(p.platform_arg() in ('android', 'mac-app', 'both'))
+
+    def test_one_helper_names_the_target(self):   # rule 8, QUAL-07: the three reachable box states, nothing else
+        p = self.port(False)
+        self.assertEqual(p.platform_arg(), 'android')
+        p.mac_box.setChecked(True); self.assertEqual(p.platform_arg(), 'both')
+        p.android_box.setChecked(False); self.assertEqual(p.platform_arg(), 'mac-app')
+
+    def test_the_last_box_cannot_be_unticked(self):   # rule 5, 6.1: no zero-target state, and the refusal says so
+        p = self.port(False)
+        p.android_box.setChecked(False)
+        self.assertTrue(p.android_box.isChecked())
+        self.assertEqual(p.platform_arg(), 'android')
+        self.assertEqual(p.targets_note.text(), 'Keep at least one target ticked.')
+        self.assertFalse(p.targets_note.isHidden())
+
+    def test_off_macos_the_mac_box_says_why(self):   # D-03, rule 7: disabled with the reason, and the note names it
+        p = self.port(False)
+        self.assertFalse(p.mac_box.isEnabled())
+        self.assertEqual(p.mac_box.toolTip(), 'A Mac app is built on a Mac: this host builds the Android APK')
+        self.assertEqual(p.targets_note.text(), 'A Mac app is built on a Mac. This host builds the Android APK.')
+        self.assertFalse(p.targets_note.isHidden())
+
+    def test_on_macos_the_mac_box_is_offered(self):   # rules 4, 6.3, 10: the APK is one tick away and the Install row follows it
+        p = self.port(True)
+        self.assertTrue(p.mac_box.isEnabled())
+        self.assertEqual(p.mac_box.toolTip(), 'A double-clickable Mac app, built on this Mac with Xcode')
+        self.assertFalse(p.install_row.isEnabled())   # a Mac-only run installs nothing
+        self.assertEqual(p.targets_note.text(), 'Install on the device and the device list apply to the Android APK.')
+        p.android_box.setChecked(True)
+        self.assertTrue(p.install_row.isEnabled())
+        self.assertEqual(p.targets_note.text(), ''); self.assertTrue(p.targets_note.isHidden())
+
+    def test_start_asks_for_the_ticked_targets(self):   # rules 8-9: one --platform always, --install only while the APK is ticked
+        p = self.port(False); p.install.setChecked(True)
+        for android, mac, token, install in ((True, False, 'android', True), (True, True, 'both', True), (False, True, 'mac-app', False)):
+            with self.subTest(token=token):
+                p.mac_box.setChecked(mac); p.android_box.setChecked(android)
+                with mock.patch.object(app.config, 'load', return_value={'keys': 'prod.keys'}), mock.patch.object(p, 'run') as run:
+                    p.start()
+                args = run.call_args[0][0]
+                self.assertEqual(args[args.index('--platform') + 1], token)
+                self.assertEqual('--install' in args, install)
+
+
 FIXTURES = REPO / 'tests/fixtures/bridge'
 
 
