@@ -2,7 +2,7 @@
 # The translation chain's tools against their lock file dm/gfx/tools/dmsh_chain.lock: the translator (its dlls and the source digest it embeds), SPIRV-Cross and the Metal compilers (macOS / iOS).
 # The lock is part of the chain version (dmsh_chain.py); these checks are not: they decide no shader's output, so a fix to a check or its message neither changes V nor the shaders' cache keys
 # (dmsh_build.py CODE_FP). dmsh_build.py runs check_tools before it builds anything; own_compilers.py replaces it for a player's Mac.
-# Usage: tool_lock.py --check-tools   verify that the actual tools match the lock file; on mismatch print [RED] lines and exit 1
+# Usage: tool_lock.py --check-tools   verify that the actual tools match the lock file; on mismatch print [RED] lines and exit 1 (main(argv) returns the code: 0 clean, 1 mismatch, 2 usage)
 #        tool_lock.py --update-lock   rewrite the lock file from the actual tools (run after changing Ryujinx / spirv-cross / Xcode, then dmsh_chain.py --header; both are committed)
 import os, sys, hashlib, subprocess, shutil
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -41,16 +41,22 @@ def check_tools():
     elif now['xlate_source'] != xlate_source_sha(): bad.append(f'the translator was not built from the in-repo source: embedded source {now["xlate_source"]} / in repo {xlate_source_sha()} (rebuild dmsh_xlate)')
     return bad
 
-if __name__ == '__main__':
-    a = sys.argv[1:]
+MISMATCH = '[RED] translation chain tools do not match the lock file: '
+
+def main(argv=None) -> int:
+    """The entry point, returning its code rather than exiting: dmsh_build.py and own_compilers.py reach check_tools() through the module object, and the refusals' sentence and code are asserted by
+    tests/test_tool_lock.py on a host with no Xcode, .NET or brew. 0 clean (or the lock rewritten), 1 a mismatch or a translator that does not run, 2 usage"""
+    a = list(sys.argv[1:] if argv is None else argv)
     if a == ['--update-lock']:
         t = tools_now()
-        if t['xlate_source'].startswith(NO_RUN): sys.exit('[RED] ' + no_run_message(t['xlate_source']))
-        if t['xlate_source'] != xlate_source_sha(): sys.exit(f'[RED] the translator was not built from the in-repo source (embedded {t["xlate_source"]} / in repo {xlate_source_sha()}): rebuild dmsh_xlate first')
+        if t['xlate_source'].startswith(NO_RUN): print('[RED] ' + no_run_message(t['xlate_source']), file=sys.stderr); return 1
+        if t['xlate_source'] != xlate_source_sha(): print(f'[RED] the translator was not built from the in-repo source (embedded {t["xlate_source"]} / in repo {xlate_source_sha()}): rebuild dmsh_xlate first', file=sys.stderr); return 1
         open(LOCK, 'w').write('# Translation chain tool fingerprints (written by tool_lock.py --update-lock; regenerate after changing tools and commit it)\n' + ''.join(f'{k}\t{v}\n' for k, v in t.items()))
-        print('wrote', LOCK)
-    elif a == ['--check-tools']:
+        print('wrote', LOCK); return 0
+    if a == ['--check-tools']:
         bad = check_tools()
-        for b in bad: print('[RED] translation chain tools do not match the lock file: ' + b)
-        sys.exit(1 if bad else 0)
-    else: sys.exit('usage: tool_lock.py --check-tools | --update-lock')
+        for b in bad: print(MISMATCH + b)
+        return 1 if bad else 0
+    print('usage: tool_lock.py --check-tools | --update-lock', file=sys.stderr); return 2
+
+if __name__ == '__main__': sys.exit(main())
