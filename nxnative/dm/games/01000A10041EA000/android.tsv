@@ -13,6 +13,6 @@ status	playable
 tested	v262144 Lenovo Legion Y700 HA2M2W71 (Snapdragon 8 Elite, Adreno 840, Android 16)
 package	org.nx2a.t01000a10041ea000
 orientation	landscape
-# Mali GPUs (MediaTek Dimensity and friends) have no BC texture compression, and the backend drops a BC format when the
-# device lacks it, so Skyrim's art would arrive with the textures missing: the installer refuses such a device instead.
-requires	bcn
+# GPUs without BC texture formats (Mali on the MediaTek Dimensity and Samsung tablets): the host decompresses the game's BC1 and BC3
+# textures to RGBA8 at upload (dm/gfx/tex/nvn_bc.c), so no device is refused for them. It costs GPU memory and bandwidth -- four times
+# the texel bytes -- which the profile's frame rate note should be read against on such a device.

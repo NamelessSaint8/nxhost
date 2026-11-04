@@ -79,7 +79,8 @@ VkDescriptorSet vk_alloc_set(VkDescriptorSetLayout l);    // from this submissio
 uint64_t vk_fence_done(void);   // the highest submission fence the GPU has completed
 
 // ---- formats and textures (gfx_vk_tex.c) ----
-typedef struct { VkFormat vk; VkComponentMapping swz; uint8_t kind; uint8_t depth, stencil, compressed, is_int, is_sint, bw, bh, bpb; } vkfmt_t;
+typedef struct { VkFormat vk; VkComponentMapping swz; uint8_t kind; uint8_t depth, stencil, compressed, is_int, is_sint, bw, bh, bpb;
+                 uint8_t bc, sbw, sbh, sbpb; } vkfmt_t;   // bc: the NVN BC format decompressed into this one, and the guest's block width, height and bytes
 const vkfmt_t *vk_fmt(int nvn_format);   // NULL when the format has no Vulkan counterpart on this device
 typedef struct vkimg vkimg_t;
 struct vkimg {

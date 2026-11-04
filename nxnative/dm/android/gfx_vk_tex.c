@@ -7,6 +7,7 @@
 #include "gfx_vk.h"
 #include "nvn_tex.h"
 #include "../gfx/tex/nvn_deswizzle.h"
+#include "../gfx/tex/nvn_bc.h"
 #include "nvn_hmap.h"
 #include <string.h>
 
@@ -79,8 +80,26 @@ const vkfmt_t *vk_fmt(int f) {
             o->compressed = o->bw > 1 || o->bh > 1;
             o->is_int = e.kind == K_INT || e.kind == K_SINT; o->is_sint = e.kind == K_SINT; o->kind = 1;
             o->swz = (VkComponentMapping){VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, e.noalpha ? VK_COMPONENT_SWIZZLE_ONE : VK_COMPONENT_SWIZZLE_IDENTITY};
-            if ((o->compressed && o->vk >= VK_FORMAT_BC1_RGB_UNORM_BLOCK && o->vk <= VK_FORMAT_BC7_SRGB_BLOCK && !V.has_bc) ||
-                (o->vk >= VK_FORMAT_ASTC_4x4_UNORM_BLOCK && o->vk <= VK_FORMAT_ASTC_12x12_SRGB_BLOCK && !V.has_astc)) o->kind = 0;
+            // A GPU without BC textures (Mali and the other mobile GPUs of the MediaTek / Samsung tablets, Apple GPUs before the A17 Pro): the guest's blocks
+            // are decompressed at upload (dm/gfx/tex/nvn_bc.c) into the uncompressed format that stands in for them, so every BC texture becomes a plain one
+            if (!V.has_bc) {
+                int unpacked = nvn_bc_unpacked_format(f);
+                if (unpacked && unpacked != 0x25 && unpacked != 0x37 && unpacked != 0x01 && unpacked != 0x02 && unpacked != 0x0D && unpacked != 0x0E) o->kind = 0;
+                else if (unpacked) {
+                    static const struct { uint8_t f, bpb; VkFormat vk; } u[] = {
+                        {0x25, 4, VK_FORMAT_R8G8B8A8_UNORM}, {0x37, 4, VK_FORMAT_R8G8B8A8_SRGB},
+                        {0x01, 1, VK_FORMAT_R8_UNORM}, {0x02, 1, VK_FORMAT_R8_SNORM},
+                        {0x0D, 2, VK_FORMAT_R8G8_UNORM}, {0x0E, 2, VK_FORMAT_R8G8_SNORM},
+                    };
+                    for (size_t i = 0; i < sizeof u / sizeof *u; i++) if (u[i].f == unpacked) {
+                        o->bc = (uint8_t)f; o->sbpb = (uint8_t)(o->bpb * o->bw * o->bh); o->sbw = o->bw; o->sbh = o->bh;   // the guest's block, kept for the decode
+                        o->vk = u[i].vk; o->bpb = u[i].bpb; o->bw = 1; o->bh = 1; o->compressed = 0;
+                        o->swz = (VkComponentMapping){VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
+                    }
+                }
+            }
+            if ((o->kind && o->compressed && o->vk >= VK_FORMAT_BC1_RGB_UNORM_BLOCK && o->vk <= VK_FORMAT_BC7_SRGB_BLOCK && !V.has_bc) ||
+                (o->kind && o->vk >= VK_FORMAT_ASTC_4x4_UNORM_BLOCK && o->vk <= VK_FORMAT_ASTC_12x12_SRGB_BLOCK && !V.has_astc)) o->kind = 0;
         }
         __atomic_store_n(&g_fmt_done[f], 1, __ATOMIC_RELEASE);   // published once complete
     }
@@ -183,18 +202,31 @@ static void pkg_upload_(vkimg_t *im, const tex_t *t, const vkfmt_t *f) {
     im->pkg_stamp = nvn_dirty_now(); im->pkg_span = nvn_dirty_span(t->mem, t->L.size); im->pkg_seen = im->pkg_stamp;
     im->pkg_mem = t->mem; im->pkg_len = t->L.size; im->pkg_released = 0;
     int linear = (t->d.flags & (NVN_TEXTURE_FLAGS_LINEAR | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET)) != 0;
-    unsigned bw = f->bw ? f->bw : 1, bh = f->bh ? f->bh : 1, bpb = f->bpb;
+    unsigned bw = f->bc ? f->sbw : f->bw ? f->bw : 1, bh = f->bc ? f->sbh : f->bh ? f->bh : 1, bpb = f->bc ? f->sbpb : f->bpb;   // the guest's blocks, which the decode changes
     if (!bpb) { VKRED_ONCE(12, "packaged texture format %#x has no block size", t->d.format); return; }
     for (unsigned lv = 0; lv < im->levels; lv++) {
         uint32_t w = im->w >> lv ? im->w >> lv : 1, h = im->h >> lv ? im->h >> lv : 1, z = im->d >> lv ? im->d >> lv : 1;
         uint32_t bx = (w + bw - 1) / bw, by = (h + bh - 1) / bh; size_t pitch = (size_t)bx * bpb, slab = pitch * by * z;
+        // a BC texture is decompressed into rows of texels first: the 4×4 block becomes bw × bh texels of 4 (RGBA8), 2 (RG8) or 1 (R8) bytes,
+        // so a row is padded to whole blocks and a block row covers bh texel rows
+        size_t dpitch = f->bc ? (size_t)bx * bw * f->bpb : pitch, dslice = f->bc ? dpitch * (size_t)by * bh : slab;
         for (unsigned ly = 0; ly < im->layers; ly++) {
-            VkBuffer sb; VkDeviceSize so; uint8_t *dst = vk_scratch(slab, 16, &sb, &so);
+            VkBuffer sb; VkDeviceSize so; uint8_t *dst = vk_scratch(f->bc ? dslice * z : slab, 16, &sb, &so);
+            uint8_t *blocks = dst;
+            if (f->bc) { VkBuffer bb; VkDeviceSize bo; blocks = vk_scratch(slab, 16, &bb, &bo); }
             if (linear) {   // linear storage: rows of the texture's stride, one level, one layer
                 size_t stride = t->d.stride ? t->d.stride : pitch;
-                for (uint32_t y = 0; y < by * z; y++) memcpy(dst + y * pitch, t->mem + (size_t)y * stride, pitch);
-            } else if (nvn_deswizzle(&t->d, lv, ly, t->mem, dst, pitch)) { VKRED_ONCE(13, "deswizzle refused texture format %#x target %d", t->d.format, t->d.target); return; }
+                for (uint32_t y = 0; y < by * z; y++) memcpy(blocks + y * pitch, t->mem + (size_t)y * stride, pitch);
+            } else if (nvn_deswizzle(&t->d, lv, ly, t->mem, blocks, pitch)) { VKRED_ONCE(13, "deswizzle refused texture format %#x target %d", t->d.format, t->d.target); return; }
+            if (f->bc) {
+                for (uint32_t k = 0; k < z; k++)
+                    if (nvn_bc_decode(f->bc, blocks + (size_t)k * pitch * by, pitch, w, h, dst + (size_t)k * dslice, dpitch)) {
+                        VKRED_ONCE(14, "no BC decoder for texture format %#x (nvn %#x)", f->bc, t->d.format); return;
+                    }
+                static uint64_t n; if (!n++ || n == 256) VKLOG("textures: this GPU has no BC formats: %llu BC texture uploads decompressed to uncompressed ones so far", (unsigned long long)n);
+            }
             VkBufferImageCopy r = {so, 0, 0, {im->aspect & VK_IMAGE_ASPECT_COLOR_BIT ? VK_IMAGE_ASPECT_COLOR_BIT : VK_IMAGE_ASPECT_DEPTH_BIT, lv, ly, 1}, {0, 0, 0}, {w, h, z}};
+            if (f->bc) r.bufferRowLength = (uint32_t)(dpitch / f->bpb);   // a row is padded out to whole 4×4 blocks
             vkCmdCopyBufferToImage(cb, sb, im->img, VK_IMAGE_LAYOUT_GENERAL, 1, &r);
         }
     }
@@ -346,7 +378,7 @@ static int linear_tex(const tex_t *t) { return t->pool && (t->d.flags & (NVN_TEX
 static int linear_storage(const tex_t *t) { return t->pool && (t->d.flags & (NVN_TEXTURE_FLAGS_LINEAR | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET)); }
 extern uint64_t g_up_gen;
 static int lin_copy(vkimg_t *im, const tex_t *t, const vkfmt_t *f) {   // 1 = the image holds its storage as of this upload buffer
-    if (!linear_storage(t) || im->levels != 1 || im->d != 1 || im->layers != 1 || f->bw > 1 || f->bh > 1 || !f->bpb || im->aspect != VK_IMAGE_ASPECT_COLOR_BIT) return 0;
+    if (f->bc || !linear_storage(t) || im->levels != 1 || im->d != 1 || im->layers != 1 || f->bw > 1 || f->bh > 1 || !f->bpb || im->aspect != VK_IMAGE_ASPECT_COLOR_BIT) return 0;
     size_t stride = t->d.stride ? t->d.stride : (size_t)im->w * f->bpb; VkBuffer b; VkDeviceSize o;
     if (stride % f->bpb || stride < (size_t)im->w * f->bpb || !vk_buf_at((uint64_t)(uintptr_t)t->mem, (uint64_t)stride * (im->h - 1) + (uint64_t)im->w * f->bpb, &b, &o) || o % f->bpb) return 0;
     // the GPU wrote it (a clear, a copy, a storage write): it holds that until the CPU writes its storage again, which its pages, set read-only, tell
