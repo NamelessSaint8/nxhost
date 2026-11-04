@@ -10847,12 +10847,17 @@ static void dlss_eval(const p_dlss *c) {
     [ce endEncoding];
     sc.colorTexture = col; sc.depthTexture = dep; sc.motionTexture = mot; sc.outputTexture = out; sc.exposureTexture = expo;
     sc.inputContentWidth = iw; sc.inputContentHeight = ih;
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000
     if (@available(macOS 27.0, iOS 27.0, *)) {   // the rectangles' corners: all at the origin on the game seen, so an older system loses nothing there
         sc.colorContentOffsetX = (NSUInteger)c->base[DLSS_COLOR][0]; sc.colorContentOffsetY = (NSUInteger)c->base[DLSS_COLOR][1];
         sc.depthContentOffsetX = (NSUInteger)c->base[DLSS_DEPTH][0]; sc.depthContentOffsetY = (NSUInteger)c->base[DLSS_DEPTH][1];
         sc.motionContentOffsetX = (NSUInteger)c->base[DLSS_MOTION][0]; sc.motionContentOffsetY = (NSUInteger)c->base[DLSS_MOTION][1];
         sc.outputOffsetX = (NSUInteger)c->base[DLSS_OUTPUT][0]; sc.outputOffsetY = (NSUInteger)c->base[DLSS_OUTPUT][1];
-    } else if (c->base[DLSS_COLOR][0] || c->base[DLSS_COLOR][1] || c->base[DLSS_DEPTH][0] || c->base[DLSS_DEPTH][1] || c->base[DLSS_MOTION][0] || c->base[DLSS_MOTION][1] || c->base[DLSS_OUTPUT][0] || c->base[DLSS_OUTPUT][1]) {
+    } else
+#endif
+    // @available is a run-time check, so an SDK without these declarations (the macos-26 image tops out at 26.6 / SDK 26.5)
+    // fails to compile the branch above at all: it is compiled out there, and only the warning below is kept.
+    if (c->base[DLSS_COLOR][0] || c->base[DLSS_COLOR][1] || c->base[DLSS_DEPTH][0] || c->base[DLSS_DEPTH][1] || c->base[DLSS_MOTION][0] || c->base[DLSS_MOTION][1] || c->base[DLSS_OUTPUT][0] || c->base[DLSS_OUTPUT][1]) {
         static int once; if (!once++) MLOG("[RED] DLSS: rectangles away from the origin need macOS / iOS 27's MetalFX; taken from the origin");
     }
     sc.motionVectorScaleX = c->mv[0]; sc.motionVectorScaleY = c->mv[1];
