@@ -702,5 +702,65 @@ class Replay(unittest.TestCase):   # golden JSON-lines streams (tests/fixtures/b
             if f.is_file():
                 with self.subTest(f.name): self.assertIsNone(bad.search(f.read_text(encoding='utf-8', errors='replace')), f.name)
 
+    # ---- a two-target run: both chains in one stage list, and the finish line (rules 12-14, 21-25) ----
+    def port(self, mac=False):   # a PortTab whose start-up one-shots the stand-in answers; MAC_HOST patched, so the suite reads the same on every host
+        keep = runner.PORTER; runner.PORTER = [FAKE, '--']
+        m = mock.patch.object(app, 'MAC_HOST', mac); m.start(); self.addCleanup(m.stop)
+        try: return window(self).port
+        finally: runner.PORTER = keep
+
+    def test_port_both(self):   # the golden stream record.py writes from porter's own emitter
+        evs, code = self.replay('port_both.jsonl')
+        self.assertEqual((evs, code), (self.golden('port_both.jsonl'), 0))
+        res = evs[-1]
+        self.assertEqual((res['ev'], res['platform']), ('result', 'both'))
+        self.assertEqual([(r['platform'], r['status']) for r in res['targets']], [('android', 'ok'), ('mac-app', 'failed')])
+        self.assertTrue(all(e.get('platform') for e in evs if e['ev'] in ('stage', 'step', 'progress', 'stage_end')), 'a stage event without its target')
+        self.assertTrue(all('targets' not in e for e in self.golden('port_ok.jsonl')), 'targets[] is a multi-target key only')
+
+    def test_both_chains_stay_in_one_tree(self):   # Pitfall 5: the Mac chain's k=1..n appends, it does not overwrite the Android chain's
+        p = self.port(); evs = self.golden('port_both.jsonl')
+        for e in evs: p.on_event(e)
+        stages = [e for e in evs if e['ev'] == 'stage']
+        col = [p.stages.topLevelItem(i).text(1) for i in range(p.stages.topLevelItemCount())]
+        self.assertEqual(len(col), len(stages)); self.assertIn('Android APK · rewrite', col); self.assertIn('Mac app · rewrite', col)
+        self.assertEqual([r.name.text() for r in p.rows], ['Android APK · built', 'Mac app · failed'])
+
+    def test_a_single_target_run_reads_exactly_as_today(self):   # rule 13: no prefix, so the goldens and every screenshot stay the same
+        q = self.port(); texts = []
+        for e in self.golden('port_ok.jsonl'):
+            q.on_event(e); texts.append(q.step.text())
+        self.assertTrue(all('Android APK · ' not in t and 'Mac app · ' not in t for t in texts), texts)
+        col = [q.stages.topLevelItem(i).text(1) for i in range(q.stages.topLevelItemCount())]
+        self.assertTrue(col and all('Android APK · ' not in c and 'Mac app · ' not in c for c in col), col)
+        self.assertTrue(q.step.wordWrap())   # rule 14: with a prefix the label wraps instead of widening the window
+
+    def test_the_step_line_names_the_target_on_a_two_target_run(self):   # rule 12: `Mac app · [3/7] host · NDK android-ndk-r27c`
+        p = self.port(); seen = {}
+        for e in self.golden('port_both.jsonl'):
+            p.on_event(e)
+            if e['ev'] == 'stage' and e.get('platform') and e['platform'] not in seen: seen[e['platform']] = p.step.text()
+        self.assertTrue(seen['android'].startswith('Android APK · ['), seen)
+        self.assertTrue(seen['mac-app'].startswith('Mac app · ['), seen)
+        self.assertTrue(p.step.wordWrap())   # rule 14: with the prefix on, the label wraps instead of widening the window
+
+    def test_the_finish_line_tells_done_partial_failure_and_cancel_apart(self):
+        ok = {'platform': 'android', 'status': 'ok', 'out': '/out/Game.apk', 'reason': ''}
+        skip = {'platform': 'mac-app', 'status': 'skipped', 'out': '', 'reason': 'no game profile for 0100'}
+        bad = {'platform': 'mac-app', 'status': 'failed', 'out': '', 'reason': 'the translator did not build'}
+        for name, targets, code, head, bar in (('done', [ok, skip], 0, 'done in ', 1000), ('partial', [ok, bad], 1, 'finished in ', 1000),
+                                               ('failed', [], 1, 'failed after ', 0), ('cancelled', [ok], 130, 'cancelled', 0)):
+            with self.subTest(name):
+                p = self.port()
+                if targets: p.show_results({'platform': 'both', 'targets': targets})
+                p.red = 'the toolchain is missing'
+                p.on_finished(code)
+                self.assertTrue(p.step.text().startswith(head), p.step.text())
+                self.assertEqual(p.prog.value(), 1000 if bar == 1000 else 0)
+        p = self.port(); p.show_results({'platform': 'both', 'targets': [ok, {'platform': 'mac-app', 'status': 'failed', 'out': '', 'reason': 'boom'}]})
+        p.on_finished(1)
+        self.assertTrue(p.step.text().endswith(': the Mac app failed'), p.step.text())   # rule 22: porter's non-zero code, the row's own name
+        self.assertEqual(p.prog.value(), 1000)
+
 
 if __name__ == '__main__': unittest.main()
