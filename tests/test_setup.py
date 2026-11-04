@@ -53,13 +53,16 @@ class Report(unittest.TestCase):
         self.assertEqual(d['missing'], ['the legal notice', 'prod.keys', 'Android NDK', 'Signing key']); self.assertFalse(d['ready'])
 
     def test_tools_step(self):
-        d = report(bad=('.NET SDK', 'adb')); by = {s['id']: s for s in d['steps']}; all_rows = {r.name: r.as_dict() for r in rows(('.NET SDK', 'adb'))}
-        t = by['tools']
-        self.assertEqual([{k: v for k, v in i.items() if k != 'download'} for i in t['items']], [all_rows[n] for n in ('Android NDK', '.NET SDK', 'adb')])
-        self.assertEqual(t['downloadable'], ['.NET SDK', 'adb'])
-        self.assertFalse(t['ok'])
-        dv = by['device']; adb = all_rows['adb']
-        self.assertTrue(dv['soft']); self.assertEqual((dv['ok'], dv['detail'], dv['fix'], dv['path']), (adb['ok'], adb['detail'], adb['fix'], adb['path']))
+        with mock.patch.object(setup.hosttools, 'linux_arm64', lambda: False):
+            d = report(bad=('.NET SDK', 'adb')); by = {s['id']: s for s in d['steps']}; all_rows = {r.name: r.as_dict() for r in rows(('.NET SDK', 'adb'))}
+            t = by['tools']
+            self.assertEqual([{k: v for k, v in i.items() if k != 'download'} for i in t['items']], [all_rows[n] for n in ('Android NDK', '.NET SDK', 'adb')])
+            self.assertEqual(t['downloadable'], ['.NET SDK', 'adb'])
+            self.assertFalse(t['ok'])
+            dv = by['device']; adb = all_rows['adb']
+            self.assertTrue(dv['soft']); self.assertEqual((dv['ok'], dv['detail'], dv['fix'], dv['path']), (adb['ok'], adb['detail'], adb['fix'], adb['path']))
+        with mock.patch.object(setup.hosttools, 'linux_arm64', lambda: True):   # D-25: Google ships no arm64 platform-tools, so adb is never downloadable there
+            self.assertEqual({s['id']: s for s in report(bad=('.NET SDK', 'adb'))['steps']}['tools']['downloadable'], ['.NET SDK'])
 
 
 def items(d): return {i['name']: i for i in next(s for s in d['steps'] if s['id'] == 'tools')['items']}
