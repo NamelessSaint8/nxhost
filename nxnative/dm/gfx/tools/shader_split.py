@@ -183,8 +183,13 @@ def bnsh_shaders(d, base, label):
     return out
 
 def nvn2_stage(ctl, code):   # an NVN2 shader's stage: compute by the control section's stage byte (+0x56: 5), else the SPH at the code area's start (no code header)
-    if len(ctl) > 0x56 and ctl[0x56] == 5: return 'cs'
-    return sph_stage(bytes(0x30) + code[:4]) if len(code) >= 4 else None
+    """An NVN2 shader's stage: compute by the control section's stage byte (+0x56: 5), else the SPH at the code area's start, where NVN's sits at +0x30.
+    A section that says compute over a code area that opens with a graphics SPH is no compute program: in an agl sharcb pack a 4-byte-strided window pairs
+    one entry's control with another's code area (Mario Kart World's DrivePassShaderDefault.sharcb @0xa1de4: the one such program of 20,390), so it is
+    refused rather than reported as a compute stage with a header it cannot have"""
+    sph = sph_stage(bytes(0x30) + code[:4]) if len(code) >= 4 else None   # graphics stages carry the SPH in front of their instructions
+    if len(ctl) > 0x56 and ctl[0x56] == 5: return None if sph else 'cs'
+    return sph
 
 def bahs_shaders(d, label):
     rsz, region = field(d, '<II', 0x18, f'{label} BAHS header')

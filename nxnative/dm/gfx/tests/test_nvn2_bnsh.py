@@ -80,5 +80,20 @@ class Nvn2(unittest.TestCase):
         self.assertEqual(len({S.skey(ctl, code) for _, _, ctl, code in got}), 2)
 
 
+class Stage(unittest.TestCase):   # nvn2_stage: the control section's stage byte (+0x56) or the code area's SPH, and never both at odds
+    def ctl(self, stage_byte):
+        c = bytearray(0xd8); c[0x56] = stage_byte
+        return bytes(c)
+
+    def test_compute_has_no_sph(self):   # word 0 is an instruction (LDS 0x57919), as every compute program's is
+        self.assertEqual(S.nvn2_stage(self.ctl(5), struct.pack('<I', 0x57919) + bytes(0x20)), 'cs')
+
+    def test_a_compute_section_over_a_graphics_code_area_is_refused(self):   # Mario Kart World's sharcb @0xa1de4: another entry's code area
+        self.assertIsNone(S.nvn2_stage(self.ctl(5), struct.pack('<I', sph(VS)) + bytes(0x20)))
+
+    def test_a_graphics_section_is_named_by_its_sph(self):
+        self.assertEqual(S.nvn2_stage(self.ctl(1), struct.pack('<I', sph(PS)) + bytes(0x20)), 'ps')
+
+
 if __name__ == '__main__':
     unittest.main()
