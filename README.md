@@ -8,6 +8,8 @@ This is the Android port of [nxnative](https://github.com/seedds/nxnative), whic
 
 Each game is a profile in `nxnative/dm/games/<title ID>/` with an `android.tsv`. Which games play: [docs/PORT_STATUS.md](docs/PORT_STATUS.md); which ones each release has been checked to port: [docs/RELEASE_CHECK.md](docs/RELEASE_CHECK.md). The device's GPU must read BC-compressed textures (Adreno, Xclipse; not Mali or PowerVR).
 
+Switch 1 games only: a Switch 2 title is refused by name (its program id starts `0400`). [docs/SWITCH2.md](docs/SWITCH2.md) measures what porting one would need — its shaders already translate (3,238 of 3,238 on Mario Kart World, `devtools/nvn2_shader_census.py`); the NVN2 command stream and services would be the work.
+
 ## For players: port a game without programming
 
 1. Download `nx2android-<version>-windows-x64.zip` from [Releases](https://github.com/shirai91/nx2android/releases/latest), unzip it and start **nx2android.exe**.
