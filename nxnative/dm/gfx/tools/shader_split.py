@@ -145,6 +145,25 @@ def check(where, st, ctl, code):
     if struct.unpack_from('<I', ctl, 0x704)[0] != len(code): return 'control +0x704 does not match the code area length'
     return None
 
+def bnsh_program_slots(d, base, prog):
+    """{stage index: descriptor offset} of one variation's program. NVN's slots are 8 bytes apart from program +8 and their index is the stage (STAGES);
+    an NVN2 (Switch 2) program spaces them 0x20 apart and names the stage in the control section instead (Mario Kart World's *.Nin_Ounce_NVN2.bfsha:
+    1023 variations of two stages each, vertex then pixel). The stride is one per program, the one whose slots reach the most distinct control sections:
+    read at 8 bytes NVN2's slot 1 is also slot 4, while read at 0x20 bytes NVN's later stages fall on other fields. On a tie NVN's 8 is kept, so a
+    Switch 1 program reads exactly as before"""
+    best = {}
+    for stride in (8, 0x20):
+        got = {}
+        for si in range(len(STAGES)):
+            at = prog + 8 + stride * si
+            if not 0 <= at <= len(d) - base - 8: continue
+            sc = struct.unpack_from('<Q', d, base + at)[0]
+            if not 0 < sc <= len(d) - base - 0x18: continue
+            pctl = struct.unpack_from('<Q', d, base + sc + 8)[0]
+            if 0 < pctl <= len(d) - base - 4 and d[base + pctl:base + pctl + 4] == CTL_MAGIC: got[si] = sc
+        if len(set(got.values())) > len(set(best.values())): best = got
+    return best
+
 def bnsh_shaders(d, base, label):
     where = f'{label} BNSH @{base:#x}'
     if d[base + 0x60:base + 0x64] != b'grsc': red(f'{where} has no grsc block')
@@ -153,11 +172,11 @@ def bnsh_shaders(d, base, label):
     for v in range(nvar):
         prog = field(d, '<Q', base + pvar + 0x40 * v + 0x10, f'{where} variation {v}')[0]
         if not prog: continue
-        for si, st in enumerate(STAGES):
-            sc = field(d, '<Q', base + prog + 8 + 8 * si, f'{where} variation {v} program')[0]
-            if not sc: continue
+        for si, sc in bnsh_program_slots(d, base, prog).items():
+            st = STAGES[si]
             pctl, pcode, ncode, nctl = field(d, '<QQII', base + sc + 8, f'{where} variation {v} {st}')
             ctl, code = span(d, base + pctl, nctl, f'{where} variation {v} {st} control section'), span(d, base + pcode, ncode, f'{where} variation {v} {st} code area')
+            if nvn2_ctl(ctl): st = nvn2_stage(ctl, code) or st   # an NVN2 section names the stage itself; the slot index would name NVN's
             why = check(label, st, ctl, code)
             if why: red(f'{label} BNSH @{base:#x} variation {v} {st}: {why}')
             out.append((f'{label}#BNSH@{base:#x}#var{v}', st, ctl, code))
