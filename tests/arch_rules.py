@@ -183,6 +183,32 @@ missing = [n for n in have if n not in explicit and not (n.startswith('hle_') an
 check(f'dm/host: every source is in the Makefile SRC (line {mk_no})', not missing,
       '; '.join(f'{n} (add it to SRC in nxnative/dm/host/Makefile)' for n in missing))
 
+# 13. Signal handlers that can land on guest code carry SA_ONSTACK. arm64 Linux writes the signal frame just below sp, and the rewriter's x18 shadow
+# stubs keep live registers there (stp x0,x1,[sp,#-0x10]), so a frame placed on the guest stack corrupts the guest silently and surfaces later as a wild
+# pointer (crash.c and hle_thread.c carry the flag; DM_VK_PROF once did not and cost two Skyrim crashes on 2026-11-03, c933cc78). signal() cannot set
+# the flag at all, so a function handler installed through signal() is a violation too; SIG_IGN and SIG_DFL install no handler and are exempt.
+def signal_violations(name, code):
+    flags = {}
+    for m in re.finditer(r'(\w+)\.sa_flags\s*=\s*([^;]+);', code): flags[m.group(1)] = m.group(2)          # sa.sa_flags = …;
+    for m in re.finditer(r'struct\s+sigaction\s+(\w+)\s*=\s*\{([^}]*)\}', code):                            # struct sigaction sa = {.sa_flags = …}
+        fl = re.search(r'\.sa_flags\s*=\s*([^,}]+)', m.group(2))
+        if fl: flags.setdefault(m.group(1), fl.group(1))
+    out = []
+    for m in re.finditer(r'\bsigaction\s*\(\s*[^,]+,\s*&\s*(\w+)', code):
+        if 'SA_ONSTACK' not in flags.get(m.group(1), ''): out.append(f'{name}: sigaction(&{m.group(1)}) without SA_ONSTACK')
+    for m in re.finditer(r'(?<![_.\w])signal\s*\(\s*[^,]+,\s*(\w+)\s*\)', code):                            # not pthread_cond_signal / dispatch_semaphore_signal / G.signal
+        if m.group(1) not in ('SIG_IGN', 'SIG_DFL'): out.append(f'{name}: signal({m.group(1)}) cannot set SA_ONSTACK')
+    return out
+sig = []
+for f in files:
+    if re.match(r'nxnative/dm/(host|android)/', f) and '/tests/' not in f and f.endswith(('.c', '.h', '.m')):
+        sig += signal_violations(f, strip_c((R / f).read_text(encoding='utf-8', errors='replace')))
+check('signal handlers in dm/host and dm/android carry SA_ONSTACK', not sig, '; '.join(sig[:5]))
+check('arch_rules sees a handler without SA_ONSTACK',
+      signal_violations('x', 'struct sigaction sa = {.sa_flags = SA_SIGINFO}; sigaction(SIGSEGV, &sa, 0);')
+      and not signal_violations('x', 'struct sigaction sa = {.sa_flags = SA_SIGINFO | SA_ONSTACK}; sigaction(SIGSEGV, &sa, 0);')
+      and signal_violations('x', 'signal(SIGTERM, forward);') and not signal_violations('x', 'signal(SIGTERM, SIG_IGN);'))
+
 for n in notes: print('note ', n)
 print(f'\n{len(fails)} failed' if fails else '\nall checks passed')
 sys.exit(1 if fails else 0)
