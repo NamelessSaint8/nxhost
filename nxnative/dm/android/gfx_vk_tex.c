@@ -12,6 +12,7 @@
 #include <string.h>
 
 int nvn_dirty_since_span(const void *span, const void *addr, size_t len, uint64_t stamp);
+int nvn_flushed(const void *p, uint64_t n);   // hle_nvn.c: whether the CPU published [p, p + n) with nvnMemoryPoolFlushMappedRange
 const void *nvn_dirty_span(const void *addr, size_t len);
 void nvn_dirty_protect(const void *addr, size_t len); void nvn_dirty_release(const void *addr, size_t len); uint64_t nvn_dirty_released(void); int nvn_dirty_runs(void);
 uint64_t nvn_dirty_now(void);
@@ -183,6 +184,48 @@ void vk_tex_prepare(VkCommandBuffer cb, vkimg_t *im) {
     vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, NULL, 0, NULL, 1, &b);
     im->layout = VK_IMAGE_LAYOUT_GENERAL;
 }
+// DM_VK_TEXLOG=<n> (or "all"): how each texture's contents reached its image, one line per texture, n lines. A value set again mid-run (ctl.txt's env) starts a new
+// budget, so the log can be armed just before a scene loads. Which path filled an image is the first question for a texture drawn with something other than its
+// storage (Persona 4 Golden's blocks of colour, frozen for a load and other objects the next): a copy from the pool (lin-copy / lin-kept), a deswizzled upload
+// (pkg-block / pkg-linear), or nothing at all (lin-declined / no-layout / no-memory), with hashes of the guest bytes, the deswizzled blocks and the texels the GPU
+// gets. A texture with no upload keeps whatever its image's memory held
+static int texlog_left(void) {
+    static char last[24]; static int left;
+    const char *e = getenv("DM_VK_TEXLOG"), *v = e ? e : "";
+    if (strncmp(v, last, sizeof last - 1)) {
+        strncpy(last, v, sizeof last - 1); last[sizeof last - 1] = 0;
+        left = !*v ? 0 : !strcasecmp(v, "all") || atoi(v) < 0 ? -1 : atoi(v);
+    }
+    if (!left) return 0;
+    if (left > 0) left--;
+    return 1;
+}
+static uint64_t texhash(const void *p, size_t n) {   // FNV-1a over the first 8 KB (the start of a level, where a texture's own texels are)
+    const uint8_t *b = p; uint64_t h = 0xcbf29ce484222325ull;
+    if (!b) return 0;
+    if (n > 8192) n = 8192;
+    for (size_t i = 0; i < n; i++) { h ^= b[i]; h *= 0x100000001b3ull; }
+    return h;
+}
+// DM_VK_TEXLOG, the write side: who (if anyone) writes an image the port never fills itself. An image created by nvngfxCommandCopyBufferToTexture, through a
+// storage image, as an attachment, or by a copy/clear says so once; an image that says nothing after a whole session is one nothing writes
+void vk_tex_wrote(vkimg_t *im, const tex_t *t, int how, const char *detail) {
+    static const char *nm[] = {"?", "wrote-attach", "wrote-image", "wrote-b2t", "wrote-t2t", "wrote-clear"};
+    if (!im || how < 1 || how > 5 || (im->texlogged & (1u << how)) || !texlog_left()) return;
+    im->texlogged |= 1u << how;
+    const char *d = detail && detail[0] ? detail : "";
+    if (t) VKLOG("[tex] %s serial %llu nvn format %#x %ux%u levels %u layers %u flags %#x %s", nm[how], (unsigned long long)t->serial, t->d.format, im->w, im->h, im->levels, im->layers, t->d.flags, d);
+    else VKLOG("[tex] %s %ux%u levels %u layers %u %s", nm[how], im->w, im->h, im->levels, im->layers, d);
+}
+static void texlog(const char *path, vkimg_t *im, const tex_t *t, const vkfmt_t *f, const void *src, size_t srclen, const void *blocks, size_t blocklen, const void *texels, size_t texellen) {
+    if ((im->texlogged & 1) || !texlog_left()) return;
+    im->texlogged |= 1;
+    VKLOG("[tex] %s serial %llu nvn format %#x (vk %d) target %d %ux%ux%u levels %u layers %u samples %u flags %#x stride %u block %ux%u mem %p off %+lld size %llu | src %016llx of %zu | blocks %016llx | texels %016llx | flushed %d layout %d img %p",
+          path, (unsigned long long)t->serial, t->d.format, f->vk, t->d.target, im->w, im->h, im->d, im->levels, im->layers, im->samples, t->d.flags, t->d.stride,
+          f->bw ? f->bw : 1, f->bh ? f->bh : 1, (const void *)t->mem, (long long)t->off, (unsigned long long)t->L.size,
+          (unsigned long long)texhash(src, srclen), srclen, (unsigned long long)texhash(blocks, blocklen), (unsigned long long)texhash(texels, texellen),
+          t->mem ? nvn_flushed(t->mem, t->L.size) : 0, (int)im->layout, (const void *)im->img);
+}
 // Upload a packaged texture from guest memory: each level and layer deswizzled into scratch memory, copied in by the upload command buffer
 uint64_t g_pkg_n, g_pkg_bytes, g_pkg_ns;   // packaged texture uploads: count, bytes, CPU time (the replay's per-frame line)
 static void pkg_upload_(vkimg_t *im, const tex_t *t, const vkfmt_t *f);
@@ -236,11 +279,13 @@ static void pkg_upload_(vkimg_t *im, const tex_t *t, const vkfmt_t *f) {
             VkBufferImageCopy r = {so, 0, 0, {im->aspect & VK_IMAGE_ASPECT_COLOR_BIT ? VK_IMAGE_ASPECT_COLOR_BIT : VK_IMAGE_ASPECT_DEPTH_BIT, lv, ly, 1}, {0, 0, 0}, {w, h, z}};
             if (f->bc) r.bufferRowLength = (uint32_t)(dpitch / f->bpb);   // a row is padded out to whole 4×4 blocks
             vkCmdCopyBufferToImage(cb, sb, im->img, VK_IMAGE_LAYOUT_GENERAL, 1, &r);
+            if (lv == 0 && ly == 0) texlog(linear ? "pkg-linear" : "pkg-block", im, t, f, t->mem, slab, blocks, slab, f->bc ? dst : NULL, f->bc ? dslice : 0);
         }
     }
 }
 static int packaged_tex(const tex_t *t);
 static int lin_copy(vkimg_t *im, const tex_t *t, const vkfmt_t *f);
+static int linear_storage(const tex_t *t);
 static void vk_tex_view_drop_all(vkimg_t *im);
 // Images over the same memory with different descriptions (the storage key differs) are separate Vulkan images: on the Switch a texture sees what another
 // one over its memory rendered, here it does not. They are linked both ways at creation (up to 8 each), and a sampled image older than an overlapping
@@ -314,7 +359,19 @@ vkimg_t *vk_tex(const tex_t *t) {
             if (now != im->pkg_seen && nvn_dirty_since_span(im->pkg_span, t->mem, t->L.size, im->pkg_stamp)) pkg_upload(im, t, f);   // pages written since the upload
             im->pkg_seen = now;
         }
-    } else if (fresh) vk_tex_prepare(vk_upload_cmd(), im);
+    } else if (t->mem && im->packaged) {   // DM_VK_UPLOAD_NOLAYOUT filled it: again when the game writes its pages
+        uint64_t now = nvn_dirty_now();
+        if (now != im->pkg_seen && nvn_dirty_since_span(im->pkg_span, t->mem, t->L.size, im->pkg_stamp)) pkg_upload(im, t, f);
+        im->pkg_seen = now;
+    } else if (fresh) {   // nothing fills it: lin_copy declined a linear storage, or no layout and never CPU-written, or no guest memory
+        vk_tex_prepare(vk_upload_cmd(), im);
+        // DM_VK_UPLOAD_NOLAYOUT=1: a block-compressed image nothing would fill is uploaded from its storage as the game laid it out. An engine that writes
+        // its own block-linear texels into the pool (no packaged layout, no packaged data, no flush: Persona 4 Golden's 386 BC7/BC3 props) has its texels
+        // there; without this the image is never filled and samples whatever memory it was given
+        static int nolayout; { const char *e = getenv("DM_VK_UPLOAD_NOLAYOUT"); if (e) nolayout = atoi(e); }   // read again, so a ctl.txt env line arms it mid-run
+        if (nolayout && t->mem && t->d.samples <= 1 && !t->has_layout && (f->bw > 1 || f->bh > 1 || f->bc)) { pkg_upload(im, t, f); im->pkg_used = g_tex_frame; }
+        texlog(!t->mem ? "no-memory" : linear_storage(t) ? "lin-declined" : im->packaged ? "nolayout" : "no-layout", im, t, f, t->mem, t->L.size, NULL, 0, NULL, 0);
+    }
     return im;
 }
 // Packaged textures give up their write protection (nvn_dirty_release; drawn again, they are uploaded and protected again) when not drawn for PKG_IDLE presents, and the
@@ -391,8 +448,11 @@ static int lin_copy(vkimg_t *im, const tex_t *t, const vkfmt_t *f) {   // 1 = th
     if (stride % f->bpb || stride < (size_t)im->w * f->bpb || !vk_buf_at((uint64_t)(uintptr_t)t->mem, (uint64_t)stride * (im->h - 1) + (uint64_t)im->w * f->bpb, &b, &o) || o % f->bpb) return 0;
     // the GPU wrote it (a clear, a copy, a storage write): it holds that until the CPU writes its storage again, which its pages, set read-only, tell
     size_t len = stride * (im->h - 1) + (size_t)im->w * f->bpb;
-    if (im->gpu_w && !im->lin_mem) { nvn_dirty_protect(t->mem, len); im->lin_stamp = nvn_dirty_now(); im->lin_span = nvn_dirty_span(t->mem, len); im->lin_mem = t->mem; im->lin_len = len; return 1; }
-    if (im->gpu_w) { if (!nvn_dirty_since_span(im->lin_span, t->mem, len, im->lin_stamp)) return 1; nvn_dirty_release(im->lin_mem, im->lin_len); im->lin_mem = NULL; im->gpu_w = 0; im->lin_gen = 0; }
+    // DM_VK_LIN_REFRESH=1: copy from the pool into every linear texture's image on every upload buffer, even where the GPU's own drawing would be kept
+    // (below), so a texture drawn with something other than its storage gets its storage back. Read on every call: a ctl.txt env arms it mid-run
+    int refresh = 0; { const char *e = getenv("DM_VK_LIN_REFRESH"); refresh = e && atoi(e); }
+    if (im->gpu_w && !im->lin_mem && !refresh) { nvn_dirty_protect(t->mem, len); im->lin_stamp = nvn_dirty_now(); im->lin_span = nvn_dirty_span(t->mem, len); im->lin_mem = t->mem; im->lin_len = len; texlog("lin-gpuw", im, t, f, NULL, 0, NULL, 0, NULL, 0); return 1; }
+    if (im->gpu_w && !refresh) { if (!nvn_dirty_since_span(im->lin_span, t->mem, len, im->lin_stamp)) { texlog("lin-clean", im, t, f, NULL, 0, NULL, 0, NULL, 0); return 1; } nvn_dirty_release(im->lin_mem, im->lin_len); im->lin_mem = NULL; im->gpu_w = 0; im->lin_gen = 0; }
     VkCommandBuffer cb = vk_upload_cmd();
     if (im->lin_gen == g_up_gen) return 1;
     im->lin_gen = g_up_gen;
@@ -400,6 +460,13 @@ static int lin_copy(vkimg_t *im, const tex_t *t, const vkfmt_t *f) {   // 1 = th
     if (im->layout != VK_IMAGE_LAYOUT_GENERAL) vk_tex_prepare(cb, im);
     VkBufferImageCopy r = {o, (uint32_t)(stride / f->bpb), 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {im->w, im->h, 1}};
     vkCmdCopyBufferToImage(cb, b, im->img, VK_IMAGE_LAYOUT_GENERAL, 1, &r);
+    texlog("lin-copy", im, t, f, t->mem, len, NULL, 0, NULL, 0);
+    {   // DM_VK_TEXPAINT: the linear copies too, in cyan, so a surface says whether it draws a linear texture or a block-compressed one (magenta)
+        const char *pt = getenv("DM_VK_TEXPAINT");
+        if (pt && (!strcasecmp(pt, "all") || strtoull(pt, NULL, 10) == t->serial) && im->aspect == VK_IMAGE_ASPECT_COLOR_BIT && im->samples == 1) {
+            VkClearColorValue cyan = {{0.0f, 1.0f, 1.0f, 1.0f}};
+            VkImageSubresourceRange rg = {VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
+            vkCmdClearColorImage(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, &cyan, 1, &rg); } }
     return 1;
 }
 static int packaged_tex(const tex_t *t) {
@@ -437,9 +504,17 @@ static VkComponentSwizzle apply(VkComponentSwizzle outer, const VkComponentMappi
     }
 }
 __thread VkFormat vk_view_fmt; __thread uint32_t vk_view_layers;
+static VkImageView vk_paint_view(int arrayed, int colour);
 VkImageView vk_tex_view(const tex_t *t, const view_t *vw, int dim, int arrayed, int as_attachment, vkimg_t **img_out) {
     vkimg_t *im = vk_tex(t); if (img_out) *img_out = im;
     if (!im) return VK_NULL_HANDLE;
+    if (!as_attachment) {   // DM_VK_TEXPAINT=map: magenta BC7, green BC1, blue 4-byte uncompressed, yellow 1-2 byte
+        const char *pt = getenv("DM_VK_TEXPAINT");
+        if (pt && !strcasecmp(pt, "map")) {
+            const vkfmt_t *pf = vk_fmt(t->d.format); int c = -1;
+            if (pf && pf->compressed) c = pf->bpb >= 16 ? 0 : 1; else if (pf) c = pf->bpb >= 4 ? 2 : 3;
+            if (c >= 0) { vk_view_fmt = VK_FORMAT_R8G8B8A8_UNORM; vk_view_layers = arrayed ? 6 : 1; return vk_paint_view(arrayed, c); }
+        } }
     if (as_attachment) { im->wseq = ++g_wseq; im->gpu_w = 1; } else if (im->novl) alias_check(im);
     vk_watch(im, as_attachment ? "attachment" : "sampled or image");
     if (!as_attachment) { void vk_texdump_note(vkimg_t *im); vk_texdump_note(im); }
@@ -478,6 +553,13 @@ VkImageView vk_tex_view(const tex_t *t, const view_t *vw, int dim, int arrayed, 
     } else swz = (VkComponentMapping){0};
     VkFormat fmt = f->vk;
     if ((im->aspect & ~VK_IMAGE_ASPECT_COLOR_BIT) || f->compressed != vk_fmt(im->nvn_format)->compressed) fmt = im->fmt;   // depth views and block-size changes keep the image's format
+    // DM_VK_TEXLOG: a compressed image sampled through a view of another compressed format (Vulkan allows it with BLOCK_TEXEL_VIEW_COMPATIBLE).
+    // The GPU then decodes the stored blocks as that format: every 4x4 block becomes a colour of its own, which is what a confetti surface looks like
+    if (!as_attachment && f->compressed && (VkFormat)f->vk != im->fmt && texlog_left()) {
+        static int n; if (n++ < 40) VKLOG("[tex] compressed view in ANOTHER format: serial %llu image %d (nvn %#x) view %d (nvn %#x) %ux%u level %u",
+                                          (unsigned long long)t->serial, (int)im->fmt, im->nvn_format, (int)f->vk, vw && vw->set_format ? vw->format : t->d.format,
+                                          im->w, im->h, vw && vw->set_levels ? vw->base_level : 0);
+    }
     if (im->fixed_fmt && fmt != im->fmt && fmt != srgb_twin(im->fmt)) { fmt = im->fmt; static int n; if (n++ < 8) VKLOG("view format %d of a format-listed image (%d): the image's own used", f->vk, im->fmt); }
     pthread_mutex_lock(&g_view_mu);
     vview *head = nvn_hm_get(&g_views, &im);
@@ -633,6 +715,28 @@ VkImageView vk_dummy_view(int dim, int arrayed, int ms, int storage, int is_int)
     }
     pthread_mutex_unlock(&mu);
     return v;
+}
+// DM_VK_TEXPAINT=map: every sampled texture is replaced by a 1x1 colour of its family, so one frame says which family a wrong surface draws.
+// (A view substitution, not a clear: vkCmdClearColorImage is not defined for a block-compressed image, so painting the pixels silently did nothing)
+static VkImageView g_pv[2][4]; static vkimg_t *g_pvi[4];
+static VkImageView vk_paint_view(int arrayed, int colour) {
+    arrayed = !!arrayed;
+    if (g_pv[arrayed][colour]) return g_pv[arrayed][colour];
+    if (!g_pvi[colour]) {
+        static const float col[4][4] = {{1, 0, 1, 1}, {0, 1, 0, 1}, {0, 0.25f, 1, 1}, {1, 1, 0, 1}};   // magenta, green, blue, yellow
+        tex_t t; memset(&t, 0, sizeof t); t.magic = MAGIC('T', 'E', 'X', 0); t.serial = 2 + (uint64_t)colour; t.d.format = 0x25;
+        t.d.width = t.d.height = 1; t.d.depth = 6; t.d.levels = 1; t.d.target = 4;
+        g_pvi[colour] = img_new(&t, vk_fmt(t.d.format));
+        VkCommandBuffer cb = vk_upload_cmd(); vk_tex_prepare(cb, g_pvi[colour]);
+        VkClearColorValue c; memcpy(c.float32, col[colour], 16);
+        VkImageSubresourceRange rg = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, VK_REMAINING_ARRAY_LAYERS};
+        vkCmdClearColorImage(cb, g_pvi[colour]->img, VK_IMAGE_LAYOUT_GENERAL, &c, 1, &rg);
+    }
+    VkImageViewCreateInfo ci = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, NULL, 0, g_pvi[colour]->img,
+        arrayed ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, {0},
+        {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, arrayed ? 6u : 1u}};
+    VKCHK(vkCreateImageView(V.dev, &ci, NULL, &g_pv[arrayed][colour]));
+    return g_pv[arrayed][colour];
 }
 VkBufferView vk_dummy_tbuf(int storage) {
     static VkBufferView v[2]; static VkBuffer b; static VkDeviceMemory m; storage = !!storage;

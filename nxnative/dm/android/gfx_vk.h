@@ -94,6 +94,7 @@ struct vkimg {
     uint64_t used;                  // the present it was last looked up at (vk_tex: evict_overlaps)
     uint64_t fdz_frame;             // depth images: 1 + the present at which a fragment shader that replaces depth last wrote it (gfx_vk_exec.c fdz)
     int gpu_w;                      // the GPU wrote it: an attachment, a storage image, a copy or clear destination (gfx_vk_exec.c); lin_copy keeps that until the CPU writes its storage
+    int texlogged;                  // DM_VK_TEXLOG has said where its contents came from (one line per image)
     uint64_t lin_stamp; const void *lin_span; const uint8_t *lin_mem; size_t lin_len;   // lin_copy: the storage watched since the GPU wrote it
     uint64_t lin_gen;               // linear textures: the upload command buffer (g_up_gen) that last copied it from its pool (vk_tex: lin_copy)
     uint64_t depth_sub;   // the submission (gfx_vk_exec.c g_set_epoch) whose passes last used it as their depth attachment
@@ -111,6 +112,7 @@ vkimg_t *vk_tex(const tex_t *t);                                 // the image of
 void vk_lrz_forget(vkimg_t *im);                                 // an image is being dropped: the pass code forgets it (gfx_vk_exec.c)
 VkImageView vk_tex_view(const tex_t *t, const view_t *v, int dim, int arrayed, int as_attachment, vkimg_t **img_out);   // a view for sampling / storage / rendering
 void vk_watch(const vkimg_t *im, const char *what);   // DM_VK_WATCH (gfx_vk_exec.c)
+void vk_tex_wrote(vkimg_t *im, const tex_t *t, int how, const char *detail);   // DM_VK_TEXLOG's write side: 1 attachment, 2 storage image, 3 buffer copy, 4 image copy, 5 clear
 vkimg_t *vk_tex_by_id(int tid, const view_t **view_out, const tex_t **tex_out);   // registered texture ID → image (NULL if none)
 VkSampler vk_samp_by_id(int sid);
 extern __thread VkFormat vk_view_fmt; extern __thread uint32_t vk_view_layers;   // the format and layer count of the view vk_tex_view last returned on this thread

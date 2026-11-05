@@ -109,6 +109,35 @@ static void ubo_log(const vkshader_t *s, int st, int reg, uint64_t a, uint64_t n
 // DM_VK_TEXDUMP=<pool hex>+<offset hex> (read when a pass dump starts; the trace prints both): during the dump, the first sampled image there is blitted (level 0, up to 6 layers)
 // into RGBA16F images and dumped with the passes, so a compressed texture (BC6H cube maps...) can be looked at decoded by the GPU
 static long long g_td_off = -1; static unsigned long long g_td_pool; static vkimg_t *g_td_im; static int g_td_done;
+// DM_VK_TEXRAW: an image's level 0 exactly as the GPU holds it (compressed blocks and all), so it can be compared with the bytes the game handed the copy.
+// The blit path above cannot read a BC image (BLIT_SRC is not offered for them), and this is the only way to tell a wrong upload from a wrong binding
+static struct { VkBuffer b; VkDeviceMemory m; void *p; VkDeviceSize n; uint32_t w, h; uint64_t serial, fence; int busy; } g_tr;
+void vk_texraw_dump(vkimg_t *im, uint64_t serial) {
+    const char *e = getenv("DM_VK_TEXRAW");
+    if (!e || g_tr.busy || !im || !(im->aspect & VK_IMAGE_ASPECT_COLOR_BIT) || im->levels < 1 || im->samples > 1) return;
+    if (strcasecmp(e, "all") && strtoull(e, NULL, 10) != serial) return;
+    const vkfmt_t *f = vk_fmt(im->nvn_format); if (!f || !f->bpb) return;
+    unsigned bw = f->bw ? f->bw : 1, bh = f->bh ? f->bh : 1;
+    VkDeviceSize n = (VkDeviceSize)f->bpb * ((im->w + bw - 1) / bw) * ((im->h + bh - 1) / bh);
+    VkBufferCreateInfo bi = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, NULL, 0, n, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_SHARING_MODE_EXCLUSIVE};
+    VKCHK(vkCreateBuffer(V.dev, &bi, NULL, &g_tr.b)); VkMemoryRequirements rq; vkGetBufferMemoryRequirements(V.dev, g_tr.b, &rq);
+    VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, NULL, rq.size, vk_mem_type(rq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT, 0)};
+    VKCHK(vkAllocateMemory(V.dev, &ai, NULL, &g_tr.m)); VKCHK(vkBindBufferMemory(V.dev, g_tr.b, g_tr.m, 0)); VKCHK(vkMapMemory(V.dev, g_tr.m, 0, VK_WHOLE_SIZE, 0, &g_tr.p));
+    VkCommandBuffer cb = vk_cmd(); vk_img_barrier_all(cb);
+    VkBufferImageCopy c = {0, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {im->w, im->h, 1}};
+    vkCmdCopyImageToBuffer(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, g_tr.b, 1, &c); vk_img_barrier_all(cb);
+    g_tr.n = n; g_tr.w = im->w; g_tr.h = im->h; g_tr.serial = serial; g_tr.fence = mtl_last_fence() + 1; g_tr.busy = 1;
+    VKLOG("[vk] texraw: serial %llu %ux%u nvn format %#x level 0, %llu bytes pending", (unsigned long long)serial, im->w, im->h, im->nvn_format, (unsigned long long)n);
+}
+static void texraw_write(uint64_t done_fence) {   // gfx_vk_present.c's poll, every present
+    if (!g_tr.busy || done_fence < g_tr.fence) return;
+    g_tr.busy = 0;
+    char path[1024]; const char *root = getenv("DM_ROOT");
+    snprintf(path, sizeof path, "%s/tex_%llu.raw", root ? root : ".", (unsigned long long)g_tr.serial);
+    FILE *f = fopen(path, "wb"); if (f) { fwrite(g_tr.p, 1, g_tr.n, f); fclose(f);
+        VKLOG("[vk] texraw: serial %llu %ux%u → %s (%llu bytes as the GPU holds them)", (unsigned long long)g_tr.serial, g_tr.w, g_tr.h, path, (unsigned long long)g_tr.n); }
+    vkDestroyBuffer(V.dev, g_tr.b, NULL); vkFreeMemory(V.dev, g_tr.m, NULL); g_tr.b = VK_NULL_HANDLE;
+}
 void vk_texdump_note(vkimg_t *im) { if (g_td_off >= 0 && !g_td_done && !g_td_im && im && im->off == g_td_off && im->pool == g_td_pool) g_td_im = im; }
 void vk_watch(const vkimg_t *im, const char *what) {
     if (g_watch_off < 0 || !im || im->off != g_watch_off || g_watch_n <= 0) return;
@@ -377,6 +406,7 @@ static inline float half2f(uint16_t h) { uint32_t s = (uint32_t)(h >> 15) << 31,
     if (!e) { if (!m) f = s; else { e = 1; while (!(m & 1024)) { m <<= 1; e--; } m &= 1023; f = s | ((e + 112) << 23) | (m << 13); } } else if (e == 31) f = s | 0x7f800000 | (m << 13); else f = s | ((e + 112) << 23) | (m << 13);
     float r; memcpy(&r, &f, 4); return r; }
 void vk_pass_dump_poll(uint64_t done_fence) {   // gfx_vk_present.c, every present: start on the switch, write once the GPU finished
+    texraw_write(done_fence);
     const char *e = getenv("DM_VK_PASSDUMP");
     if (g_pd_state == 0 && e && atoi(e) > 1) { char n[16]; snprintf(n, sizeof n, "%d", atoi(e) - 1); setenv("DM_VK_PASSDUMP", n, 1); return; }   // =N: the frame after N - 1 more presents
     if (g_pd_state == 0 && e && atoi(e)) { const char *sk = getenv("DM_VK_PASSDUMP_SKIP"); g_pd_skip = sk && !strchr(sk, 'x') ? atoi(sk) : 0;
@@ -477,6 +507,7 @@ static int begin_pass(void) {
         if (!S.rt_has_col[i]) continue;
         vkimg_t *im; VkImageView v = vk_tex_view(&S.rt_col[i], S.rt_has_cview[i] ? &S.rt_cview[i] : NULL, 0xff, 0, 1, &im);
         if (!v) continue;
+        vk_tex_wrote(im, &S.rt_col[i], 1, NULL);
         vk_tex_prepare(cb, im);
         uint32_t lv = S.rt_has_cview[i] && S.rt_cview[i].set_levels ? S.rt_cview[i].base_level : 0;
         uint32_t iw = im->w >> lv ? im->w >> lv : 1, ih = im->h >> lv ? im->h >> lv : 1;
@@ -873,7 +904,7 @@ static int tex_desc_for(int st, const dmsv_bind *b, uint64_t h, VkDescriptorImag
     }
     int num = 0;
     if (tid && g_var_now != 3 && vk_tex_by_id(tid, &v, &t) && t) {
-        vkimg_t *im = NULL; ii->imageView = vk_tex_view(t, v, b->dim, b->flags & 1, 0, &im); if (storage && im) im->gpu_w = 1;
+        vkimg_t *im = NULL; ii->imageView = vk_tex_view(t, v, b->dim, b->flags & 1, 0, &im); if (storage && im) { im->gpu_w = 1; vk_tex_wrote(im, t, 2, NULL); }
         if (g_tracing) VKLOG("  texture handle %#llx id %d: %ux%u nvn format %#x target %d serial %llu pool %p+%#llx size %#llx → image %p (%ux%u fmt %d layers %u levels %u) view %p", (unsigned long long)h, tid, t->d.width, t->d.height, t->d.format, t->d.target,
                              (unsigned long long)t->serial, (const void *)t->pool, (unsigned long long)t->off, (unsigned long long)t->L.size, (void *)im, im ? im->w : 0, im ? im->h : 0, im ? im->fmt : 0, im ? im->layers : 0, im ? im->levels : 0, (void *)ii->imageView);
         if (im) im->last_use = mtl_last_fence() + 1;
@@ -1505,6 +1536,18 @@ static void copy_b2t(const p_copy_b2t *c, int to_texture) {
     if (!vk_buf_at(c->src, 1, &b, &o)) { VKRED_ONCE(70, "buffer of a buffer ↔ texture copy outside the memory pools"); return; }
     VkCommandBuffer cb = vk_cmd(); vk_tex_prepare(cb, im); vk_img_barrier_all(cb);
     unsigned bw = f->bw ? f->bw : 1, bh = f->bh ? f->bh : 1;
+    // DM_VK_B2TDUMP=<serial>: the guest buffer of a buffer → texture copy, saved when the copy runs (a later dump finds the memory reused).
+    // For a compressed destination the question is whether NVN's copy de-tiles: block-linear source or row-major blocks
+    if (to_texture && c->tex) { static long want = -2, taken; if (want == -2) { const char *e = getenv("DM_VK_B2TDUMP"); want = !e ? -1 : !strcasecmp(e, "all") ? -3 : atol(e); }
+        int take = want >= 0 ? (long)c->tex->serial == want : want == -3 && f->compressed && c->r.width >= 256 && taken++ < 4;
+        if (take) { char path[512]; snprintf(path, sizeof path, "%s/b2t_%llu.raw", getenv("DM_ROOT") ? getenv("DM_ROOT") : "/tmp", (unsigned long long)c->tex->serial);
+            size_t n = (size_t)c->r.width * (size_t)(c->r.height ? c->r.height : 1) / (bw * bh) * f->bpb;
+            FILE *fp = fopen(path, "wb"); if (fp) { fwrite((const void *)(uintptr_t)c->src, 1, n, fp); fclose(fp);
+                VKLOG("[vk] b2t dump: serial %llu %ux%u nvn format %#x → %s, %zu bytes as %s", (unsigned long long)c->tex->serial, c->r.width, c->r.height, c->tex->d.format, path, n, f->compressed ? "blocks" : "texels"); } } }
+    { static int lg = -1; if (lg < 0) { const char *e = getenv("DM_VK_B2TLOG"); lg = e && atoi(e); }   // every buffer → texture copy: which levels the engine fills
+      if (lg) VKLOG("[vk] b2t serial %llu level %u %ux%u at %d,%d nvn format %#x levels %u", (unsigned long long)c->tex->serial,
+                    (unsigned)c->has_view && c->view.set_levels ? c->view.base_level : 0, (unsigned)c->r.width, (unsigned)(c->r.height ? c->r.height : 1),
+                    (int)c->r.xoffset, (int)c->r.yoffset, c->tex->d.format, (unsigned)c->tex->d.levels); }
     uint32_t rowlen = S.row_stride > 0 && f->bpb ? (uint32_t)(S.row_stride / f->bpb) * bw : 0;
     uint32_t imgh = S.image_stride > 0 && S.row_stride > 0 ? (uint32_t)(S.image_stride / S.row_stride) * bh : 0;
     int layered = im->layers > 1, depth = c->r.depth ? c->r.depth : 1;
@@ -1512,7 +1555,17 @@ static void copy_b2t(const p_copy_b2t *c, int to_texture) {
                            {(uint32_t)c->r.width, (uint32_t)(c->r.height ? c->r.height : 1), layered ? 1 : (uint32_t)depth}};
     if (layered) r.imageSubresource.layerCount = (uint32_t)depth;
     if (g_watch_off >= 0) { char w[96]; snprintf(w, sizeof w, "buffer copy %s (buffer %#llx, %dx%d)", to_texture ? "destination" : "source", (unsigned long long)c->src, c->r.width, c->r.height); vk_watch(im, w); }
-    if (to_texture) { vkCmdCopyBufferToImage(cb, b, im->img, VK_IMAGE_LAYOUT_GENERAL, 1, &r); im->gpu_w = 1; }
+    if (to_texture) { vkCmdCopyBufferToImage(cb, b, im->img, VK_IMAGE_LAYOUT_GENERAL, 1, &r); im->gpu_w = 1; vk_texraw_dump(im, c->tex->serial);
+        // DM_VK_TEXPAINT=all (or a serial): right after its copy, a compressed image is cleared to magenta, so the player can say which surfaces draw *this* image.
+        // A surface that turns magenta is bound to the image the copy filled; one that stays confetti is drawn from something else
+        { const char *pt = getenv("DM_VK_TEXPAINT"); if (pt && (!strcasecmp(pt, "all") || strtoull(pt, NULL, 10) == c->tex->serial) && f->compressed) {
+            VkClearColorValue mag = {{1.0f, 0.0f, 1.0f, 1.0f}};
+            VkImageSubresourceRange rg = {VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
+            vkCmdClearColorImage(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, &mag, 1, &rg); } }
+        char d[160]; snprintf(d, sizeof d, "level %u %ux%u at %d,%d buffer %#llx row %lld image %lld rowlen %u imgh %u spat %d",
+                              r.imageSubresource.mipLevel, r.imageExtent.width, r.imageExtent.height, r.imageOffset.x, r.imageOffset.y,
+                              (unsigned long long)c->src, (long long)S.row_stride, (long long)S.image_stride, rowlen, imgh, f->bc != 0);
+        vk_tex_wrote(im, c->tex, 3, d); }
     else { vkCmdCopyImageToBuffer(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, b, 1, &r);
         void vk_gpu_wrote(uint64_t a, uint64_t n); vkpool_t *p = vk_pool_of(c->src, 1); vk_gpu_wrote(c->src, p ? p->hi - c->src : 1); }   // (to the pool's end: the copy's extent in memory is not worked out here)
     vk_img_barrier_all(cb);
@@ -1528,7 +1581,7 @@ static void copy_t2t(const p_copy_t2t *c) {
     // to both images' levels, a copy with nothing left is skipped
     int32_t sw = (int32_t)(s->w >> ss.mipLevel ? s->w >> ss.mipLevel : 1), sh = (int32_t)(s->h >> ss.mipLevel ? s->h >> ss.mipLevel : 1);
     int32_t dw = (int32_t)(d->w >> ds.mipLevel ? d->w >> ds.mipLevel : 1), dh = (int32_t)(d->h >> ds.mipLevel ? d->h >> ds.mipLevel : 1);
-    p_copy_t2t k = *c; c = &k; d->gpu_w = 1;
+    p_copy_t2t k = *c; c = &k; d->gpu_w = 1; vk_tex_wrote(d, c->dst, 4, NULL);
     if (k.sr.height <= 0) k.sr.height = 1; if (k.dr.height <= 0) k.dr.height = 1;
     if (ss.mipLevel >= s->levels || ds.mipLevel >= d->levels || k.sr.xoffset < 0 || k.sr.yoffset < 0 || k.dr.xoffset < 0 || k.dr.yoffset < 0 || k.sr.xoffset >= sw || k.sr.yoffset >= sh || k.dr.xoffset >= dw || k.dr.yoffset >= dh) {
         VKRED_ONCE(72, "texture copy outside its images (src %dx%d @%d,%d of %dx%d level %u, dst %dx%d @%d,%d of %dx%d level %u): skipped", c->sr.width, c->sr.height, c->sr.xoffset, c->sr.yoffset, sw, sh, ss.mipLevel,
@@ -1610,7 +1663,7 @@ static void draw_tex(const p_draw_tex *c) {
 static void clear_tex(const p_clear_tex *c) {
     vk_end_pass();
     vkimg_t *im = vk_tex(c->tex); if (!im) return;
-    VkCommandBuffer cb = vk_cmd(); vk_tex_prepare(cb, im); vk_img_barrier_all(cb); im->gpu_w = 1;
+    VkCommandBuffer cb = vk_cmd(); vk_tex_prepare(cb, im); vk_img_barrier_all(cb); im->gpu_w = 1; vk_tex_wrote(im, c->tex, 5, NULL);
     VkImageSubresourceLayers l = sub_of(im, &c->view, c->has_view, c->r.zoffset);
     VkImageSubresourceRange rg = {l.aspectMask, l.mipLevel, 1, l.baseArrayLayer, im->layers > 1 ? (uint32_t)(c->r.depth ? c->r.depth : 1) : 1};
     if (c->r.xoffset || c->r.yoffset || (uint32_t)c->r.width < (im->w >> l.mipLevel) || (uint32_t)c->r.height < (im->h >> l.mipLevel)) VKRED_ONCE(71, "partial texture clear: the whole level is cleared");
