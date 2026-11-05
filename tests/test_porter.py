@@ -57,6 +57,12 @@ class AndroidProfiles(unittest.TestCase):
             d = profile_dir(rows)
             with self.assertRaises(android_profile.ProfileError, msg=rows): android_profile.load(d.name)
 
+    def test_space_separated_rows_say_tab(self):   # cat renders a TAB and a space alike, so the error has to name the real fault
+        d = profile_dir([('status', 'boots')])
+        (d / 'android.tsv').write_text('status  playable\n', encoding='utf-8')   # spaces, not a TAB
+        with self.assertRaises(android_profile.ProfileError) as e: android_profile.load(d.name)
+        self.assertIn('rows are tab-separated', str(e.exception)); self.assertNotIn('unknown key', str(e.exception))
+
     def test_header_default_layout(self):   # the generated table is overlay_layout.h's table as it was written by hand before it moved to overlay_default.tsv
         h = android_profile.header(android_profile.load(NEO))
         rows = re.findall(r'\{(OV_\w+), ([\d.]+)f, ([\d.]+)f, ([\d.]+)f, (\w+), "([^"]*)"\}', h)

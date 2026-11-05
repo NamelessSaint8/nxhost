@@ -49,6 +49,8 @@ class AndroidProfile:
         for n, line in enumerate(self.path.read_text(encoding='utf-8').splitlines(), 1):
             if not line.strip() or line.lstrip().startswith('#'): continue
             k, _, v = line.partition('\t'); k, v = k.strip(), v.strip()
+            if '\t' not in line and k.split() and k.split()[0] in SINGLE + REPEAT:   # cat shows a TAB and a space alike: name the real fault, not 'unknown key'
+                raise ProfileError(f'{self.path}:{n}: rows are tab-separated: write {k.split()[0]!r} TAB its value, not {k!r}')
             if k not in SINGLE + REPEAT: raise ProfileError(f'{self.path}:{n}: unknown key {k!r} (keys: {", ".join(SINGLE + REPEAT)})')
             if k in SINGLE and any(r[0] == k for r in self.rows): raise ProfileError(f'{self.path}:{n}: {k} given twice')
             self.rows.append((k, v))
