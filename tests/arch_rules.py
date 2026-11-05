@@ -209,6 +209,30 @@ check('arch_rules sees a handler without SA_ONSTACK',
       and not signal_violations('x', 'struct sigaction sa = {.sa_flags = SA_SIGINFO | SA_ONSTACK}; sigaction(SIGSEGV, &sa, 0);')
       and signal_violations('x', 'signal(SIGTERM, forward);') and not signal_violations('x', 'signal(SIGTERM, SIG_IGN);'))
 
+# 14. Android stub counters announce themselves (QUAL-11). dm/android/gfx_common.c answers the Metal-only statistics with 0, and a plain 0 in the log reads as a
+# measured failure (a zero "first uploads 0" was pursued as a lead on 2026-11-03), so every counter calls STUB0 once. The list is a fixture: a counter added
+# without a line in tests/fixtures/gfx_stub_counters.txt fails, and so does a listed name that stops calling STUB0. The functions that answer with a real value,
+# do nothing, or are commands rather than counters are exempt, each named here with its reason.
+GC_PATH = 'nxnative/dm/android/gfx_common.c'
+gc_fns = {}
+for line in (R / GC_PATH).read_text(encoding='utf-8', errors='replace').splitlines():
+    if line.startswith(('//', '#', ' ')): continue
+    m = re.match(r'^.*\b(\w+)\s*\([^;]*\)\s*\{', line)
+    if m: gc_fns[m.group(1)] = line
+STUB_EXEMPT = {
+    'mtl_res_counts', 'mtl_mem_stat', 'mtl_ub_present', 'mtl_ab_gpu',                                            # event hook, value in, pacing hint, phase trace in
+    'mtl_link_rate', 'mtl_link_stalled', 'mtl_link_tick', 'mtl_link_wait_ticks',                                 # no display link: 60 and 0 are true answers
+    'mtl_snap_on', 'mtl_pso_prebuild_tool',                                                                      # switches: snapshots off, no archive tool (logs its own [RED])
+    'mtl_prog_prefetch', 'mtl_queue_activate', 'mtl_queue_forget', 'mtl_set_queue_origin_lower_left',            # no-ops
+    'nvn_cap_submit', 'nvn_cap_present',                                                                         # DM_NVN_CAPTURE, a Mac diagnostic off here
+    'dm_gfx_passdump_next', 'dm_gfx_shot_at', 'dm_gfx_texdump_next', 'dm_gfx_texlist', 'dm_gfx_texraw',          # commands, not counters
+}
+listed = {l.split('#')[0].strip() for l in (R / 'tests/fixtures/gfx_stub_counters.txt').read_text(encoding='utf-8').splitlines() if l.split('#')[0].strip()}
+stub_bad = [f'{n}: listed but not a function in {GC_PATH}' for n in sorted(listed - set(gc_fns))]
+stub_bad += [f'{n}: a function in {GC_PATH} is neither listed nor exempt (add it to the fixture with STUB0)' for n in sorted(set(gc_fns) - listed - STUB_EXEMPT)]
+stub_bad += [f'{n}: listed but does not call STUB0' for n in sorted(listed & set(gc_fns)) if 'STUB0' not in gc_fns[n]]
+check(f'Android stub counters call STUB0 and are listed ({len(listed)} counters)', not stub_bad, '; '.join(stub_bad[:5]))
+
 for n in notes: print('note ', n)
 print(f'\n{len(fails)} failed' if fails else '\nall checks passed')
 sys.exit(1 if fails else 0)
