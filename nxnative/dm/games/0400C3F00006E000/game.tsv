@@ -1,0 +1,20 @@
+# Mario Kart World (Switch 2, loose dump of update 917504). Shader split only: no build has been packed or run from this profile, so it claims no
+# version hashes and has no android.tsv.
+# Nintendo EPD's engine (Nin_Ounce: sead / agl / gsys, Phive), NVN2 (Ampere shaders); modules main + sdk + subsdk0 + subsdk1.
+# Shaders: Shader/*.Nin_Ounce_NVN2.bfsha.zs (BNSH), one .sarc.zs holding agl sharcb packs, and the effect set's esetb. See docs/SWITCH2.md.
+
+# ---- Identity ----
+title_id	0400C3F00006E000
+program_id	0400C3F00006E000
+
+# ---- App ----
+name	Mario Kart World
+ipa	MarioKartWorld.ipa
+
+# ---- Files ----
+modules	main sdk subsdk0 subsdk1
+romfs_marker	System/AutoGenerateVegeTable.byaml
+
+# ---- Shader split (shader_split.py) ----
+shader_groups	/Shader/=shader /Effect/=effect /Layout/=layout /Model/=model /System/=system
+shader_note	Mario Kart World shaders

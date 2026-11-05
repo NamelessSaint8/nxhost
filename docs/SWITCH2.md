@@ -28,34 +28,33 @@ A Switch 2 game ships its shaders as `.bfsha` archives — `FSHA` wrapping a `BN
 - the code inside is Ampere, which `dmsh_xlate` already decodes (`arch: sm86`, `dm/third_party/ryujinx/.../Decoders/DecoderAmpere.cs`) and turns
   into SPIR-V or MSL like any other shader.
 
-`devtools/nvn2_shader_census.py` measures a dump with both of those, through `shader_split`'s own reader, so it finds the libraries that are not in
-`Shader/`. On Mario Kart World 1.8.0 (2026-11-05, one machine):
+`dm/games/0400C3F00006E000/` is this dump's game profile: `shader_split.py` over its RomFS and then the Android chain's `shader_vk.py`, so the numbers
+below are the ones a port would carry, not a sample. On Mario Kart World 1.8.0 (2026-11-05, one machine):
 
 | | |
 |---|---|
-| files holding shaders | 98: `romfs/Shader/*.bfsha.zs` and one `.sarc.zs` (2,644 programs, agl `sharcb` packs included), the effect set, and the model archives that carry their own |
-| stage programs | 20,389 — 9,674 vertex, 9,674 pixel, 1,017 compute, 24 domain — of which 7,507 unique |
-| instructions | 4.7 million in the unique programs |
-| **translator** | **7,481 of 7,507 unique programs translate (99.7%)**, SPIR-V at 30–85 KB each |
+| shaders (split) | **11,603** — 7,301 pixel, 3,560 vertex, 729 compute, 13 domain — in 5,180 variation pairs, from 54 files: `Shader/*.Nin_Ounce_NVN2.bfsha.zs`, one `.sarc.zs` of agl `sharcb` packs, `Lib/agl/agl_resource…sarc` (3,924 alone), the effect set and the UI layouts |
+| **SPIR-V (Android chain)** | **11,577 of 11,603 build (99.8%)**, a 495 MB `shaders.dmsv` bundle |
 | the 26 that do not | every one is a **task or mesh program** (`ISBERD`/`ISBEWR`): NVN2 draws some geometry with a task program in the vertex slot and a mesh program in the tessellation slot, each writing its vertices into a stage buffer (Eglantine's `NX2_NOTES` rows 89 and 97) |
+
+`devtools/nvn2_shader_census.py` is the same measurement without a profile, for a dump that has none.
 
 Two instructions the decoder lacked were added on the way: `UP2UR` (`0x883`, 29 of the pixel programs) and `SURED.D.2D.ADD.U32` (`0x59f`, one race
 compute). The third pair, `ISBERD`/`ISBEWR`, is refused by name rather than decoded: it only appears in task/mesh programs, and reading it as a store
 would have made those programs "build" into shaders the host cannot dispatch. Changing the translator moves the chain version (`dmsh_chain.lock`,
 `dm/gfx/nvn/dmsh_chain.h`), so the next port rebuilds every shader it packs.
 
-Naming the files after shaders is not enough: 1,017 of the compute programs and 3,938 of the graphics ones live in the effect set
-(`Effect/static.Nin_Ounce_NVN2.esetb.byml.zs`), and a first pass over `Shader/` alone reported 12,764 programs and no compute shaders at all. Three
-Switch 2 titles already have split shader tables in this tree (`dm/games/040074A01BF12000` Donkey Kong Bananza, `04007EF01F8AE000` Fire Emblem
-Fortune's Weave, `0400380020056000` Splatoon Raiders).
+Naming the files after shaders is not enough: the effect set (`Effect/static.Nin_Ounce_NVN2.esetb.byml.zs`) alone holds 1,017 compute programs, and
+`Lib/agl`'s resource pack 3,924 shaders that a pass over `Shader/` alone reports as nothing. Three Switch 2 titles already have split shader tables in
+this tree (`dm/games/040074A01BF12000` Donkey Kong Bananza, `04007EF01F8AE000` Fire Emblem Fortune's Weave, `0400380020056000` Splatoon Raiders).
 
 An agl `sharcb` pack is read by walking its 16-byte entry records at a 4-byte stride, which can pair one entry's control section with another's code
 area; one such window in `DrivePassShaderDefault.sharcb` named a compute stage over a code area that opens with a vertex SPH. That pairing is now
 refused (`nvn2_stage`) rather than handed to the translator.
 
-So the shader half of a Switch 2 port is not a research problem: 99.7% of the corpus builds with the translator that is already in this tree, and what
-is left is a pipeline this host does not have rather than a decode gap. What is missing is everything the shaders sit on — the NVN2 command stream,
-the GPU memory model and the services above.
+So the shader half of a Switch 2 port is not a research problem: 99.8% of this title's shaders build with the toolchain that is already in this tree,
+and what is left is a pipeline this host does not have rather than a decode gap. What is missing is everything the shaders sit on — the NVN2 command
+stream, the GPU memory model and the services above.
 
 ## What a port would still need
 
