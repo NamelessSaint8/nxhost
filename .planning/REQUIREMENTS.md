@@ -96,7 +96,7 @@ Added 2026-11-04 with roadmap Phases 7–14 (plan of record: `docs/TOOLING_PLAN.
 - [ ] **QUAL-08**: `porter saves list|export|import` moves saves between Android and the Mac with a manifest, and refuses a build-ID mismatch with a precise reason instead of writing an unloadable save
 - [x] **QUAL-09**: CI compiles `dm/host` for Apple arm64 and Android arm64 on every push, as two blocking jobs path-filtered to `nxnative/**` and `.github/**`; a source missing from `SRC` fails naming the file; implicit function declarations are errors on every toolchain; the `dmsh_chain.lock` refusal is covered by a test
 - [ ] **QUAL-10**: `python devtools/verify.py` runs the suite, a warm re-port per engine family and a device smoke that asserts no `[RED]` and no crash, and prints one verdict with every skip named
-- [ ] **QUAL-11**: Guards lock out four paid-for classes: `SA_ONSTACK` on every signal handler, honest Android stub counters, a "rows are tab-separated" message for `android.tsv`, and a stub list that fails when an unlisted stub appears
+- [x] **QUAL-11**: Guards lock out four paid-for classes: `SA_ONSTACK` on every signal handler, honest Android stub counters, a "rows are tab-separated" message for `android.tsv`, and a stub list that fails when an unlisted stub appears
 - [ ] **QUAL-12**: Every push reports the upstream `nxnative/` distance, a threshold warns with the pick checklist linked, and `devtools/nuget_pins.py` regeneration is exercised in CI
 - [x] **QUAL-13**: One run can produce the APK, the Mac app, or both: Android first, extraction and the shader split shared, per-target stages in their own folders; a failing target does not stop the other, the run reports per target and exits non-zero if any failed; a profile without `android.tsv` is skipped for Android with the reason named
 
@@ -240,7 +240,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | QUAL-08 | Phase 10 | Pending |
 | QUAL-09 | Phase 11 | Complete |
 | QUAL-10 | Phase 12 | Pending |
-| QUAL-11 | Phase 13 | Pending |
+| QUAL-11 | Phase 13 | Complete |
 | QUAL-12 | Phase 14 | Pending |
 | QUAL-13 | Phase 11 | Complete |
 | HARD-01 | Phase 2 | Complete |

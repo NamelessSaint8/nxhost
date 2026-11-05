@@ -27,7 +27,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 10: Move saves between devices** - A player continues the same title on the phone and on the Mac, with a build mismatch refused cleanly
 - [x] **Phase 11: Compile the C host in CI** - One run makes an APK, a Mac app or both as the user chooses; CI compiles the host per target so a break names the push that caused it (completed 2026-11-04)
 - [ ] **Phase 12: One command that verifies a change** - Suite, warm re-ports and a device smoke give one verdict before a host commit
-- [ ] **Phase 13: Guards from past incidents** - Each class of bug this repo has already paid for is locked out by a test
+- [x] **Phase 13: Guards from past incidents** - Each class of bug this repo has already paid for is locked out by a test (completed 2026-11-05)
 - [ ] **Phase 14: Keep the upstream pick cheap** - The distance to upstream is visible on every push and warned before it becomes a wall
 
 ## Phase Details
@@ -246,7 +246,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 10. Move saves between devices | 0/TBD | Not started | - |
 | 11. Compile the C host in CI | 4/4 | Complete    | 2026-11-04 |
 | 12. One command that verifies a change | 0/TBD | Not started | - |
-| 13. Guards from past incidents | 0/TBD | Not started | - |
+| 13. Guards from past incidents | 4/4 | Complete    | 2026-11-05 |
 | 14. Keep the upstream pick cheap | 0/TBD | Not started | - |
 
 ### Phase 7: Measure what a port costs
@@ -364,7 +364,12 @@ Plans:
   3. An `android.tsv` row written with spaces says "rows are tab-separated" instead of `unknown key 'status  playable'`.
   4. The `gfx_vk_*` stub-counter list is a fixture: adding a stub without listing it fails the suite.
 
-**Plans**: TBD
+**Plans**: none: the four guards each landed as their own commit, proved by a test that fails without it
+
+- [x] Guard 1, `SA_ONSTACK` (`bbc2ea5f`, completed 2026-11-05) — rule 13 in `tests/arch_rules.py` reports a `sigaction` without the flag and a function handler installed through `signal()`, which cannot set it at all. Proved by stripping the flag from `crash.c`: 6 violations, 0 on the committed tree.
+- [x] Guard 2, honest stub counters (`a21bef71`, completed 2026-11-05) — `STUB0` in `dm/android/gfx_common.c`; 37 counters now log `[dm] <name>: not implemented on the Android backend; its 0 is not a measurement` once per run (`mtl_pkg_stats` first). The file compiles clean under the NDK's `-Wall`.
+- [x] Guard 3, the tab message (`8985e941`, completed 2026-11-05) — a row written with spaces says `rows are tab-separated: write 'status' TAB its value, not 'status  playable'`; `test_space_separated_rows_say_tab` holds the wording.
+- [x] Guard 4, the counter fixture (`a21bef71`, completed 2026-11-05) — rule 14 against `tests/fixtures/gfx_stub_counters.txt`: a counter added without a fixture line fails, and so does a listed name that stops calling `STUB0`. Proved by removing `STUB0` from `mtl_pkg_stats` and reading the named failure.
 
 ### Phase 14: Keep the upstream pick cheap
 
