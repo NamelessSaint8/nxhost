@@ -113,6 +113,21 @@ def amount(v, unit=''):   # a count, or a byte size when unit is 'B'
 
 
 # ---- Progress on the console ----
+_ASCII = str.maketrans({'✓': '+', '✗': '-', '·': '-', '…': '...', '—': '-', '’': "'", '→': '->', '−': '-', 'é': 'e', 'Ö': 'O',
+                        '█': '#', '░': '.', '▏': '|', '▎': '|', '▍': '|', '▌': '|', '▋': '|', '▊': '|', '▉': '|',
+                        '⠋': '|', '⠙': '/', '⠹': '-', '⠸': '\\', '⠼': '|', '⠴': '/', '⠦': '-', '⠧': '\\', '⠇': '|', '⠏': '/'})
+
+def _safe(text):
+    """text in a form this console can take: plain ASCII unless it speaks UTF-8. A Windows console is cp1252, where a ✓ raises UnicodeEncodeError —
+    which fails the stage, not the line (the extract step's own ✓ line killed three CI tests on windows-2025) — and where the glyphs cp1252 does have (·, …, —)
+    come out as bytes no UTF-8 reader can decode"""
+    enc = (getattr(sys.stdout, 'encoding', None) or 'ascii').lower().replace('-', '').replace('_', '')
+    if enc.startswith('utf'): return text
+    text = text.translate(_ASCII)
+    try: text.encode(enc)
+    except (UnicodeEncodeError, LookupError): text = text.encode(enc, 'replace').decode(enc, 'replace')
+    return text
+
 class Progress:
     """The console view of the build: one line per stage, "[k/n] stage · step", with a bar, done/total, percent, elapsed time and ETA when the work can be counted, else a spinner and the elapsed time.
     Modes: bar = the line is redrawn in place (a terminal, Spyder's console) and replaced by a ✓ line when the stage ends; lines = a plain line when a stage or step starts, every BEAT seconds and at the end
@@ -250,11 +265,11 @@ class Progress:
 
     def _out(self, text):   # a whole line above the live one (the caller holds the lock)
         if self.shown: sys.stdout.write('\r' + ' ' * self.shown + '\r'); self.shown = 0
-        print(text, flush=True)
+        print(_safe(text), flush=True)
         if self.mode == 'bar' and self.cur: self._draw()
 
     def _draw(self):
-        line = self._line(self.cur, shutil.get_terminal_size((80, 24)).columns)   # Spyder has no size to ask, and a line that wraps there cannot be redrawn: 80 columns
+        line = _safe(self._line(self.cur, shutil.get_terminal_size((80, 24)).columns))   # Spyder has no size to ask, and a line that wraps there cannot be redrawn: 80 columns
         sys.stdout.write('\r' + line + ' ' * max(self.shown - len(line), 0)); sys.stdout.flush()
         self.shown = len(line)
 

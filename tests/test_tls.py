@@ -20,6 +20,7 @@ def cas(c): return c.cert_store_stats()['x509_ca']
 
 
 class Context(unittest.TestCase):
+    @unittest.skipIf(os.name == 'nt', 'porter reads no host CA file on Windows (tls.context returns the system-store default before looking)')
     def test_empty_default_takes_first_host_file(self):
         with mock.patch.object(tls.ssl, 'create_default_context', empty): self.assertEqual(cas(tls.context(ca_files=(MISSING, CA))), 1)
 

@@ -113,7 +113,7 @@ class ChildEnv(unittest.TestCase):   # D-18: the real DOTNET_ROOT, invariant glo
         o, s = host('posix', 'linux')
         with mock.patch.object(hosttools, 'os', o), mock.patch.object(hosttools, 'sys', s):
             k = hosttools.known('dotnet')
-        for p in ('/usr/lib/dotnet/dotnet', '/usr/share/dotnet/dotnet', str(Path.home() / '.dotnet' / 'dotnet')): self.assertIn(p, k)
+        for p in ('/usr/lib/dotnet/dotnet', '/usr/share/dotnet/dotnet', f'{Path.home() / ".dotnet"}/dotnet'): self.assertIn(p, k)   # known() joins with '/'
 
 
 class AdbVersion(unittest.TestCase):   # D-12: `adb version` as numbers; an unread version keeps -Z (today's behaviour)
