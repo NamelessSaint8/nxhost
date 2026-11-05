@@ -33,6 +33,15 @@ def by_title(tid):
     return g, (android_profile.AndroidProfile(g) if (g.dir / 'android.tsv').is_file() else None)
 
 
+SWITCH2 = ('is a Switch 2 program (its id starts 0400): the port runs Switch 1 titles — the host stands in for Horizon and NVN — so this game cannot be '
+           'ported yet. Its own code and shaders are Switch 2 ones (NVN2, Ampere GPU code): docs/SWITCH2.md')
+
+
+def switch2_program(tid):
+    """Whether a title id is a Switch 2 program's: its high byte is 04 (a Switch 1 title's is 01), e.g. Mario Kart World's 0400C3F00006E000"""
+    return tid >> 56 == 0x04
+
+
 def load(gid):
     """The Android profile of a game profile id (ProfileError when it has none)"""
     p = android_profile.load(gid)

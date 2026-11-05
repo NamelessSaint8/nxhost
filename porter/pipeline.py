@@ -65,6 +65,10 @@ def inspect(folder, title_id=''):
     info = dict(title_id=f'{app:016X}', base=fam['base'].name, updates=[{'version': f'v{v}' if v is not None else None, 'file': p.name} for v, p in fam['updates']],
                 dlc=[{'title_id': f'{t:016X}', 'file': p.name} for t, _, p in fam['dlc']], profile=None, android=None, versions=[], pack=None, supported=False, reason='')
     info['experimental'] = not (g and ap)   # a port can still be tried: porter port --experimental
+    if profiles.switch2_program(app):   # before any profile lookup: no profile can port one, and a survey of its files would only guess
+        info['switch2'] = True
+        info['reason'] = f'{app:016X} {profiles.SWITCH2}'
+        return info
     if not g:
         info['reason'] = f'no game profile for {app:016X}: this game is not supported yet (an experimental port surveys it and guesses a profile; it may not start)'
         return info
@@ -201,6 +205,8 @@ class Port:
         o = self.o
         if self.work is None: self.begin()   # a both run's child inherits work: the driver already scanned and locked
         tid = f'{self.app:016X}'
+        if profiles.switch2_program(self.app):   # both targets: the Mac host replays NVN too, and --experimental has nothing to survey it with
+            raise BuildError(f'{tid} {profiles.SWITCH2} (a Switch 2 dump: devtools/nvn2_shader_census.py measures one)')
         g, ap = profiles.by_title(self.app)
         self.provisional = False
         if self.mac:   # a Mac app needs the game profile only: the 52 iOS profiles port as they are, and there is no package (the app is its own bundle)

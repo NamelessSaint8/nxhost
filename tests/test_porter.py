@@ -533,5 +533,36 @@ class Both(unittest.TestCase):   # --platform both: one run, two targets (D-04 A
         self.assertEqual(self.cmd_port_code({'apk': 'x', 'data': 'y'}), 0)   # a single-target result keeps today's shape, and its 0
 
 
+class Switch2(unittest.TestCase):   # a Switch 2 program is named as one, before any profile lookup or survey: no profile can port it (docs/SWITCH2.md)
+    MKW = '0400C3F00006E000'
+
+    def setUp(self):
+        self.t = Path(tempfile.mkdtemp(prefix='nx2a_test_switch2_'))
+        self.addCleanup(shutil.rmtree, self.t, True)
+
+    def test_the_id_names_a_switch2_program(self):
+        self.assertTrue(profiles.switch2_program(int(self.MKW, 16)))
+        self.assertTrue(profiles.switch2_program(0x0400380020056000))   # Splatoon Raiders, NX2_NOTES row 80
+        self.assertFalse(profiles.switch2_program(int(NEO, 16)))         # NEO: The World Ends with You, a Switch 1 title
+
+    def test_inspect_says_switch2_not_no_profile(self):
+        from unittest import mock
+        fam = {'base': Path('x.nsp'), 'updates': [], 'dlc': []}
+        with mock.patch.object(pipeline.nsp, 'scan_nsps', return_value=(int(self.MKW, 16), fam)):
+            info = pipeline.inspect(self.t)
+        self.assertTrue(info.get('switch2'))
+        self.assertIn('Switch 2', info['reason'])
+        self.assertNotIn('no game profile', info['reason'])   # the reason a player needs: not "unsupported", but "this is the other console's game"
+        self.assertFalse(info['supported'])
+
+    def test_a_port_refuses_it_without_asking_for_a_profile(self):   # --experimental has nothing to survey it with either
+        p = pipeline.Port(pipeline.Options(folder=self.t, platform='android', keys=self.t / 'prod.keys'))
+        p.work, p.app, p.fam = self.t / 'b', int(self.MKW, 16), {'base': None, 'updates': [], 'dlc': []}
+        with self.assertRaises(pipeline.BuildError) as e: p.inputs()
+        self.assertIn('Switch 2', str(e.exception))
+        self.assertIn('nvn2_shader_census', str(e.exception))   # the tool that measures one
+        self.assertNotIn('--experimental', str(e.exception))
+
+
 if __name__ == '__main__':
     unittest.main()
