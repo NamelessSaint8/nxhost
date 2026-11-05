@@ -84,6 +84,7 @@ namespace Ryujinx.Graphics.Shader.Instructions
             x(0x204, InstName.R2p, AR2p, N, writesRd: false);
             x(0x803, InstName.P2r, AP2r, N);
             x(0x203, InstName.P2r, AP2r, N);
+            x(0x883, InstName.P2r, AUp2ur, N, uniform: true);
             x(0x81c, InstName.Psetp, APlop3, N, writesRd: false);
             x(0x89c, InstName.Psetp, APlop3, N, uniform: true, writesRd: false);
             x(0x806, InstName.Vote, AVote, N);
@@ -1232,6 +1233,29 @@ namespace Ryujinx.Graphics.Shader.Instructions
             Operand mask = x.Opcode == 0x803 ? Const((int)x.Imm32) : Register(x.Rb, RegisterType.Gpr);
 
             EmitP2r(context, Register(x.Ra, RegisterType.Gpr), Register(x.Rd, RegisterType.Gpr), mask, (ByteSel)x.Bits(76, 78), false);
+        }
+
+        // UP2UR UR, UPR, URZ, mask (0x883): the uniform datapath's P2R. Bit k of the result is uniform predicate k, selected by the mask at 32..64 (7
+        // bits); the source is URZ (24..32 = 63) and the rest of the word is fixed (64..96 = 0x08000000), so a mode outside that is refused.
+        public static void AUp2ur(EmitterContext context)
+        {
+            AmpereOp x = new(context.CurrOp);
+            int mask = (int)x.Field(32, 64);
+
+            if (x.Pred != 7 || x.Bits(24, 32) != 0x3f || mask > 0x7f || x.Field(64, 96) != 0x08000000)
+            {
+                throw AFail(context, "UP2UR mode");
+            }
+
+            Operand value = Const(0);
+
+            for (int k = 0; k < RegisterConsts.UniformPredsCount; k++)
+            {
+                if (((mask >> k) & 1) == 0) continue;
+                value = context.BitwiseOr(value, context.ConditionalSelect(APredReg(k, uniform: true), Const(1 << k), Const(0)));
+            }
+
+            ASet(context, x, value, uniform: true);
         }
 
         // PLOP3 Pd0, Pd1, a (87..90), b (77..80), c (68..71; uniform with bit 67), lut0 (64..67 | 72..77 << 3), lut1 (16..24)

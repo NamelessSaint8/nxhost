@@ -53,6 +53,9 @@ namespace Ryujinx.Graphics.Shader.Instructions
             x(0xb9b, InstName.Sust, ASurface, N, writesRd: false);
             x(0xb9d, InstName.Sust, ASurface, N, writesRd: false);
             x(0x593, InstName.Suatom, ASuatom, N);
+            x(0x59f, InstName.Sured, ASured, N, writesRd: false);
+            x(0x923, InstName.Isberd, AIsbe, N);
+            x(0x927, InstName.Isberd, AIsbe, N, writesRd: false);
             x(0xb1d, InstName.Bar, ABar, N, writesRd: false);
         }
 
@@ -436,6 +439,33 @@ namespace Ryujinx.Graphics.Shader.Instructions
             }
 
             EmitSuatom(context, (SuDim)x.Bits(61, 64), 0, (SuatomOp)x.Bits(87, 91), (SuatomSize)x.Bits(73, 76), handle, x.Ra, x.Rb, 0, x.Rd, false, isBindless: false, compareAndSwap: false);
+        }
+
+        // SURED.D.2D.ADD.STRONG.GPU.IGN U32 (0x59f): a reduction into an image, at the descriptor bits 54..59 (bank) and 40..54 (word offset) name as a
+        // texture's, with the coordinates at 24..32 and the value at 32..40; dimension 61..64, size 73..76 (U32 at 0), operation 87..91 (ADD at 0).
+        // Maxwell's SURED is the same operation over the same three sources (EmitSured), where the reduction itself lives.
+        public static void ASured(EmitterContext context)
+        {
+            AmpereOp x = new(context.CurrOp);
+            (int handle, int cbufSlot) = ATexHandle(context, x);
+
+            if (cbufSlot != TextureOperation.DefaultCbufSlot)
+            {
+                throw AFail(context, $"SURED handle in bank {cbufSlot}");
+            }
+
+            EmitSured(context, (SuDim)x.Bits(61, 64), Clamp.Ign, (RedOp)x.Bits(87, 91), (SuatomSize)x.Bits(73, 76), handle,
+                x.Bits(24, 32), x.Bits(32, 40), 0, byteAddress: false, isBindless: false);
+        }
+
+        // ISBERD / ISBEWR (0x923 / 0x927): a task or mesh program's stage buffer. NVN2 draws some geometry with task and mesh programs: while
+        // SET_MESH_CONTROL is on, the task program sits in the vertex slot and the mesh program in the tessellation slot (header type VS), and each
+        // writes its vertices' outputs as linear bytes into that buffer (Eglantine's NX2_NOTES rows 89 and 97; Mario Kart World's 24 LOD libraries do).
+        // This host's NVN2 path has no task or mesh pipeline, so such a program cannot run at all: refusing it by name says why, where "instruction not
+        // implemented" read as a decoder gap and invited a store that would have drawn nothing.
+        public static void AIsbe(EmitterContext context)
+        {
+            throw AFail(context, "task/mesh program (ISBERD/ISBEWR): no task or mesh pipeline in this host");
         }
 
         // BAR.SYNC: the workgroup barrier

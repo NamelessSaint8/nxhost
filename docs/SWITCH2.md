@@ -36,8 +36,13 @@ A Switch 2 game ships its shaders as `.bfsha` archives — `FSHA` wrapping a `BN
 | files holding shaders | 98: `romfs/Shader/*.bfsha.zs` and one `.sarc.zs` (2,644 programs, agl `sharcb` packs included), the effect set, and the model archives that carry their own |
 | stage programs | 20,389 — 9,674 vertex, 9,674 pixel, 1,017 compute, 24 domain — of which 7,507 unique |
 | instructions | 4.7 million in the unique programs |
-| **translator** | **7,451 of 7,507 unique programs translate (99.3%)**, SPIR-V at 30–85 KB each |
-| the 56 that do not | three instruction forms the decoder lacks — `0x883` 29×, `0x927` 26× (every domain shader), `0x59f` 1× — all in the Drive pass's agl `sharcb` |
+| **translator** | **7,481 of 7,507 unique programs translate (99.7%)**, SPIR-V at 30–85 KB each |
+| the 26 that do not | every one is a **task or mesh program** (`ISBERD`/`ISBEWR`): NVN2 draws some geometry with a task program in the vertex slot and a mesh program in the tessellation slot, each writing its vertices into a stage buffer (Eglantine's `NX2_NOTES` rows 89 and 97) |
+
+Two instructions the decoder lacked were added on the way: `UP2UR` (`0x883`, 29 of the pixel programs) and `SURED.D.2D.ADD.U32` (`0x59f`, one race
+compute). The third pair, `ISBERD`/`ISBEWR`, is refused by name rather than decoded: it only appears in task/mesh programs, and reading it as a store
+would have made those programs "build" into shaders the host cannot dispatch. Changing the translator moves the chain version (`dmsh_chain.lock`,
+`dm/gfx/nvn/dmsh_chain.h`), so the next port rebuilds every shader it packs.
 
 Naming the files after shaders is not enough: 1,017 of the compute programs and 3,938 of the graphics ones live in the effect set
 (`Effect/static.Nin_Ounce_NVN2.esetb.byml.zs`), and a first pass over `Shader/` alone reported 12,764 programs and no compute shaders at all. Three
@@ -48,9 +53,9 @@ An agl `sharcb` pack is read by walking its 16-byte entry records at a 4-byte st
 area; one such window in `DrivePassShaderDefault.sharcb` named a compute stage over a code area that opens with a vertex SPH. That pairing is now
 refused (`nvn2_stage`) rather than handed to the translator.
 
-So the shader half of a Switch 2 port is not a research problem: 99.3% of the corpus builds with the translator that is already in this tree, and the
-remainder is a named list of three instruction forms. What is missing is everything the shaders sit on — the NVN2 command stream, the GPU memory model
-and the services above.
+So the shader half of a Switch 2 port is not a research problem: 99.7% of the corpus builds with the translator that is already in this tree, and what
+is left is a pipeline this host does not have rather than a decode gap. What is missing is everything the shaders sit on — the NVN2 command stream,
+the GPU memory model and the services above.
 
 ## What a port would still need
 
@@ -59,7 +64,9 @@ and the services above.
 2. **The pushbuffer**: NVN2 submits with semaphored acquires, 4-byte releases, inline-to-memory subchannels, callable buffers and Turing+ macros;
    driving a Vulkan queue from that is the largest single piece (Eglantine's `NX2_NOTES.md` rows 42–66 and 130–152).
 3. **The services**: `vi2` (layers, presents, fences), `syncpt`, the newer `am` commands, audio's `aud:u` style entry.
-4. **Memory**: a title that plans 9.5 GiB does not fit a phone today, and the dump above needs 22 GB of RomFS on the device (the data pack would be
+4. **A task/mesh pipeline** for the geometry drawn that way (`ISBERD`/`ISBEWR`): Vulkan's `VK_EXT_mesh_shader` or Metal's mesh stages, with the
+   stage buffer those two stages hand each other. The 26 programs above are exactly those draws.
+5. **Memory**: a title that plans 9.5 GiB does not fit a phone today, and the dump above needs 22 GB of RomFS on the device (the data pack would be
    pushed whole). A port would have to prove the game survives a smaller reported total, or target a device that has it.
 
 Two facts make the work bounded rather than open-ended: the shaders build (above), and running the title's own arm64 code means no CPU emulation is
