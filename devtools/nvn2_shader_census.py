@@ -3,8 +3,11 @@
 # accepts each unique program. That pass/fail count is the number a port's shader work starts from: a failure names an instruction the translator cannot
 # decode or emit yet ("unsupported native opcode"), not a container the split cannot read.
 #   python devtools/nvn2_shader_census.py "/Volumes/Data/Switch/Mario Kart World" [--xlate <translator>] [--json out.json] [--any]
-# The archives are found by name (.bfsha, .bfsha.zs, .bfshazs, or a .zs/.zst/.bin under a folder named shader/ShaderData); --any decompresses every file
-# of the folder instead, which is slow on a 20 GB RomFS. Ampere instructions are 16 bytes and their opcode is the low 12 bits of the low word
+# The files are the ones the engine's own reader looks in: Nintendo's containers that carry a BNSH by name (.bfsha, .bfres, .esetb, .blarc, .bnsh,
+# .ptcl, .sarc) plus main, read through shader_split's scan_blob, so every BNSH in a file is found, SARC members and all. --any reads every file of the
+# folder instead, which is slow on a 20 GB RomFS. Files named after shaders alone are not enough: Mario Kart World keeps 198 of its 1,018 compute
+# programs, and 3,938 graphics ones, in Effect/static.Nin_Ounce_NVN2.esetb.byml.zs.
+# Ampere instructions are 16 bytes and their opcode is the low 12 bits of the low word
 # (AmpereOp.Opcode); a graphics code area holds the 0x80-byte SPH in front of them, a compute one does not. Both facts are the engine's: see
 # dm/gfx/tools/dmsh_ampere.py and dm/third_party/ryujinx/.../Decoders/AmpereOp.cs.
 import argparse, collections, json, os, re, struct, subprocess, sys, tempfile
@@ -21,20 +24,20 @@ import dmsh_ampere   # noqa: E402
 ZSTD_MAGIC = b'\x28\xb5\x2f\xfd'
 SPH = 0x80           # a graphics code area's SPH, in front of the instructions
 NAMES_CS = REPO / 'nxnative/dm/third_party/ryujinx/src/Ryujinx.Graphics.Shader/Instructions/InstEmitAmpere.cs'
+CARRIERS = ('.bfsha', '.bfres', '.esetb', '.blarc', '.bnsh', '.ptcl', '.sarc')   # Nintendo's containers a BNSH hides in (dm/gfx/tools/shader_split.py)
 
 
 def candidates(folder, any_file):
-    """The files that may hold a BNSH: by name, or every file of the folder with --any"""
+    """The files that may hold a BNSH: those of a container that carries one, or every file of the folder with --any. Matched anywhere in the name, not at
+    its end: Mario Kart World's effect set is static.Nin_Ounce_NVN2.esetb.byml.zs, which neither .esetb nor .zs ends"""
     for dp, _, fs in os.walk(folder):
         for f in fs:
-            p = Path(dp, f)
-            n, under = f.lower(), 'shader' in dp.lower()
-            if any_file or n.endswith(('.bfsha', '.bfsha.zs', '.bfshazs')) or (under and n.endswith(('.zs', '.zst', '.bin'))):
-                yield p
+            p = Path(dp, f); n = f.lower()
+            if any_file or n == 'main' or any(c in n for c in CARRIERS): yield p
 
 
 def blobs(folder, any_file):
-    """(label, bytes) of each candidate that holds a BNSH, a zstd frame decompressed first (compression.zstd, 3.14+, or its backport)"""
+    """(label, bytes) of each candidate, a zstd frame decompressed first (compression.zstd, 3.14+, or its backport)"""
     for p in candidates(folder, any_file):
         try: raw = p.read_bytes()
         except OSError as e: print(f'[skip] {p}: {e}', file=sys.stderr); continue
@@ -48,10 +51,11 @@ def programs(folder, any_file):
     """(found programs, archives read, [(label, reason) of archives the reader refused]) — one entry per stage of every variation"""
     out, n, bad = [], 0, []
     for label, raw in blobs(folder, any_file):
-        base = raw.find(b'BNSH')
-        try: got = S.bnsh_shaders(raw, base, label)
+        got = []
+        try: S.scan_blob(raw, label, got)   # the engine's own reader: every BNSH in the file, SARC members included
         except SystemExit as e:   # red(): a damaged archive, or a layout this reader does not know: reported, not fatal
             bad.append((label, str(e).replace('[RED] ', '', 1))); continue
+        if not got: continue   # a container that holds no shader (a model archive)
         n += 1
         for where, st, ctl, code in got: out.append(dict(key=S.skey(ctl, code), stage=st, ctl=ctl, code=code, where=where))
     return out, n, bad
@@ -130,7 +134,7 @@ def main():
     for p in found: keys.setdefault(p['key'], {**p, 'n': 0})['n'] += 1
     uniq = sorted(keys.values(), key=lambda p: (p['stage'], p['key']))
     stages = collections.Counter(p['stage'] for p in found)
-    print(f'{archives} shader archive(s), {len(found):,} stage programs ({", ".join(f"{v:,} {k}" for k, v in sorted(stages.items()))}), {len(uniq):,} unique')
+    print(f'{archives} file(s) hold shaders, {len(found):,} stage programs ({", ".join(f"{v:,} {k}" for k, v in sorted(stages.items()))}), {len(uniq):,} unique')
     print(f'instructions: {sum(inst_span(p)[1] for p in uniq) // 16:,} in the unique programs (a graphics area starts after its {SPH:#x}-byte SPH)')
     for label, why in bad: print(f'[RED] {label}: {why}')
 

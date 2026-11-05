@@ -28,17 +28,25 @@ A Switch 2 game ships its shaders as `.bfsha` archives — `FSHA` wrapping a `BN
 - the code inside is Ampere, which `dmsh_xlate` already decodes (`arch: sm86`, `dm/third_party/ryujinx/.../Decoders/DecoderAmpere.cs`) and turns
   into SPIR-V or MSL like any other shader.
 
-`devtools/nvn2_shader_census.py` measures a dump with both of those. On Mario Kart World 1.8.0 (2026-11-05, one machine):
+`devtools/nvn2_shader_census.py` measures a dump with both of those, through `shader_split`'s own reader, so it finds the libraries that are not in
+`Shader/`. On Mario Kart World 1.8.0 (2026-11-05, one machine):
 
 | | |
 |---|---|
-| shader archives | 7 (`romfs/Shader/*.Nin_Ounce_NVN2.bfsha.zs` and one `.sarc.zs` holding a `BNSH`) |
-| stage programs | 12,764 (6,382 vertex, 6,382 pixel), of which 3,238 unique |
-| instructions | 2.4 million in the unique programs |
-| **translator** | **3,238 of 3,238 unique programs translate** (SPIR-V, 30–85 KB each) |
+| files holding shaders | 98: `romfs/Shader/*.bfsha.zs` and one `.sarc.zs` (2,644 programs, agl `sharcb` packs included), the effect set, and the model archives that carry their own |
+| stage programs | 20,390 — 9,674 vertex, 9,674 pixel, 1,018 compute, 24 domain — of which 7,508 unique |
+| instructions | 4.7 million in the unique programs |
+| **translator** | **7,451 of 7,508 unique programs translate (99.2%)**, SPIR-V at 30–85 KB each |
+| the 57 that do not | 56 use one of three instruction forms the decoder lacks (`0x883` 29×, `0x927` 26×, `0x59f`), all in the Drive pass's agl `sharcb`; one decodes an SPH word as an instruction, which reads as a control section paired with the wrong code area in that same pack |
 
-So the shader half of a Switch 2 port is not a research problem: the corpus builds with the translator that is already in this tree. What is missing
-is everything the shaders sit on — the NVN2 command stream, the GPU memory model and the services above.
+Naming the files after shaders is not enough: 1,018 of the compute programs and 3,938 of the graphics ones live in the effect set
+(`Effect/static.Nin_Ounce_NVN2.esetb.byml.zs`), and a first pass over `Shader/` alone reported 12,764 programs and no compute shaders at all. Three
+Switch 2 titles already have split shader tables in this tree (`dm/games/040074A01BF12000` Donkey Kong Bananza, `04007EF01F8AE000` Fire Emblem
+Fortune's Weave, `0400380020056000` Splatoon Raiders).
+
+So the shader half of a Switch 2 port is not a research problem: 99.2% of the corpus builds with the translator that is already in this tree, and the
+remainder is a named list of three instruction forms. What is missing is everything the shaders sit on — the NVN2 command stream, the GPU memory model
+and the services above.
 
 ## What a port would still need
 
