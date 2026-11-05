@@ -10,7 +10,7 @@
 # Ampere instructions are 16 bytes and their opcode is the low 12 bits of the low word
 # (AmpereOp.Opcode); a graphics code area holds the 0x80-byte SPH in front of them, a compute one does not. Both facts are the engine's: see
 # dm/gfx/tools/dmsh_ampere.py and dm/third_party/ryujinx/.../Decoders/AmpereOp.cs.
-import argparse, collections, json, os, re, struct, subprocess, sys, tempfile
+import argparse, collections, concurrent.futures as cf, json, os, re, struct, subprocess, sys, tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -36,28 +36,40 @@ def candidates(folder, any_file):
             if any_file or n == 'main' or any(c in n for c in CARRIERS): yield p
 
 
-def blobs(folder, any_file):
-    """(label, bytes) of each candidate, a zstd frame decompressed first (compression.zstd, 3.14+, or its backport)"""
-    for p in candidates(folder, any_file):
-        try: raw = p.read_bytes()
-        except OSError as e: print(f'[skip] {p}: {e}', file=sys.stderr); continue
-        if raw[:4] == ZSTD_MAGIC:
-            try: raw = S.zstd_mod().decompress(raw)   # the module's own call (shader_split 415): a frame whose size it cannot learn is refused, not guessed
-            except Exception as e: print(f'[skip] {p}: zstd: {e}', file=sys.stderr); continue
-        if b'BNSH' in raw: yield str(p.relative_to(folder)), raw
+def load_candidate(p, folder):
+    """(label, bytes) of one candidate, a zstd frame decompressed first (compression.zstd, 3.14+, or its backport); None when it holds no shader. A
+    candidate is read when it holds a BNSH or opens as one of the containers the reader descends into: Lib/agl's resource packs are SARCs of agl BAHS
+    packs and have no BNSH bytes at all"""
+    try: raw = p.read_bytes()
+    except OSError as e: print(f'[skip] {p}: {e}', file=sys.stderr); return None
+    if raw[:4] == ZSTD_MAGIC:
+        try: raw = S.zstd_mod().decompress(raw)   # the module's own call (shader_split 415): a frame whose size it cannot learn is refused, not guessed
+        except Exception as e: print(f'[skip] {p}: zstd: {e}', file=sys.stderr); return None
+    if b'BNSH' in raw or raw[:4] in (b'SARC', b'BAHS', b'NDSR', b'MSHD', b'Yaz0'):
+        return str(p.relative_to(folder)), raw
+    return None
 
 
-def programs(folder, any_file):
-    """(found programs, archives read, [(label, reason) of archives the reader refused]) — one entry per stage of every variation"""
-    out, n, bad = [], 0, []
-    for label, raw in blobs(folder, any_file):
-        got = []
-        try: S.scan_blob(raw, label, got)   # the engine's own reader: every BNSH in the file, SARC members included
-        except SystemExit as e:   # red(): a damaged archive, or a layout this reader does not know: reported, not fatal
-            bad.append((label, str(e).replace('[RED] ', '', 1))); continue
-        if not got: continue   # a container that holds no shader (a model archive)
-        n += 1
-        for where, st, ctl, code in got: out.append(dict(key=S.skey(ctl, code), stage=st, ctl=ctl, code=code, where=where))
+def programs(folder, any_file, jobs=8):
+    """(found programs, files read, [(label, reason) of archives the reader refused]) — one entry per stage of every variation. The files are read and
+    decompressed in a pool (a dump keeps most of its 5,000-odd archives zstd frames, and that is the whole cost); the engine's reader runs in this one"""
+    out, n, bad, seen = [], 0, [], 0
+    paths = list(candidates(folder, any_file))
+    print(f'reading {len(paths):,} candidate files', file=sys.stderr, flush=True)
+    with cf.ThreadPoolExecutor(max_workers=jobs) as ex:
+        for i in range(0, len(paths), 64):   # a window at a time, so results the reader lags behind do not pile up as decompressed bytes
+            for got_file in ex.map(lambda p: load_candidate(p, folder), paths[i:i + 64]):
+                seen += 1
+                if seen % 1000 == 0: print(f'  {seen}/{len(paths)} files, {len(out):,} programs', file=sys.stderr, flush=True)
+                if got_file is None: continue
+                label, raw = got_file
+                got = []
+                try: S.scan_blob(raw, label, got)   # every BNSH in the file, SARC members included
+                except SystemExit as e:   # red(): a damaged archive, or a layout this reader does not know: reported, not fatal
+                    bad.append((label, str(e).replace('[RED] ', '', 1))); continue
+                if not got: continue   # a container that holds no shader (a model archive)
+                n += 1
+                for where, st, ctl, code in got: out.append(dict(key=S.skey(ctl, code), stage=st, ctl=ctl, code=code, where=where))
     return out, n, bad
 
 
@@ -126,9 +138,10 @@ def main():
     ap.add_argument('--json', help='write the census here')
     ap.add_argument('--top', type=int, default=12, help='opcodes to list (default 12)')
     ap.add_argument('--any', action='store_true', help='decompress every file of the folder, not only the shader archives by name')
+    ap.add_argument('--jobs', type=int, default=8, help='files read and decompressed at once (default 8)')
     a = ap.parse_args()
 
-    found, archives, bad = programs(a.folder, a.any)
+    found, archives, bad = programs(a.folder, a.any, a.jobs)
     if not found: sys.exit(f'[RED] no BNSH program under {a.folder} (is this a loose dump? --any tries every file)')
     keys = {}
     for p in found: keys.setdefault(p['key'], {**p, 'n': 0})['n'] += 1
