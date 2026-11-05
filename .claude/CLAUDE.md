@@ -2,9 +2,9 @@
 
 ## Project
 
-**nx2android**
+**nxhost**
 
-nx2android turns a player's own Nintendo Switch game dump into a native Android app. It rewrites the game's ARM64 code to run on Android, replays NVN graphics on Vulkan, translates the shaders, and builds a signed APK plus a data pack, then installs both over adb. Today the shipped tool is a thin PySide6 GUI over a headless CLI, available only as a Windows bundle. This milestone reworks that GUI and ships it on Windows, macOS and Linux for the developer and a few testers.
+nxhost turns a player's own Nintendo Switch game dump into a native Android app. It rewrites the game's ARM64 code to run on Android, replays NVN graphics on Vulkan, translates the shaders, and builds a signed APK plus a data pack, then installs both over adb. Today the shipped tool is a thin PySide6 GUI over a headless CLI, available only as a Windows bundle. This milestone reworks that GUI and ships it on Windows, macOS and Linux for the developer and a few testers.
 
 **Core Value:** A tester on any supported host (Windows x64, macOS Apple Silicon, Linux x64, Linux arm64) can take their own Switch dump and get a working port onto their Android device through the GUI, without help.
 

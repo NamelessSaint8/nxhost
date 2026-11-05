@@ -1,8 +1,8 @@
-# nx2android
+# nxhost
 
 ## What This Is
 
-nx2android turns a player's own Nintendo Switch game dump into a native Android app. It rewrites the game's ARM64 code to run on Android, replays NVN graphics on Vulkan, translates the shaders, and builds a signed APK plus a data pack, then installs both over adb. Today the shipped tool is a thin PySide6 GUI over a headless CLI, available only as a Windows bundle. This milestone reworks that GUI and ships it on Windows, macOS and Linux for the developer and a few testers.
+nxhost turns a player's own Nintendo Switch game dump into a native Android app. It rewrites the game's ARM64 code to run on Android, replays NVN graphics on Vulkan, translates the shaders, and builds a signed APK plus a data pack, then installs both over adb. Today the shipped tool is a thin PySide6 GUI over a headless CLI, available only as a Windows bundle. This milestone reworks that GUI and ships it on Windows, macOS and Linux for the developer and a few testers.
 
 ## Core Value
 
@@ -76,7 +76,7 @@ A tester on any supported host (Windows x64, macOS Apple Silicon, Linux x64, Lin
 ## Context
 
 - **Brownfield.** The codebase map is in `.planning/codebase/` (ARCHITECTURE, STACK, CONCERNS, CONVENTIONS, INTEGRATIONS, STRUCTURE, TESTING), mapped at commit `9d67ede` on 2026-10-29.
-- **Fork.** `origin` is NamelessSaint8/nx2android; `upstream` is shirai91/nx2android. The engine under `nxnative/` is a separate git subtree with its own upstream.
+- **Fork.** `origin` is NamelessSaint8/nxhost; `upstream` is shirai91/nx2android. The engine under `nxnative/` is a separate git subtree with its own upstream.
 - **Layers.** `gui/` (about 440 lines of PySide6) → `porter/` (CLI and pipeline, the single implementation) → engine tools run as subprocesses → device over adb. The GUI and the CLI talk only through `--progress json` events and `--json` documents; `gui/runner.py` is the only consumer of that protocol.
 - **Existing cross-platform groundwork.** `porter/paths.py`, `porter/toolchain.py`, `porter/fetch.py` and `nxnative/dm/android/build.py` already branch per OS. The blockers sit in the GUI (cancel, fonts), packaging (Windows-only bootloader, spec and `is_local()` check) and the release check.
 - **Known GUI bugs.** Cancel on macOS and Linux leaves `dotnet`/`clang` children running. `call_json` discards stderr. There's no `closeEvent` and no call timeouts. Game names go into rich text unescaped. `PortTab.update_port_button` duplicates a pipeline decision.

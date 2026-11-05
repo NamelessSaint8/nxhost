@@ -1,6 +1,6 @@
 # Universal game support — implementation plan
 
-Status: draft (2026-11-03, revised same day after surveying the upstream checkout and borrowing sources). Owner: nx2android. Companion to the GUI milestone in `.planning/ROADMAP.md`; this plan covers the porter and the host, not the GUI.
+Status: draft (2026-11-03, revised same day after surveying the upstream checkout and borrowing sources). Owner: nxhost. Companion to the GUI milestone in `.planning/ROADMAP.md`; this plan covers the porter and the host, not the GUI.
 
 ## What "works with every game" means
 

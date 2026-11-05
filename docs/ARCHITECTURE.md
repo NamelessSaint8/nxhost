@@ -1,6 +1,6 @@
 # Architecture
 
-nx2android turns a player's own Switch game files into an Android app. The player picks the game's folder, clicks **Port**, and gets an APK plus the game's data, which the tool can install on a connected device. Every game the tool supports is a **game profile**; everything all games share is the **core**.
+nxhost turns a player's own Switch game files into an Android app or a Mac app. The player picks the game's folder, clicks **Port**, and gets an APK plus the game's data, which the tool can install on a connected device. Every game the tool supports is a **game profile**; everything all games share is the **core**.
 
 ```
 gui/  (PySide6 desktop app)
@@ -128,7 +128,7 @@ The player's settings, APK signing key, built translator, NuGet packages (`nuget
 ## Repository layout
 
 ```
-nx2android/
+nxhost/
   docs/ARCHITECTURE.md   this file
   porter/                port pipeline (python -m porter)
   gui/                   desktop app (python -m gui; the new shell, python -m gui.shell)

@@ -1,4 +1,4 @@
-# Roadmap: nx2android
+# Roadmap: nxhost
 
 ## Overview
 

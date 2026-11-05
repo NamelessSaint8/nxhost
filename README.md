@@ -1,6 +1,6 @@
-# nx2android
+# nxhost
 
-Port your own Nintendo Switch games to Android, natively: the game's own arm64 code runs on the device, with the Switch's system services stood in for by a host and NVN graphics replayed on Vulkan. Pick the game's folder, click **Port**, and get an APK plus the game's data, installed on your device if you like. Bring your own game files and keys; nothing from any game is in this repository.
+Port your own Nintendo Switch games to Android or macOS, natively: the game's own arm64 code runs on the device or the Mac, with the Switch's system services stood in for by a host and NVN graphics replayed on Vulkan (Android) or Metal (macOS). Pick the game's folder, click **Port**, and get an APK plus the game's data, installed on your device if you like. Bring your own game files and keys; nothing from any game is in this repository.
 
 This is the Android port of [nxnative](https://github.com/seedds/nxnative), which does the same on iPhone and iPad. How it is put together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

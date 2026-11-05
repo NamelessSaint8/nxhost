@@ -1,4 +1,4 @@
-# Requirements: nx2android
+# Requirements: nxhost
 
 **Defined:** 2026-10-29
 **Core Value:** A tester on any supported host (Windows x64, macOS Apple Silicon, Linux x64, Linux arm64) can take their own Switch dump and get a working port onto their Android device through the GUI, without help.
