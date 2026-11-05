@@ -83,6 +83,29 @@ It needs `compression.zstd` (Python 3.14+, or `backports.zstd`) and, for the las
 (`nxnative/dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate`; build it with `dm/gfx/tools/dmsh_build.py`). A failure there is an Ampere instruction the
 translator cannot decode or emit yet, and it names it.
 
+## On a device: does the driver compile it?
+
+A translator's SPIR-V is not a driver's answer, so `probes/vksh.c` takes a `shaders.dmsv` bundle to an Android device and compiles it there: every entry
+becomes a shader module, each compute program a compute pipeline (empty layout — the code is what is under test), and with `--pairs` each
+vertex/pixel pair a graphics pipeline (dynamic rendering, one colour attachment, no vertex buffers). Every optional feature the device reports is enabled,
+or a refusal would say nothing about the shader.
+
+Measured on a Lenovo Legion Y700 (SM8850P, Adreno 840, driver 512.842.31, Vulkan 1.4.295), bundle of 11,577:
+
+| | |
+|---|---|
+| compute pipelines | **729 of 729 compile** |
+| graphics pipelines | **5,124 of 5,180 pairs compile**; the 56 that do not fail with `VK_ERROR_UNKNOWN` |
+| why those 56 | the failure follows the *pair*, not a shader: re-pairing each failing pixel stage with a known-good vertex stage flips 47 of 112 to success. It is the stage-link defect the Mac chain fixes by padding the vertex stage with the outputs its pixel stage reads (`dmsh_build.vs_pad`, 331 of 9,043 pairs before it); `shader_vk.py` has no such step |
+| `VK_EXT_mesh_shader` | **present** — the 26 task/mesh programs are feasible on this GPU, so that gap is the host's, not the device's |
+| `VK_EXT_fragment_shader_interlock` | **absent**, though all 7,301 pixel shaders declare `SPV_EXT_fragment_shader_interlock`; they compile without it, so only a shader that *uses* the capability would be refused |
+| BC1–BC7 | sampled, filterable and blittable, which is what a Switch title's textures need |
+
+```
+aarch64-linux-android29-clang -O1 probes/vksh.c -o vksh -lvulkan
+adb push vksh shaders.dmsv shader_pairs.tsv /data/local/tmp/mkw/ && adb shell /data/local/tmp/mkw/vksh shaders.dmsv --pairs shader_pairs.tsv
+```
+
 ## The emulator side
 
 `NamelessSaint8/mkwsw2` is Eglantine's `nx2` branch with Mario Kart World fixes on top (`mkw-eglantine`), and Eglantine keeps an Android frontend
