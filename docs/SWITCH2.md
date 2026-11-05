@@ -95,8 +95,8 @@ Measured on a Lenovo Legion Y700 (SM8850P, Adreno 840, driver 512.842.31, Vulkan
 | | |
 |---|---|
 | compute pipelines | **729 of 729 compile** |
-| graphics pipelines | **5,124 of 5,180 pairs compile**; the 56 that do not fail with `VK_ERROR_UNKNOWN` |
-| why those 56 | the failure follows the *pair*, not a shader: re-pairing each failing pixel stage with a known-good vertex stage flips 47 of 112 to success. It is the stage-link defect the Mac chain fixes by padding the vertex stage with the outputs its pixel stage reads (`dmsh_build.vs_pad`, 331 of 9,043 pairs before it); `shader_vk.py` has no such step |
+| graphics pipelines | **5,180 of 5,180 pairs compile** |
+| before the padding | 5,124 of 5,180 compiled; the 56 that did not failed with `VK_ERROR_UNKNOWN` while both their modules were created, and the failure followed the *pair*, not a shader — re-pairing each failing pixel stage with a known-good vertex stage flipped 47 of 112 to success. That is the stage-link defect the Mac chain fixes with `dmsh_build.vs_pad` (331 of 9,043 pairs before it); `dmsv_pad.py` is the SPIR-V side, and padding 40 vertex shaders with 40 outputs closed all 56 |
 | `VK_EXT_mesh_shader` | **present** — the 26 task/mesh programs are feasible on this GPU, so that gap is the host's, not the device's |
 | `VK_EXT_fragment_shader_interlock` | **absent**, though all 7,301 pixel shaders declare `SPV_EXT_fragment_shader_interlock`; they compile without it, so only a shader that *uses* the capability would be refused |
 | BC1–BC7 | sampled, filterable and blittable, which is what a Switch title's textures need |

@@ -15,6 +15,7 @@ HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent.parent / 'gfx/tools'
 sys.path.insert(0, str(TOOLS))
 import dmsh_facts, dmsh_chain, dmsh_ampere   # noqa: E402  (DM_GAME picks the profile; dmsh_ampere reads an NVN2 control section's lengths)
+import dmsv_pad   # noqa: E402  (the SPIR-V side of dmsh_build.py vs_pad: outputs a pixel stage reads that its vertex stage does not write)
 
 ap = argparse.ArgumentParser()
 ap.add_argument('pkg'); ap.add_argument('out')
@@ -289,10 +290,29 @@ def main():
         for ln in r.stderr.splitlines():
             if ln.strip(): errs[ln.strip()[:120]] += 1
     entries, fails = [], collections.Counter()
+    spvs = {}
     for k in keys:
-        spv_p, res_p = os.path.join(w, k + '.spv'), os.path.join(w, k + '.res.json')
+        spv_p = os.path.join(w, k + '.spv')
         if not os.path.exists(spv_p): fails['no output'] += 1; continue
-        spv = open(spv_p, 'rb').read(); res = json.load(open(res_p)) if os.path.exists(res_p) else {}
+        spvs[k] = open(spv_p, 'rb').read()
+    # A vertex shader gets the outputs its paired pixel shaders read but it does not write: NVN lets the pixel stage read an unwritten attribute (it reads
+    # 0,0,0,1), Vulkan refuses to link the pair. dmsh_build.py vs_pad does the same for the Mac chain on MSL text; here it is the SPIR-V (dm/android/tools/
+    # dmsv_pad.py). The pairs are the profile's shader_pairs.tsv, which the split writes from each BNSH variation.
+    pairs = collections.defaultdict(list)
+    if GAME.table('shader_pairs.tsv').exists():
+        for ln in open(GAME.table('shader_pairs.tsv'), encoding='utf-8'):
+            c = ln.split()
+            if len(c) >= 2 and not ln.startswith('#'): pairs[c[0]].append(c[1])
+    padded, added, skipped = 0, 0, 0
+    for k in list(spvs):
+        if stages[k] != 'vs' or k not in pairs: continue
+        new, plus, skip = dmsv_pad.pad(spvs[k], [spvs[p] for p in pairs[k] if p in spvs])
+        if plus: spvs[k] = new; padded += 1; added += len(plus); skipped += len(skip)
+    if padded: print(f'padded {padded} vertex shaders with {added} outputs their pixel stages read ({skipped} locations of a type not padded)', flush=True)
+    for k in keys:
+        if k not in spvs: continue
+        spv = spvs[k]; res_p = os.path.join(w, k + '.res.json')
+        res = json.load(open(res_p)) if os.path.exists(res_p) else {}
         binds, local, io = spirv_bindings(spv)
         st = stages[k]
         cl = [classify(st, b, res) for b in binds]

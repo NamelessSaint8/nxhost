@@ -18,9 +18,10 @@ has no `android.tsv`, no `build` rows and no memory keys — nothing has been pa
 slot, writing each vertex into a stage buffer (Eglantine's `NX2_NOTES` rows 89 and 97 — the same reason high-detail LODs pop in and out there). The
 translator refuses them by name.
 
-On a device (`probes/vksh.c`, Lenovo Legion Y700, Adreno 840): 729 of 729 compute pipelines compile; 5,124 of 5,180 vertex/pixel pairs compile, and the
-56 that do not are stage-link failures — re-pairing them flips half to success — which is what the Mac chain's `vs_pad` fixes and the Android chain
-does not yet do. The device reports `VK_EXT_mesh_shader`, so the task/mesh gap is this host's, not the GPU's. `docs/SWITCH2.md` has the table.
+On a device (`probes/vksh.c`, Lenovo Legion Y700, Adreno 840): 729 of 729 compute pipelines compile and **5,180 of 5,180** vertex/pixel pairs compile.
+The pairs first came out 5,124: the 56 that did not were stage-link failures, which is what the Mac chain's `vs_pad` fixes — `dmsv_pad.py` now pads the
+vertex modules the same way (40 shaders, 40 outputs). The device reports `VK_EXT_mesh_shader`, so the task/mesh gap is this host's, not the GPU's.
+`docs/SWITCH2.md` has the table.
 
 Reproduce (the profile is the game, so `DM_GAME` is its program id):
 
