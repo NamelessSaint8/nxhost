@@ -43,7 +43,7 @@ class Entry(unittest.TestCase):
         desktop.install(Path('/opt/b/nx2android'))   # the bundle moved: the entry follows it
         # the host's own rendering of the moved path: a Windows Path spells it with backslashes, and the Exec line backslash-escapes each and doubles it at
         # the string level again, so one separator becomes four
-        want = '"\\\\opt\\\\b\\\\nx2android"' if os.name == 'nt' else '"/opt/b/nx2android"'
+        want = r'"\\\\opt\\\\b\\\\nx2android"' if os.name == 'nt' else '"/opt/b/nx2android"'
         self.assertEqual(lines(d.read_text(encoding='utf-8'))['Exec'], want)
         self.assertEqual(sorted(p.name for p in d.parent.iterdir()), ['nx2android.desktop'])   # no .tmp left behind
 
