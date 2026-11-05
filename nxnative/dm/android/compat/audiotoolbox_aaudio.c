@@ -83,6 +83,11 @@ static void stop_stream(AudioUnit u) {
     if (s != AAUDIO_STREAM_STATE_STOPPED) close_stream(u);
 }
 
+static int32_t audio_cb_frames(const struct dm_audio_unit *u) {   // the data callback's length: the game's own buffer request, else 5 ms; DM_AUDIO_CALLBACK overrides
+    const char *e = getenv("DM_AUDIO_CALLBACK");
+    if (e && atoi(e) > 0) return (int32_t)atoi(e);
+    return u->frames_hint > 0 ? u->frames_hint : (int32_t)(u->fmt.mSampleRate / 200);
+}
 OSStatus AudioOutputUnitStart(AudioUnit u) {
     // A stop and start (the pause menu holds the game, the app goes to the background) go on with the same stream, which played silence meanwhile. Each new
     // stream is a new AudioFlinger track, and on the Legion Y700 the app's first was a fast track (bypassing the output's Dolby DAP effect), the ones after it
@@ -113,11 +118,14 @@ OSStatus AudioOutputUnitStart(AudioUnit u) {
     AAudioStreamBuilder_setContentType(b, AAUDIO_CONTENT_TYPE_MUSIC);
     // 5 ms callbacks unless the host asks otherwise, as the iOS front end sets its I/O buffer (docs/agents/03-bringup.md "Crackling on iOS only"): left to itself AAudio
     // on the Legion Y700 called back with 6-960 frames, more than Tales of Eternia Remastered's CRI output keeps queued (about 2 blocks), so 2600 of 2000 callbacks
-    // underran and 11% of the sound was zero padding; with 240 frames, 0 underruns
-    AAudioStreamBuilder_setFramesPerDataCallback(b, u->frames_hint > 0 ? u->frames_hint : (int32_t)(u->fmt.mSampleRate / 200));
+    // underran and 11% of the sound was zero padding; with 240 frames, 0 underruns. A title that hands its audio over in lumps (Persona 4 Golden's 6-channel CRI output
+    // arrived about two blocks at a time, so every other 5 ms callback found an empty queue: 1.5 blocks queued, 1000 underruns of 2000) wants a callback as long as
+    // the lump: DM_AUDIO_CALLBACK=<frames> at start-up, then the buffer below is four of those
+    int32_t cb = audio_cb_frames(u);
+    AAudioStreamBuilder_setFramesPerDataCallback(b, cb);
     // The buffer has to absorb the jitter of the thread that feeds it. AAudio's own default left about two callbacks queued and Skyrim lost 310 of every 2000
     // callbacks to underruns (1550 ms of zero padding in 10 s: audible crackle and judder); four callbacks of slack fixed it. DM_AUDIO_BUFFER=<frames> overrides
-    { const char *e = getenv("DM_AUDIO_BUFFER"); int32_t want = e && atoi(e) > 0 ? (int32_t)atoi(e) : 4 * (u->frames_hint > 0 ? u->frames_hint : (int32_t)(u->fmt.mSampleRate / 200));
+    { const char *e = getenv("DM_AUDIO_BUFFER"); int32_t want = e && atoi(e) > 0 ? (int32_t)atoi(e) : 4 * cb;
       AAudioStreamBuilder_setBufferCapacityInFrames(b, want); }
     AAudioStreamBuilder_setDataCallback(b, on_data, u);
     AAudioStreamBuilder_setErrorCallback(b, on_error, u);
@@ -125,7 +133,7 @@ OSStatus AudioOutputUnitStart(AudioUnit u) {
     AAudioStreamBuilder_delete(b);
     if (r != AAUDIO_OK) { u->st = NULL; if (perf == AAUDIO_PERFORMANCE_MODE_LOW_LATENCY) { __android_log_print(ANDROID_LOG_WARN, "dmhost", "audio: the low-latency output would not open (%d %s): trying the normal mixer path", r, AAudio_convertResultToText(r)); continue; } return r; }
     // capacity alone does not set the queue: ask for the whole buffer, then report what the device granted
-    { const char *e = getenv("DM_AUDIO_BUFFER"); int32_t cb = u->frames_hint > 0 ? u->frames_hint : (int32_t)(u->fmt.mSampleRate / 200);
+    { const char *e = getenv("DM_AUDIO_BUFFER"); int32_t cb = audio_cb_frames(u);
       int32_t want = e && atoi(e) > 0 ? (int32_t)atoi(e) : 4 * cb, cap = AAudioStream_getBufferCapacityInFrames(u->st);
       if (want > cap) want = cap;
       AAudioStream_setBufferSizeInFrames(u->st, want);

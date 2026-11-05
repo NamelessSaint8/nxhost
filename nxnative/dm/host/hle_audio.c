@@ -9,6 +9,9 @@
 #include <sched.h>
 #include <stdatomic.h>
 #include <unistd.h>
+#ifdef __ANDROID__
+#include <sys/prctl.h>
+#endif
 
 enum { FMT_PCM16 = 2, STATE_STARTED = 0, STATE_STOPPED = 1, RATE = 48000 };
 enum { BK_NONE, BK_AU, BK_NULL };   // what is consuming an output's queue right now (aout.backend)
@@ -36,6 +39,8 @@ typedef struct {
     int id;                            // open sequence number (#N in the log; tells simultaneous outputs apart, e.g. Engage's Wwise and Unity's built-in FMOD)
     int nlog;                          // Start / Stop / Close lines logged so far (at most 32 per output)
     _Atomic uint64_t under_n, under_b; // underruns: times the pending queue was empty when the callback needed data / zero-filled bytes
+    uint8_t *ring; uint32_t ring_cap, ring_head, ring_tail, ring_lead; int ring_pre;   // the smoothing ring (pull_ring): the guest's bursts drained at once and played with ring_lead bytes of lead
+    _Atomic uint64_t wakes;            // guest wake-ups signalled (DM_AUDIO_LOG: tells a wake-starved producer from a slow mixer)
     uint64_t st_calls, st_count, st_qsum, st_u0, st_ub0; uint32_t st_fmin, st_fmax;   // callback-owned accumulators
     audio_stats st_report; _Atomic int st_pending; // one snapshot, consumed by the watchdog or Close under g_aos_lock
     _Atomic uint64_t cb_n;             // device callbacks of this output (the watchdog's evidence that the device still plays it)
@@ -74,8 +79,10 @@ static void *event_notify(void *p) {
     aout *a = p; dm_host_helper_qos(QOS_CLASS_USER_INTERACTIVE);   // the game's audio thread waits on the release event it signals
     for (;;) {
         dispatch_semaphore_wait(a->notify_sem, DISPATCH_TIME_FOREVER);
-        if (atomic_exchange_explicit(&a->notify_pending, 0, memory_order_acq_rel) && a->event)
+        if (atomic_exchange_explicit(&a->notify_pending, 0, memory_order_acq_rel) && a->event) {
+            atomic_fetch_add_explicit(&a->wakes, 1, memory_order_relaxed);
             hle_signal_system_event(a->event);
+        }
         // Acquire a producer that saw the old armed=1, so the pending recheck
         // cannot miss its release. Otherwise the producer or our re-arm posts.
         // A release-only store permits pending=1/armed=0 with both sides asleep.
@@ -88,16 +95,14 @@ static void *event_notify(void *p) {
     return NULL;
 }
 
-// Take n bytes from the pending queue and hand them to the output side; once a whole block has played, move it to released and notify the ordinary thread.
-static void pull(aout *a, uint8_t *dst, uint64_t n) {
-    int released = 0;
-    int16_t *s16 = (int16_t *)dst; uint64_t ns = n / 2;
+// Take what the guest has queued, up to n bytes, without zero-filling: returns the bytes copied. Once a whole block has been taken, it moves to released and
+// the guest is notified. A short return is the caller's underrun to count (pull, pull_device).
+static uint64_t pull_some(aout *a, uint8_t *dst, uint64_t n) {
+    int released = 0; uint64_t want = n;
     uint32_t qh = atomic_load_explicit(&a->q_head, memory_order_relaxed);
     while (n) {
         uint32_t qt = atomic_load_explicit(&a->q_tail, memory_order_acquire);
-        if (qh == qt || atomic_load_explicit(&a->state, memory_order_acquire) != STATE_STARTED) {
-            if (qh == qt && atomic_load_explicit(&a->state, memory_order_acquire) == STATE_STARTED) { atomic_fetch_add(&a->under_n, 1); atomic_fetch_add(&a->under_b, n); }
-            memset(dst, 0, n); break; }
+        if (qh == qt || atomic_load_explicit(&a->state, memory_order_acquire) != STATE_STARTED) break;
         gbuf *b = a->q[qh & (QMAX - 1)].b; uint8_t *bp = a->q[qh & (QMAX - 1)].ptr; uint64_t bs = a->q[qh & (QMAX - 1)].size;
         uint64_t k = bs - a->pos; if (k > n) k = n;
         if (bp) memcpy(dst, bp + a->pos, k); else memset(dst, 0, k);
@@ -113,15 +118,53 @@ static void pull(aout *a, uint8_t *dst, uint64_t n) {
             a->pos = 0; released = 1;
         }
     }
+    uint64_t got = want - n;
     uint32_t vb = atomic_load_explicit(&a->vol, memory_order_relaxed);
     if (vb != 0x3f800000u) {   // the output's volume (SetAudioOutVolume), as the audout session applies it to the PCM16 it plays; saturating
-        float v; memcpy(&v, &vb, 4);
-        for (uint64_t i = 0; i < ns; i++) { float x = s16[i] * v; s16[i] = (int16_t)(x > 32767.f ? 32767.f : x < -32768.f ? -32768.f : x); }
+        float v; memcpy(&v, &vb, 4); int16_t *s16 = (int16_t *)dst - got / 2;
+        for (uint64_t i = 0; i < got / 2; i++) { float x = s16[i] * v; s16[i] = (int16_t)(x > 32767.f ? 32767.f : x < -32768.f ? -32768.f : x); }
     }
     if (released) {
         if (a->event) notify_release(a);   // the notify thread only signals the guest's event: outputs without one (the host's renderer output, games that poll) need no wake-up
         if (a->rel_sem) dispatch_semaphore_signal(a->rel_sem);
     }
+    return got;
+}
+// The guest hands its audio over in bursts; the device wants one callback's worth every period. Persona 4 Golden's 6-channel CRI output queued about two 5 ms
+// blocks at a time, so every other 5 ms callback found the queue empty: 1.5 blocks queued, 25% of the sound zero padding (crackle and judder), the same with
+// 10 ms callbacks, 4 callbacks of device buffer, the blit present or a 4.6 GHz clock. So the output drains the guest into a ring of its own whenever it has
+// anything and plays from a lead of ring_lead bytes, which the bursts cannot reach: DM_AUDIO_RING_MS=<ms> (0 turns it off, default 80)
+static uint32_t ring_avail(const aout *a) { return a->ring_tail - a->ring_head; }
+static void ring_put(aout *a, const uint8_t *p, uint32_t n) {
+    uint32_t off = a->ring_tail % a->ring_cap, k = a->ring_cap - off; if (k > n) k = n;
+    memcpy(a->ring + off, p, k); if (n > k) memcpy(a->ring, p + k, n - k);
+    a->ring_tail += n;
+}
+static uint32_t ring_get(aout *a, uint8_t *p, uint32_t n) {
+    uint32_t avail = ring_avail(a); if (n > avail) n = avail;
+    uint32_t off = a->ring_head % a->ring_cap, k = a->ring_cap - off; if (k > n) k = n;
+    memcpy(p, a->ring + off, k); if (n > k) memcpy(p + k, a->ring, n - k);
+    a->ring_head += n; return n;
+}
+static void ring_drain(aout *a) {   // everything the guest has, while the ring has room; never zero-fills
+    if (!a->ring) return;
+    uint8_t tmp[4096];
+    while (a->ring_cap - ring_avail(a) >= sizeof tmp) { uint64_t got = pull_some(a, tmp, sizeof tmp); if (!got) break; ring_put(a, tmp, (uint32_t)got); if (got < sizeof tmp) break; }
+    if (a->ring_pre && ring_avail(a) >= a->ring_lead) a->ring_pre = 0;   // the lead is there: play
+}
+static uint64_t ring_take(aout *a, uint8_t *dst, uint64_t n) {   // the ring's or the guest's bytes, up to n; a shortfall is the caller's
+    return a->ring ? ring_get(a, dst, (uint32_t)n) : pull_some(a, dst, n);
+}
+static void shortfall(aout *a, uint8_t *dst, uint64_t got, uint64_t n) {   // count and silence what the producer did not deliver
+    if (got >= n) return;
+    if (atomic_load_explicit(&a->state, memory_order_acquire) == STATE_STARTED) { atomic_fetch_add(&a->under_n, 1); atomic_fetch_add(&a->under_b, n - got); }
+    memset(dst + got, 0, n - got);
+}
+// Take n bytes for the output side (the silent sink and the device callback): the guest's audio, silence where it has none.
+static void pull(aout *a, uint8_t *dst, uint64_t n) {
+    ring_drain(a);
+    if (a->ring_pre) { memset(dst, 0, n); return; }   // still filling the lead: silence, not an underrun
+    shortfall(a, dst, ring_take(a, dst, n), n);
 }
 
 // A six-channel output (front-left front-right center LFE back-left back-right) goes to the device as stereo, downmixed here with the audio renderer's default Q15 coefficients (hle_audren.c):
@@ -134,13 +177,15 @@ static int device_channels(const aout *a) { return a->ch == 6 ? 2 : a->ch; }
 static int pull_begin(aout *a) { return !atomic_exchange_explicit(&a->pulling, 1, memory_order_acquire); }
 static void pull_end(aout *a) { atomic_store_explicit(&a->pulling, 0, memory_order_release); }
 static void pull_device(aout *a, uint8_t *dst, uint64_t bytes) {
-    if (a->ch != 6) { pull(a, dst, bytes); return; }
+    ring_drain(a);
+    int pre = a->ring_pre;   // still filling the lead: the device gets silence
+    if (a->ch != 6) { if (pre) memset(dst, 0, bytes); else shortfall(a, dst, ring_take(a, dst, bytes), bytes); return; }
     enum { BLOCK = 128, CF = 32768, CC = 23167, CL = 8224, CB = 23167 };
     int16_t scratch[BLOCK * 6], *out = (int16_t *)dst;
     uint64_t frames = bytes / (2 * sizeof *out);
     while (frames) {
-        uint64_t n = frames < BLOCK ? frames : BLOCK;
-        pull(a, (uint8_t *)scratch, n * 6 * sizeof *scratch);
+        uint64_t n = frames < BLOCK ? frames : BLOCK, want = n * 6 * sizeof *scratch;
+        if (pre) memset(scratch, 0, want); else shortfall(a, (uint8_t *)scratch, ring_take(a, (uint8_t *)scratch, want), want);
         for (uint64_t i = 0; i < n; i++) {
             const int16_t *p = scratch + 6 * i;
             int64_t c = (int64_t)p[2] * CC + (int64_t)p[3] * CL;
@@ -268,7 +313,7 @@ static void *null_sink(void *p) {
     return NULL;
 }
 // Backend changes; callers hold g_aos_lock. pull() takes no lock, so joining a sink under it cannot deadlock
-static void null_start(aout *a) { atomic_store_explicit(&a->null_run, 1, memory_order_release); pthread_create(&a->null_th, NULL, null_sink, a); a->backend = BK_NULL; }
+static void null_start(aout *a) { a->ring_head = a->ring_tail = 0; a->ring_pre = a->ring_lead > 0; atomic_store_explicit(&a->null_run, 1, memory_order_release); pthread_create(&a->null_th, NULL, null_sink, a); a->backend = BK_NULL; }
 static void null_stop(aout *a) { atomic_store_explicit(&a->null_run, 0, memory_order_release); pthread_join(a->null_th, NULL); a->backend = BK_NONE; }
 static void backend_stop(aout *a) {
     if (a->backend == BK_AU) { AudioOutputUnitStop(a->au); a->backend = BK_NONE; }
@@ -282,6 +327,7 @@ static void backend_stop(aout *a) {
 static int real_audio(void) { const char *e = getenv("DM_AUDIO"); return e ? atoi(e) != 0 : DM_AUDIO_DEFAULT; }
 // Start the AudioUnit of an output whose backend is BK_NONE (callers hold g_aos_lock). When the device refuses (the session is held by a call, or is being reset), the silent sink stands in and the watchdog retries
 static void au_go(aout *a, uint64_t now) {
+    a->ring_head = a->ring_tail = 0; a->ring_pre = a->ring_lead > 0;   // a fresh start fills the ring's lead again
     OSStatus st = a->au ? AudioOutputUnitStart(a->au) : -1;
     a->wd_n = atomic_load_explicit(&a->cb_n, memory_order_relaxed); a->wd_t = now;
     if (!st) { a->backend = BK_AU; a->stalled = 0; return; }
@@ -364,6 +410,9 @@ static Result au_open_at(void *g, void *ev, const char *name, const uint8_t *par
     if (rate && rate != RATE) die("AudioOut sample rate %d not supported (48 kHz only)", rate);
     aout *a = calloc(1, sizeof *a);
     pthread_mutex_init(&a->m, NULL); a->event = ev; a->ch = ch;
+    { const char *e = getenv("DM_AUDIO_RING_MS"); int ms = e ? atoi(e) : 80;   // the smoothing ring's lead; 0 plays straight from the guest's queue (the old behaviour)
+      if (ms > 0) { a->ring_cap = (uint32_t)((uint64_t)RATE * (ms + 320) / 1000 * ch * 2); a->ring_lead = (uint32_t)((uint64_t)RATE * ms / 1000 * ch * 2);
+                    if ((a->ring = malloc(a->ring_cap))) a->ring_pre = 1; else a->ring_cap = a->ring_lead = 0; } }
     atomic_init(&a->state, STATE_STOPPED); atomic_init(&a->vol, 0x3f800000u);
     atomic_init(&a->q_head, 0); atomic_init(&a->q_tail, 0);
     atomic_init(&a->rel_head, 0); atomic_init(&a->rel_tail, 0);
@@ -463,7 +512,7 @@ static void au_close(void *g, void *lr) {
     while (atomic_load_explicit(&a->pulling, memory_order_acquire)) sched_yield();   // a late device callback still in pull() (pull_begin)
     dispatch_release(a->notify_sem);
     if (a->rel_sem) dispatch_release(a->rel_sem);
-    pthread_mutex_destroy(&a->m); int ch = a->ch; free(a);
+    pthread_mutex_destroy(&a->m); int ch = a->ch; free(a->ring); free(a);
     au_info(g, ch, STATE_STOPPED);
 }
 HLE_FORCE_BIG("_ZN2nn5audio13CloseAudioOutEPNS0_8AudioOutE", "close the audio output", void, h_au_Close, void *g) { au_close(g, dm_bigstack_caller(__builtin_return_address(0))); }
@@ -492,10 +541,29 @@ HLE_FORCE("_ZN2nn5audio28GetAudioOutBufferDataPointerEPKNS0_14AudioOutBufferE", 
 HLE_FORCE("_ZN2nn5audio25GetAudioOutBufferDataSizeEPKNS0_14AudioOutBufferE", "buffer data size", uint64_t, h_au_BufSize, const gbuf *b) { return b->size; }
 HLE_FORCE("_ZN2nn5audio20AppendAudioOutBufferEPNS0_8AudioOutEPNS0_14AudioOutBufferE", "append a buffer to play", unsigned, h_au_Append, void *g, gbuf *b) {
     aout *a = ao(g);
+    // A thread that feeds an audio output must not sit under Android's timer slack: its 5 ms sleeps stretch (P4G appends one 2880-byte block — 5 ms at
+    // 48 kHz, 6 channels — every 6.6 ms, so it handed over 151 blocks a second instead of 200 and the output zero-padded the missing 25%: crackle while the
+    // music kept its pitch). Linux's default slack is 50 us; Android's framework raises it to 10 ms for ordinary threads, which is wider than the block.
+#ifdef __ANDROID__
+    { static __thread int done; if (!done) { done = 1; prctl(PR_SET_TIMERSLACK, 1UL); } }
+#endif
     // Diagnostic switch DM_AUDIO_DUMP=<file>: every PCM block the game appends is written out as is (16-bit, 48 kHz, channel count per the OpenAudioOut log, usually 6). Used to judge "did a given sound play or not":
     // cross-correlate the original game's audio against it (this is how the tier-one drop sound was verified). The file is opened only when the variable is set; when unset this costs only one extra cached check
     { static FILE *df; static int on = -1; if (on < 0) { const char *e = getenv("DM_AUDIO_DUMP"); on = e != NULL; if (on && !(df = fopen(e, "wb"))) LOG("[RED] DM_AUDIO_DUMP cannot open %s", e); }
       if (df && b && b->ptr && b->size) fwrite(b->ptr, 1, (size_t)b->size, df); }
+    // DM_AUDIO_LOG=1: the first appends with their size and spacing, then the block rate and the bytes a second the game really hands over (P4G's 25% zero
+    // padding has to be told apart from a rate mismatch: 435,405 B/s against the 576,000 a 48 kHz 6-channel output needs)
+    { static int on = -1; static uint64_t t0, prev, nb, nbytes;
+      if (on < 0) on = getenv("DM_AUDIO_LOG") != NULL;
+      if (on && b && b->size) {
+          uint64_t now = now_ns(), sz = b->size; nbytes += sz; nb++;
+          if (nb <= 8) LOG("audio append %llu: %llu bytes, %.2f ms after the last", (unsigned long long)nb, (unsigned long long)sz, prev ? (now - prev) / 1e6 : 0.0);
+          if (!t0) t0 = now;
+          if (nb % 200 == 0) { double s = (now - t0) / 1e9; LOG("audio appends: %llu blocks, %.0f bytes each on average, %.0f B/s over %.1f s; %llu wake-ups for %llu released blocks",
+              (unsigned long long)nb, s > 0 ? (double)nbytes / (double)nb : 0.0, s > 0 ? (double)nbytes / s : 0.0, s,
+              (unsigned long long)atomic_load_explicit(&a->wakes, memory_order_relaxed), (unsigned long long)atomic_load_explicit(&a->q_head, memory_order_relaxed)); }
+          prev = now;
+      } }
     pthread_mutex_lock(&a->m);
     uint32_t qt = atomic_load_explicit(&a->q_tail, memory_order_relaxed);
     uint32_t qh = atomic_load_explicit(&a->q_head, memory_order_acquire);
