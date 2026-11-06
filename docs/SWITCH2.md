@@ -283,10 +283,17 @@ the same slot whose `0x20` was mistaken for the abort's message. Two of the thre
 
 Which leaves two readings with nothing yet to separate them: either `0x21` is `SendSyncRequest` and the message is assembled *by the kernel* from session
 state, which is a far larger surface than a stub, or `0x21` on Switch 2 is a different syscall and the identification rests on the API wrapper's branch
-structure rather than on the syscall's own behaviour. The lone `'S'` at `tls+0x110` is the discriminator, but a static search does not name it: 47 sites in
-`sdk` and 44 in `main` move the immediate `0x53` and none of them is in the chat path, so a single byte with three zeros after it is not the visible half
-of a four-byte magic store. Attributing it needs an observation on the write itself (a rewriter gate on the buffer, not a scan of the text), which is the
-next thing to build rather than the next thing to read. The dispatch is not committed: as written it asserts "this is a request" about data that is not one.
+structure rather than on the syscall's own behaviour.
+
+The `'S'` that looked like the discriminator is not one, and the search for its writer ends in this host rather than in the guest: `dm/host/thread.c`'s
+`guest_thread_set_id` stores the 32-bit thread id at `tlr + 0x110`, and Mario Kart World's `Prepare Thread` is thread 83 — `0x53`, which is `'S'` by
+coincidence. So the thread-local region is the guest's own TLRegion (state tag at `[0]`, outcome at `[8]`) with host bookkeeping at `+0x110` (thread id) and
+`+0x1f8` (thread object), and none of it is a message buffer. A title reaching `svc 0x21` on this host is therefore not sending the request the host knows
+how to read, which is what `HIPC message type 1217 not served` was saying.
+
+So the buffer's location is still open, and the next step is an observation rather than a scan: whatever chat hands the kernel, it is not in the TLRegion,
+and the two readings above still need separating. The dispatch is not committed: as written it asserts "this is a request" about data that is not one.
+
 
 
 
