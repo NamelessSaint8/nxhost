@@ -338,3 +338,26 @@ worth a longer run before calling it steady. The frame-time floor there was 20.8
 
 Two things this measurement corrects. A screenshot taken without `DM_NVN_SHOT_OUT` saves the **raw swap chain**, where the 2048×1152 crop sits in the top-left corner of a black 3840×2160 frame; that is what the present pass is for, and reading it as the presented picture would have sent the next hour into the wrong subsystem. And the remaining `[RED] failed to create compute pipeline: Threadgroup memory size (49152) exceeds the maximum threadgroup memory allowed (32768)` is a real ceiling rather than noise: Apple GPUs cap threadgroup memory at 32 KB, and some of this title's compute passes ask for 48 KB. Those passes are what stands between "a frame" and "a correct frame". The 24 GB guard is a default for hosts where runaway memory once panicked the machine, and on
 this 64 GB Mac it was silently bounding a title that needs about 40 GB -- the wall read as a rendering failure at frame 300.
+
+### Where the 40 GB goes
+
+The footprint above is this host's, not the title's: the guest maps **0.98 GB** of address regions while Metal holds **37.4 GB**. `DM_NVN_ALLOCPROF=1` was extended to
+answer the second half of that question -- a census of the residency set plus the guest's own description of any very large texture:
+
+```
+residency census: resident set 33.4 GB of 37.4 GB -- 1598 textures 30.1 GB, 1105 buffers 3.3 GB, 0 other 0.0 GB;
+  largest textures: 8192x8192x1 fmt 151 x68 mips12 s1 (5803 MB), ... (5803 MB), ... (5803 MB)
+big texture: guest 8192x8192x68 levels 12 target 4 fmt 0x8e → Metal 8192x8192x1 mips 12 array 68 fmt 194 1451 MB (ser 31607) standalone
+```
+
+One texture dominates: the title asks for **one** 8192x8192, 68-layer, 12-level sparse array. `tex_mtl` makes it in the guest's own block format at **1451 MB** (ASTC 8x8,
+0.25 bytes per texel), while the upload path (`pkg_upload_`) makes it at **5803 MB** (ASTC 4x4, one byte per texel) -- and three of those are alive at once, because a
+streamed package keeps its new texture, the one it replaced as `spare`, and a retiring copy until the GPU has passed it. Three 5.8 GB copies are 17.4 GB of the 33.4 GB.
+
+So the two things to fix are both in `nvn_mtl.m` and neither is about the title's own needs:
+
+- the upload path must keep the guest's block size (1451 MB instead of 5803 MB, a 4x saving on every streamed block texture);
+- the spare must not be a whole second copy of an array this size: it exists so in-flight draws keep reading the old one, which for a 1.5-5.8 GB texture is worth a
+  different answer -- wait for the fence, or re-upload in place.
+
+At ~1.45 GB with one copy, that array costs what the console's own budget would give it, and the run's ~40 GB should come down to the low teens.
