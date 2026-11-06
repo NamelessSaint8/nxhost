@@ -254,6 +254,30 @@ complete and idle when the run dies — but no frame has been presented, and the
 There is also one latent defect this pass surfaced and did not chase: the Mac chain prints `Attribute offset 0x5C is not valid` across 2,838 of those
 shaders. They translate and load, so it will show up as wrong geometry rather than as a crash, and it is the first thing to check when rendering starts.
 
+### The syscall behind the abort: svc 0x21
+
+The abort above is not the graphics server refusing something; it is a **syscall** the host answers with a placeholder. Following it out:
+
+- `sdk+0x6c1c90` loads a value out of the gsv session (`+4`) and hands it to a bare `svc #0x21` trampoline (`0x1a4500`), then reads its result from
+  `tpidrro_el0 + 8` rather than from the syscall's return.
+- That word is why the abort read `Result 0x20`: the SDK writes `0x20` into the thread-local region (`0x6c1ea4`) and later treats it as the outcome.
+  Reading an abort code without following which register produced it is how a status word gets mistaken for a message.
+- `0x21` is `SendSyncRequest`. The SDK's own wrapper settles it: `nn::sf::hipc::SendSyncRequest(handle, msg, size)` compares `msg` against
+  `tpidrro_el0` and calls `0x21` when they match, `0x22` (with the buffer) when they do not. `hle_svc.c` implements
+  `0x01–0x06, 0x1E, 0x26, 0x27, 0x29, 0x2C, 0x2D` — no `0x21` — so it fell through to `(placeholder returns success)`.
+
+Wiring `0x21` into the service handler (with the gsv session's `+4` minted as a real host session) disproved the buffer assumption rather than fixing it:
+
+```
+[RED] sf: gsv:u: HIPC message type 1217 not served
+[RED] svc 0x21 on handle 0xd0001 -> 0xe401
+```
+
+`1217` is `0x4c1`, chat's own tag word at `tls[0]`. So the thread-local region carries the thread's **state**, not an IPC message, and the SDK's
+`msg == tpidrro_el0` comparison only says which syscall its API wrapper picks. Where chat's request buffer actually is, is still unread — that is where
+this work resumes, and the dispatch is left uncommitted until it is known, because as written it asserts "this is a request" and it is not.
+
+
 
 
 
