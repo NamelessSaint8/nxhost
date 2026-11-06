@@ -428,7 +428,7 @@ static relocs_t relocs_of(const module_t *m) {
 
 static void relocate(module_t *m) {
     relocs_t rl = relocs_of(m);
-    int cnt[3] = {0}, nint = 0, nweak0 = 0;
+    int cnt[3] = {0}, nint = 0, nweak0 = 0, nzero = 0;
     unsigned nrelr = rl.relr ? relr_apply(m, rl.relr, rl.relrsz, (uint64_t)m->base) : 0;
     for (int t = 0; t < 2; t++)
         for (uint64_t i = 0; i < rl.n[t]; i++) {
@@ -440,6 +440,9 @@ static void relocate(module_t *m) {
             uint64_t v = bind_sym(m, s, &other, &weak0);
             if (other && nint++ < 8) LOG("%s: %s bound to an earlier module's definition (%s)", m->name, m->strtab + s->st_name, module_of((void *)v) ? module_of((void *)v)->name : "?");
             if (weak0 && nweak0++ < 8) LOG("%s: undefined weak %s bound to 0", m->name, m->strtab + s->st_name);
+            // A strong import nothing defines is 0 too, and the code that calls it does not test it: say so, or the first sign of it is a jump to address 0
+            // much later (Mario Kart World's nvn/vi layer call, main+0x959ae4, was this and nothing in the log named it).
+            if (!v && !weak0 && !s->st_shndx && nzero++ < 16) LOG("[RED] %s: undefined import %s bound to 0 (a call through it jumps to 0)", m->name, m->strtab + s->st_name);
             if (type == R_AARCH64_JUMP_SLOT) { *where = v; cnt[2]++; }
             else { *where = v + r->r_addend; cnt[1]++; }       // ABS64 / GLOB_DAT
         }
