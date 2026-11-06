@@ -365,7 +365,23 @@ with no crash and no change to the picture.
 
 Two costs remain, both visible in the same log:
 
-- each upload of this array also allocates a full-size CPU gather (`malloc(t->L.size)`, dirtied because unmapped pages are written as zero) and a full-size Metal staging buffer
-  (line 2436), so an upload of it costs two more copies of 5.8 GB while it runs;
-- the array is **sparse** on the console -- only mapped pages are paid for -- and the host materialises it dense. That is the big one: a dense 5.8 GB texture for a sparse
-  mapping is the difference between this host's ~30 GB and the console's budget, and Metal's own answer to it is sparse heaps rather than a smaller format.
+How much of it is even there settled the next step. `nvn_sparse_copy` already returned the bytes it could not map; logging that number (`36f3ea7c`) says:
+
+| array | storage | unmapped | mapped |
+|---|---|---|---|
+| BC6H 8192x8192x68 | 5805 MB | 5292 MB | **9%** |
+| ASTC 8x8 sRGB, two of them | 1453 MB each | 1323 / 1407 MB | **2-9%** |
+
+So a dense upload gathered and uploaded about five times the content the title had, and the gather itself -- `malloc` plus a zero-filling copy -- dirtied every byte of it:
+5.3 GB of zeros written per upload. The buffer now comes from a fresh anonymous mapping, which reads 0 without committing anything, and unmapped runs are left alone
+(`nvn_sparse_copy_zeroed`, `81e2bc61`):
+
+| frame 300 | before | after |
+|---|---|---|
+| resident | 30,907 MB | 28,829 MB |
+| GPU allocated | 29,654 MB | 29,552 MB |
+| rate | 3,296 frames in 178 s | 6,356 frames in 166 s |
+
+The zeros were memory traffic as well as memory, which is why the run nearly doubled. What remains is one full-size Metal staging buffer per upload (line 2436, 5.8 GB while an
+upload of that array runs) and the dense materialisation itself: the array is **sparse** on the console, only mapped pages are paid for, and a dense 5.8 GB texture for a 9% mapping
+is the difference between this host's ~29 GB and the console's budget. Metal's own answer to that is sparse heaps, not a smaller format.
