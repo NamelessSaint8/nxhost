@@ -807,16 +807,20 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         }
         regs[0] = 0; regs[1] = v; return 0;
     }
-    case 0x21: {   // SendSyncRequest(handle). sdk's own wrapper compares the caller's buffer against tpidrro_el0 before choosing this over 0x22, and this
-                   // host answers it with the placeholder below: whatever chat hands the kernel is not in the thread-local region. Diagnostic only -- it dumps
-                   // tlr+0x110 once and then falls through unchanged. That word is dm/host/thread.c's guest_thread_set_id thread id (Mario Kart World's Prepare
-                   // Thread is 83, which reads as 'S' and was mistaken for a request magic), so this is a provenance record rather than a way to find anything.
+    case 0x21: {   // HANDLE-PASSING REPLY PROBE (labelled): nn::chat::gsv reads a handle COUNT at tls+0x0c and the vi helper mints a handle from it, so a
+                   // result-only reply can never satisfy it. This writes count 1 and one handle value, with the result at tls+0x10 (the slot the 0x44
+                   // sentinel identified). It reads no request. Drop it when svc 0x21 is implemented; see docs/SWITCH2.md.
         uint8_t *tls = dm_tsd_get(g_keytlr);
-        if (!g_seen[0x21]) {
-            g_seen[0x21] = 1;
-            char b[3 * 0x20 + 1] = "";
-            if (tls) for (int k = 0; k < 0x20; k++) snprintf(b + 3 * k, 4, "%02x ", tls[0x110 + k]);
-            LOG("[svc21] tls+0x110: %s", tls ? b : "(no tls)");
+        if (!tls) { regs[0] = 0xe401; return 0; }
+        {
+            uint32_t *m = (uint32_t *)tls;
+            memset(tls, 0, 0x100);
+            m[0] = 0;                                   // HIPC response: type 0, no descriptors
+            m[1] = (uint32_t)((0x100 - 8) / 4);         // receive-list word count
+            *(uint32_t *)(tls + 0x0c) = 1;             // the handle count nn::chat::gsv reads
+            *(uint32_t *)(tls + 0x10) = 0;             // the result the SDK reads
+            *(uint32_t *)(tls + 0x14) = 0x1001;        // a handle value; hle_oslog.c logs what Attach receives
+            static int once; if (!once++) LOG("[svc21] handle-passing reply: count 1 at +0xc, result 0 at +0x10, handle 0x1001 at +0x14");
         }
         regs[0] = 0; return 0;
     }
