@@ -323,4 +323,18 @@ With those, the title presents:
 | frames | 300 presented before the host's own memory watchdog stopped the run: `resident 37382 MB, GPU allocated 38440 MB` against a 24 GB guard. Steady frames are 25–50 ms with 12 ms of GPU; 87 of the 300 were long, up to 11 s, all of them pipeline compiles for pairs the boot prebuild had not built |
 | the picture | a full-frame, correctly exposed render — 10.7 k distinct colours in a 160×90 sample, mean luma 103 — not a clear colour or a partial blit |
 
-Two things this measurement corrects. A screenshot taken without `DM_NVN_SHOT_OUT` saves the **raw swap chain**, where the 2048×1152 crop sits in the top-left corner of a black 3840×2160 frame; that is what the present pass is for, and reading it as the presented picture would have sent the next hour into the wrong subsystem. And the remaining `[RED] failed to create compute pipeline: Threadgroup memory size (49152) exceeds the maximum threadgroup memory allowed (32768)` is a real ceiling rather than noise: Apple GPUs cap threadgroup memory at 32 KB, and some of this title's compute passes ask for 48 KB. Those passes are what stands between "a frame" and "a correct frame".
+The 300 frames above are this host's guard, not the title's limit. With `DM_MEM_CAP_GB=48` the same dump ran to **frame 1585 in 414 s** with no
+watchdog message and no crash, and the footprint it holds is a working set rather than a leak:
+
+| frames | resident | GPU allocated | residency set |
+|---|---|---|---|
+| 300 | 39,169 MB | 38,357 MB | 2659 |
+| 600 | 39,483 MB | 38,553 MB | 3455 |
+| 1200 | 40,139 MB | 38,884 MB | 4756 |
+| 1500 | 40,485 MB | 38,977 MB | 4982 |
+
+~40.5 GB with 8 GB of the cap left, but it does creep: 1.3 GB over 1,200 frames while the residency set grows by 2,300 objects, which is slow enough to be
+worth a longer run before calling it steady. The frame-time floor there was 20.8 ms.
+
+Two things this measurement corrects. A screenshot taken without `DM_NVN_SHOT_OUT` saves the **raw swap chain**, where the 2048×1152 crop sits in the top-left corner of a black 3840×2160 frame; that is what the present pass is for, and reading it as the presented picture would have sent the next hour into the wrong subsystem. And the remaining `[RED] failed to create compute pipeline: Threadgroup memory size (49152) exceeds the maximum threadgroup memory allowed (32768)` is a real ceiling rather than noise: Apple GPUs cap threadgroup memory at 32 KB, and some of this title's compute passes ask for 48 KB. Those passes are what stands between "a frame" and "a correct frame". The 24 GB guard is a default for hosts where runaway memory once panicked the machine, and on
+this 64 GB Mac it was silently bounding a title that needs about 40 GB -- the wall read as a rendering failure at frame 300.
