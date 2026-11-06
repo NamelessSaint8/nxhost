@@ -2427,10 +2427,15 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
     }
 
     // A sparse pool's texture is read through a copy gathered from its page table, unmapped pages as 0 (a mip tail at a 4 KB offset has no host alias; reading the alias stopped the host with SIGBUS)
-    const uint8_t *src = t->mem; uint8_t *part = NULL;
+    const uint8_t *src = t->mem; uint8_t *part = NULL; size_t part_len = t->L.size ? t->L.size : 1; int part_map = 0;
     if (sparse) {
-        if (!(part = malloc(t->L.size ? t->L.size : 1))) MDIE("sparse texture copy of %llu bytes failed", (unsigned long long)t->L.size);
-        uint64_t miss = nvn_sparse_copy(t->pool, part, (uint64_t)(uintptr_t)t->mem, t->L.size); src = part;
+        // A fresh anonymous mapping reads 0 everywhere and commits nothing until written, so the gather pays only for pages that are mapped (a sparse texture is
+        // mostly not: Mario Kart World's 5805 MB array is 9%). malloc + a zero-filling copy dirtied the whole storage instead.
+        void *z = mmap(NULL, part_len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (z != MAP_FAILED) { part = z; part_map = 1; }
+        else if (!(part = malloc(part_len))) MDIE("sparse texture copy of %llu bytes failed", (unsigned long long)t->L.size);
+        uint64_t miss = part_map ? nvn_sparse_copy_zeroed(t->pool, part, (uint64_t)(uintptr_t)t->mem, t->L.size)
+                                 : nvn_sparse_copy(t->pool, part, (uint64_t)(uintptr_t)t->mem, t->L.size); src = part;
         // Diagnostic DM_NVN_ALLOCPROF=1: how much of a sparse texture is actually mapped. The gather allocates and dirties the whole storage, so the fraction that is
         // mapped is exactly the waste of materialising a sparse texture dense -- and it decides whether a chunked gather is worth writing.
         if (g_allocprof > 0 && t->L.size >= (512ull << 20)) MLOG("sparse gather: ser=%llu %llu MB of storage, %llu MB unmapped (%.0f%% mapped)", (unsigned long long)t->serial,
@@ -2454,7 +2459,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
             off += pitch * rows * z;
         }
     }
-    free(part);
+    if (part) { if (part_map) munmap(part, part_len); else free(part); }
     up_flush();
     return mt;
 }

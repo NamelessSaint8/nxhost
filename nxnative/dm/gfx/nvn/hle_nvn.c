@@ -2808,6 +2808,20 @@ uint64_t nvn_sparse_copy(const void *pool, void *dst, uint64_t a, uint64_t n) {
     }
     pthread_mutex_unlock(&g_vp_mu); return miss;
 }
+// Like nvn_sparse_copy, but a run of unmapped pages is left as it already is instead of being written as zeros: the caller's buffer must read 0 there, which a fresh
+// anonymous mapping does for free. A sparse texture is mostly unmapped (Mario Kart World's 5805 MB BC6H array is 9% mapped), so writing the zeros dirtied 5.3 GB of
+// CPU memory for content it did not have. Returns the unmapped byte count, as nvn_sparse_copy does.
+uint64_t nvn_sparse_copy_zeroed(const void *pool, void *dst, uint64_t a, uint64_t n) {
+    pthread_mutex_lock(&g_vp_mu); struct vpool *v = vpool_at(pool, a); uint64_t miss = 0;
+    if (!v) { pthread_mutex_unlock(&g_vp_mu); return n; }
+    for (uint64_t p = 0, o = a - (uint64_t)(uintptr_t)v->base; p < n;) {
+        uint64_t at = o + p, k = 0x1000 - (at & 0xFFF); if (k > n - p) k = n - p;
+        const vpte *e = at < v->size ? vpt_get(v, at) : NULL;
+        if (e && e->phys) memcpy((uint8_t *)dst + p, e->phys + (at & 0xFFF), k); else miss += k;
+        p += k;
+    }
+    pthread_mutex_unlock(&g_vp_mu); return miss;
+}
 // Runs of consecutive physical pages behind [a, a+n): fn on each (nonzero stops the walk and is returned), or 1 at the first page mapped after gen (gen ~0 = do not look)
 static int vpt_walk(const void *pool, uint64_t a, uint64_t n, uint64_t gen, int (*fn)(const uint8_t *, uint64_t, uint64_t), uint64_t arg) {
     pthread_mutex_lock(&g_vp_mu); struct vpool *v = vpool_at(pool, a); int r = 0;
