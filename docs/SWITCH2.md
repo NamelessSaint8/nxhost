@@ -219,8 +219,32 @@ What stops it now is the port's own surface rather than plumbing:
 ```
 
 `nn::gsv` is the Switch 2 graphics server. The call arrives from `nn::chat::gsv::GetMetadataStreamGeneration` on the guest's `Prepare Thread`, and the
-session is null because the host has no `gsv` code at all and no `nx2:gsv` connect is ever attempted — so nothing fills the SDK's session global. That is
-requirement 1 of "what a port would still need", met for the first time from the native side.
+session is null because the host has no `gsv` code at all and no `nx2:gsv` connect is ever attempted. That is requirement 1 of "what a port would still
+need", met for the first time from the native side — and reading the SDK says what "providing it" means, which is not a service to answer:
+
+- **there is no `nn::gsv::Initialize`.** gsv is *booted* — `BootWithTransferMemory(MemoryRegion, void*, size)` (`sdk+0x488580`) and
+  `BootWithRemoteMemory(MemoryRegion)` (`sdk+0x4887a0`) — and neither is called anywhere in `sdk`, so on hardware the system has already booted the
+  server before a title runs and the title only reads it back.
+- The read-backs are three accessors over one static group: `IsInitialized` (`0x4889e0`) tests a bit at `0xee1048`;
+  `GetGraphicsResourceUserId` (`0x4889f0`) returns the `u64` at `0xee1058`; `GetUserSession` (`0x488a00`) returns the static session at `0xee1050`
+  **only while that same `u64` is non-zero**. So the session's layout is fixed by the caller: mutex at `+0`, an id at `+4` that must be non-zero, the
+  resource user at `+8`.
+- Chat's demand on it is concrete: `nn::chat::gsv::Initialize` (`0x6c0810`) is a one-shot (atomic flag at `0xfe8348`) that locks **its own** object
+  (`this+0x218`), then locks the gsv session and feeds `session+4` to a generator — and it `AbortImpl`s on any error, so a missing session is fatal
+  rather than degrading.
+
+The host therefore supplies a booted session instead of booting one: a small host-side stand-in answers the three accessors from a block holding a
+zeroed mutex, `id = 1` and `resource_user = 1`. With it the null dereference is gone and the run fails in a well-formed way instead:
+
+```
+game called nn::diag abort: Result 0x20, call site sdk+0x6c085c     ; nn::chat::gsv::Initialize's own error path
+```
+
+So the stand-in is accepted past the lock and past the `+4` read, and what is rejected lies further in — either the meaning of that id or the next call
+(`0x6c1e30`, entered from `0x6c1d64` after a second `GetUserSession`). Worth stating plainly: this is a stand-in for the graphics server, not the
+server. NVN2 submits through gsv, so the real requirement stands — `BootWithRemoteMemory` taking a `MemoryRegion` is the shape of the thing that will
+have to exist before the title draws.
+
 
 Two things worth recording about the order of events, because they bound the work. The graphics stack is fully up *before* `chat:u` is contacted:
 `vi` vsync at 60 Hz, the `nvn-mtl` window with `present tick 60 Hz` and the present-thread time-constraint policy, the 11,603-entry shader map with a
