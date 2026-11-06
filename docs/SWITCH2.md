@@ -279,20 +279,30 @@ Wiring `0x21` into the service handler (with the gsv session's `+4` minted as a 
 One region further settles it the same way. At the syscall, `tls[0..0x7f]` is the tag followed by zeros, and `tls+0x100` is 16 zeros, a single `'S'` at
 `+0x110`, then zeros again — no `SFCI` request and no CMIF header anywhere the host could parse. `0x6c1c90` shows why: it writes a state tag
 (`0x4c1`, and after the call `0x4c1 | 1<<32`) at `tls[0]`, passes the session's `+4` field to the syscall, and reads the outcome back from `tls[8]` —
-the same slot whose `0x20` was mistaken for the abort's message. Two of the three slots are bookkeeping and the third was never a buffer.
-
-Which leaves two readings with nothing yet to separate them: either `0x21` is `SendSyncRequest` and the message is assembled *by the kernel* from session
-state, which is a far larger surface than a stub, or `0x21` on Switch 2 is a different syscall and the identification rests on the API wrapper's branch
-structure rather than on the syscall's own behaviour.
+the same slot whose `0x20` was mistaken for the abort's message. Two of the three slots are bookkeeping; the region itself is the kernel's message buffer,
+which simply holds no message.
 
 The `'S'` that looked like the discriminator is not one, and the search for its writer ends in this host rather than in the guest: `dm/host/thread.c`'s
 `guest_thread_set_id` stores the 32-bit thread id at `tlr + 0x110`, and Mario Kart World's `Prepare Thread` is thread 83 — `0x53`, which is `'S'` by
-coincidence. So the thread-local region is the guest's own TLRegion (state tag at `[0]`, outcome at `[8]`) with host bookkeeping at `+0x110` (thread id) and
-`+0x1f8` (thread object), and none of it is a message buffer. A title reaching `svc 0x21` on this host is therefore not sending the request the host knows
-how to read, which is what `HIPC message type 1217 not served` was saying.
+coincidence. The region is the guest's own TLRegion (state tag at `[0]`, outcome at `[8]`) plus host bookkeeping at `+0x110` (thread id) and `+0x1f8`
+(thread object).
 
-So the buffer's location is still open, and the next step is an observation rather than a scan: whatever chat hands the kernel, it is not in the TLRegion,
-and the two readings above still need separating. The dispatch is not committed: as written it asserts "this is a request" about data that is not one.
+### Where `svc 0x21` gets its message
+
+Eglantine is an Atmosphère-lineage kernel, so this is answerable by reading it rather than probing: `SvcId::SendSyncRequest = 0x21`
+(`src/core/hle/kernel/svc.h`), dispatched in `svc.cpp`, implemented in `svc/svc_ipc.cpp`. `SendSyncRequest(handle)` passes `message = 0, size = 0`, and
+the kernel then substitutes the **thread's local region** as the message buffer — `CleanupServerHandles`, `ReceiveMessage` and `SendMessage` all do
+`msg_ptr = GetPointer(tls)`, `buffer_size = MessageBufferSize` when no buffer is given. That is also why the SDK's wrapper compares `msg` against
+`tpidrro_el0`: passing the TLS pointer is how a caller asks for the kernel's buffer.
+
+So chat's call *does* name a buffer, and it is the thread-local region — which is why looking 0x100 past it found nothing. What is missing there is the
+**message**: at the syscall the region holds chat's tag `0x4c1` and zeros, because the step that would build a request (`0x6c1a50`, which asks for a
+readable handle and receives 0) has nothing to build one from. No gsv, no handle, no request — and the SDK then reads its own `0x20` status back as the
+result and aborts.
+
+One layout note from the same source: `k_process.cpp` writes the **thread handle** at `tls + 0x110`, the slot this host fills with an ordinal thread id.
+Same slot, different content — worth remembering for anything that reads it back.
+
 
 
 
