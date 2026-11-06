@@ -15,12 +15,12 @@ ipa	MarioKartWorld.ipa
 modules	main sdk subsdk0 subsdk1
 romfs_marker	System/AutoGenerateVegeTable.byaml
 
-# ---- Memory (provisional: address-space reservations only, nothing measured on a host yet) ----
-# A Switch 2 title plans its heap from a 12 GiB DRAM layout, and NVN2 keeps a second 8 GiB for the graphics server, so the reserve here is sized for
-# both. These are host reservations, not values the game reports: mem_reserve 20 GB covers 12 GiB + 8 GiB, mem_alias keeps the 16 GB alias region a
-# Switch 1 profile uses, and app_pool is the ~9.5 GiB a 12 GiB title plans (docs/SWITCH2.md). The first native run is what will say whether they are
-# right -- nothing has booted this profile yet.
-mem_reserve	0x500000000
+# ---- Memory (provisional: address-space reservations; the heap figure is measured, the rest is not) ----
+# A Switch 2 title plans its heap from a 12 GiB DRAM layout, and NVN2 keeps a second 8 GiB for the graphics server. These are host reservations, not
+# values the game reports. The heap is the part that has to be right: Mario Kart World's first SetHeapSize asks for 0x1fe400000 (8.16 GB), and this
+# host gives the heap whatever the reserve has left after the alias region and the stack, so 25 GB less 16 GB alias, 256 MB stack and a 256 MB gap
+# leaves 8.5 GB. A 20 GB reserve left only 3.5 GB and the title's first 54 MB allocation came back as 0x1000.
+mem_reserve	0x640000000
 mem_alias	0x400000000
 mem_stack	0x10000000
 app_pool	0x260000000

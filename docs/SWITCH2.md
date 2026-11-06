@@ -177,22 +177,36 @@ recorded as `{0x2000, 0x3601000}` through a global at `main+0x37790d0` — and t
 pair (non-zero, page-aligned, slot free), so the base was read out of a structure as though it held an address. Its startup path asks for the range
 through `main+0x84978`, which takes an out pointer and the 54 MB size.
 
-Two hypotheses are already excluded, which is what makes this a starting point rather than a mystery. The rewriter's skipped `AllocateAddressRegion`
-alignment patch is a **version gap**, not an oversight: the module is `nnSdk-Generic_21_4_0` (SDK 21) and that rule matches SDK 20's code shape. And no
-address region is allocated at all before the fault — instrumenting the HLE to log successful allocations prints nothing.
-
-So the open question is narrow: which field the guest reads as that base, not which NVN2 service is missing. Naming the call sites answers most of it,
-because each one is an import:
+Two hypotheses are excluded on the way to the real one. The rewriter's skipped `AllocateAddressRegion` alignment patch is a **version gap**, not an
+oversight: the module is `nnSdk-Generic_21_4_0` (SDK 21) and that rule matches SDK 20's code shape. And no address region is allocated before the
+fault. Naming the call sites resolves the rest, because each one is an import:
 
 | | |
 |---|---|
-| `main+0x84978` | `nn::os::AllocateMemoryBlock(&block, 0x3600000)` — returns **`0x1000`** |
+| `main+0x84978` | `nn::os::AllocateMemoryBlock(&block, 0x3600000)` — returned **`0x1000`** |
 | `sdk` | a 24-byte trampoline through a pool pointer at `0xe25fa0` |
-| `sdk` | `nn::os::detail::MemoryHeapManager::AllocateFromHeap(out, size)` — the allocator that hands back `0x1000` |
-| `main+0x84a10` | `nn::mem::StandardAllocator::Initialize(0x1000, 54 MB, false)` |
+| `sdk` | `nn::os::detail::MemoryHeapManager::AllocateFromHeap(out, size)` |
+| `main+0x84a10` | `nn::mem::StandardAllocator::Initialize(0x1000, 54 MB, false)` → registers `[0x2000, 0x3601000)` |
 
-`StandardAllocator::Initialize` then adds its own `0x1000` header and registers `[0x2000, 0x3601000)`, which is the range that faults. Every value in the
-crash is accounted for by that chain, and none of them is a host return: the base comes from the SDK's own memory-heap manager, so the next question is
-what initialises that manager — the NPDM's Switch 2 memory plan surface, not NVN2. That is where work on this port resumes.
+The base was not a Switch 2 unknown at all: **it was this profile's first-pass memory plan.** This host gives the heap whatever the reserve has left
+after the alias region and the stack, and a 20 GB reserve left only 3.5 GB. The title's first `SetHeapSize` asks for `0x1fe400000` (8.16 GB), so it was
+refused (`SetHeapSize OOM: req 0x1fe400000 > cap 0xe0000000`) — and with no heap the SDK's block allocator returns `0x1000` and the allocator's first
+store faults. Sized to 25 GB, which leaves 8.5 GB of heap:
+
+| | |
+|---|---|
+| `SetHeapSize` | accepted — `[mem] heap 7.97 GB (heap region 8.50 GB)` |
+| first address region | `1 address regions live`, ending `+1.00 GB` into the 16 GB alias region |
+| module initialisers | all of them — `main` 2,960 entries, `sdk` 88, `subsdk1` 4 |
+| `nnMain` | **reached** |
+
+With the RomFS mounted as `DM_ROMFS` it goes further than that: 164 supervisor calls, guest threads, an NVN shader lookup. What stops it now is
+plumbing rather than the port's own surface — the Metal shader cache has not been built for this title (`failed to load shader … metal_shader_cache`),
+and `chat:u` is a service the host does not serve (`the game connects to service chat:u itself`).
+
+Two things this measurement corrects, both of which this page asserted first: the crash was not a Switch 2 structure left unpopulated by the host, and
+the numbers in a first-pass memory plan are load-bearing rather than provisional detail.
+
+
 
 
