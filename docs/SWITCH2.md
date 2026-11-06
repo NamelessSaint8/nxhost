@@ -413,3 +413,21 @@ extra buffer argument, with `threadgroup spvUnsafeArray<T, N> x;` rewritten to `
 meant). A dispatch in flight could overlap the next, so the host wants a small ring of these buffers rather than one.
 
 That is the next piece of work: the rewrite in `dm/gfx/tools/dmsh_build.py`, the binding and ring in `nvn_mtl.m`'s dispatch path, and the 168 kernels as the test.
+
+The rewrite was compiled before any of it was built into the tool. On one of the 168 (`7caf175d0e2ada58_b.metal`, kernel `main0`), in `.gamedump/MarioKartWorld/spike/`, the
+declaration `threadgroup spvUnsafeArray<uint, 12288> _37;` is dropped and the kernel gains one parameter:
+
+```metal
+kernel void main0(constant spvDescriptorSetBuffer0& spvDescriptorSet0 [[buffer(0)]], uint3 gl_WorkGroupID [[threadgroup_position_in_grid]],
+                  uint3 gl_LocalInvocationID [[thread_position_in_threadgroup]],
+                  device spvUnsafeArray<uint, 12288>& _37 [[buffer(30)]])
+```
+
+`xcrun metal -std=metal3.0 -c` accepts it (10,464 bytes of air against the original's 10,240, and no threadgroup memory left), and two shapes that look natural do **not** work:
+
+- a **pointer** (`device spvUnsafeArray<...>* _37`) fails at the first store -- `_37[i]` becomes pointer arithmetic on whole arrays, and the prelude's assignment operator is address-space qualified;
+- index **31** is refused by the compiler itself: a kernel's `[[buffer(n)]]` must be 0..30 here, and only 0 is in use (the argument buffer), so 30 is free.
+
+That is the shape to build into `dmsh_build.py`: rewrite the declaration to that reference parameter, record the byte count in the shader's metadata, bind a ring of 48 KB buffers
+at argument-table index 30 in the dispatch path, and take the 168 kernels as the acceptance test. Changing the translator changes the chain version, so this costs one full
+retranslation of the 11,603 shaders and a new `b-<chain>` directory.
