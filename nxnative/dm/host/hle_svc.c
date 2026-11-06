@@ -807,6 +807,19 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         }
         regs[0] = 0; regs[1] = v; return 0;
     }
+    case 0x21: {   // SendSyncRequest(handle). sdk's own wrapper compares the caller's buffer against tpidrro_el0 before choosing this over 0x22, and this
+                   // host answers it with the placeholder below: whatever chat hands the kernel is not in the thread-local region. Diagnostic only -- it dumps
+                   // tlr+0x110 once and then falls through unchanged. That word is dm/host/thread.c's guest_thread_set_id thread id (Mario Kart World's Prepare
+                   // Thread is 83, which reads as 'S' and was mistaken for a request magic), so this is a provenance record rather than a way to find anything.
+        uint8_t *tls = dm_tsd_get(g_keytlr);
+        if (!g_seen[0x21]) {
+            g_seen[0x21] = 1;
+            char b[3 * 0x20 + 1] = "";
+            if (tls) for (int k = 0; k < 0x20; k++) snprintf(b + 3 * k, 4, "%02x ", tls[0x110 + k]);
+            LOG("[svc21] tls+0x110: %s", tls ? b : "(no tls)");
+        }
+        regs[0] = 0; return 0;
+    }
     default:
         if (!g_seen[num & 0xff]) { g_seen[num & 0xff] = 1; LOG("SVC %#x x0=%#llx x1=%#llx x2=%#llx (placeholder returns success)", num, regs[0], regs[1], regs[2]); }
         regs[0] = 0; return 0;
