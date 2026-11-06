@@ -115,9 +115,13 @@ static void render_main(void *arg) {
     for (int i = 0; i < NBUF; i++) { bufs[i] = (gbuf){data[i], sizeof data[i], 0}; free_list[i] = &bufs[i]; }
     dm_pcmout_start(out);
     LOG("audren: render thread started (%d buffers in flight, paced by the output)", NBUF);
-    // A second renderer is mixed in by default: the audren service mixes every renderer it opens into the one device
-    // output. DM_AUDREN_MIX2=0 leaves it out, for an A/B.
-    int mix2 = !(getenv("DM_AUDREN_MIX2") && !strcmp(getenv("DM_AUDREN_MIX2"), "0"));
+    // A second renderer is driven by default: the audren service mixes every renderer it opens into the one device
+    // output, and the game traps at boot if the second is never rendered. "fill" (the default) uses its frame only
+    // where the first renderer's frame is silent, so the holes are filled without adding the same logo/music twice;
+    // "add" sums it everywhere; "0" still renders it (a dependency) but does not use its output.
+    const char *m2 = getenv("DM_AUDREN_MIX2");
+    int mix_mode = (m2 && !strcmp(m2, "0")) ? 0 : (m2 && !strcmp(m2, "add")) ? 2 : 1;
+    double mix_gain = 1.0; { const char *e = getenv("DM_AUDREN_MIX2_GAIN"); if (e && *e) mix_gain = atof(e); }
     while (atomic_load(&g_open)) {
         while (!nfree) {   // wait for the output to hand a block back (silent sink / sound card, one every 5 ms); it signals each release, so the thread sleeps until then (it used to poll every 1 ms)
             gbuf *b = dm_pcmout_released(out);
@@ -138,12 +142,17 @@ static void render_main(void *arg) {
         }
         else { g_frame_n = 0; exec(g_handle[0], g_handle[1]); src = g_frame; got = g_frame_n; }   // SDK: generate commands → CPU processing (output taken in the host takeover) → signal the game's renderer event
         int16_t mixed[FRAME_MAX * 2];
-        if (mix2 && atomic_load(&g_open2) && got) {   // the second renderer, one frame per output frame
+        if (atomic_load(&g_open2) && got) {   // the second renderer, one frame per output frame; its render is a dependency
             memcpy(mixed, src, (size_t)got * 4);
             g_frame_n = 0; exec(g_handle2[0], g_handle2[1]);
             int sec_n = g_frame_n < got ? g_frame_n : got;
-            for (int i = 0; i < sec_n * 2; i++) { int v = mixed[i] + g_frame[i]; mixed[i] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v); }
-            src = mixed;
+            if (mix_mode == 2) {   // add everywhere
+                for (int i = 0; i < sec_n * 2; i++) { int v = mixed[i] + (int)(g_frame[i] * mix_gain); mixed[i] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v); }
+            } else if (mix_mode == 1) {   // fill only where the first frame is silent
+                int silent = 1; for (int i = 0; i < got * 2 && silent; i++) silent = mixed[i] == 0;
+                if (silent) for (int i = 0; i < sec_n * 2; i++) mixed[i] = (int16_t)(g_frame[i] * mix_gain);
+            }
+            if (mix_mode) src = mixed;
         }
         int cur_n = got ? got : 240;
         int16_t cur[FRAME_MAX * 2];
