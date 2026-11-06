@@ -1399,8 +1399,13 @@ NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h)
 }
 static void submit_now(NVNqueue *q, int n, const NVNcommandHandle *h) {
     SEQ("submit %d handles", n);
+    // One submission at a time, and in the asynchronous case the lock the replay thread holds for its job. It is taken before the graphics gate, so a
+    // submission queued behind another is not in-flight graphics work and a suspend does not wait for it, and the whole submission is host work from
+    // here: the prepare step below can wait on a native shader compile while it holds the lock (nvn_mtl.h: mtl_prepare runs outside the gate).
+    dm_host_work++;
+    dm_host_mutex_lock(&g_sub_mu);
+    mtl_prepare();
     gfx_enter();
-    pthread_mutex_lock(&g_sub_mu);   // one submission at a time, and in the asynchronous case the lock the replay thread holds for its job
     uint64_t t0 = now_ns(), c0 = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID), i0, y0, s0 = thr_sys_ns(); thr_counts(&i0, &y0);
     ((queue_t *)q)->submits++;
     mtl_queue_activate(((const queue_t *)q)->serial);
@@ -1420,6 +1425,7 @@ static void submit_now(NVNqueue *q, int n, const NVNcommandHandle *h) {
     atomic_fetch_add(&g_sub_cpu_ns, dc); atomic_fetch_add(&g_cum_sub_cpu_ns, dc);
     atomic_fetch_add(&g_sub_instr, di); atomic_fetch_add(&g_cum_sub_instr, di);
     gfx_leave();
+    dm_host_work--;
 }
 
 // Commands that only affect GPU state / only execute on the GPU: the null device only counts them (the thunk has already counted)
