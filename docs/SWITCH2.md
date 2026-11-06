@@ -66,7 +66,8 @@ stream, the GPU memory model and the services above.
 4. **A task/mesh pipeline** for the geometry drawn that way (`ISBERD`/`ISBEWR`): Vulkan's `VK_EXT_mesh_shader` or Metal's mesh stages, with the
    stage buffer those two stages hand each other. The 26 programs above are exactly those draws.
 5. **Memory**: a title that plans 9.5 GiB does not fit a phone today, and the dump above needs 22 GB of RomFS on the device (the data pack would be
-   pushed whole). A port would have to prove the game survives a smaller reported total, or target a device that has it.
+   pushed whole). Measured in an emulator, it does *not* survive a smaller reported total: given 10 GiB it touches memory that only exists in the
+   12 GiB layout and never reaches its shaders (see below). The total is therefore fixed, and a port needs a host that can back it.
 
 Two facts make the work bounded rather than open-ended: the shaders build (above), and running the title's own arm64 code means no CPU emulation is
 needed once the services answer — the same trade this port already makes for Switch 1.
@@ -111,3 +112,43 @@ adb push vksh shaders.dmsv shader_pairs.tsv /data/local/tmp/mkw/ && adb shell /d
 `NamelessSaint8/mkwsw2` is Eglantine's `nx2` branch with Mario Kart World fixes on top (`mkw-eglantine`), and Eglantine keeps an Android frontend
 (`src/android`, per-SoC presets in `CMakeLists.txt`) with `hesanaltdoesgithub/Eglantine`'s `nx2-android` branch building an APK. That path runs a title
 on a phone as an emulator; this port's would run it natively. They share the shader tooling above and nothing else.
+
+It is also the only host that executes a Switch 2 title today, which makes it the one way to ask what the port's fifth requirement costs in practice.
+Measured on the same Y700 with the whole 22.9 GB dump in place (206,344 files), best run:
+
+| | |
+|---|---|
+| memory layout | forced to 12 GiB by the emulator for any `0400…` program (`core.cpp`) |
+| shaders lowered | 1,186 |
+| pipelines | 201 graphics, 15 compute, 0 task/mesh |
+| audio | ~45 s, at real time |
+| then | no further progress, in one of two shapes: `VK_TIMEOUT` / `VK_ERROR_DEVICE_LOST` uncaught on the Vulkan worker thread, or a silent stop with every thread asleep after the last `nx2:gpu` submit |
+
+The cause is memory, and the logs say so directly: `lowmemorykiller` logs continuous low-pressure events through the run, and the GPU waits then expire.
+
+| | |
+|---|---|
+| guest (sizes its heap from the reported total) | ~9 GB |
+| emulator overhead | ~1.0 GB |
+| Android underneath | ~3.8 GB |
+| host | 15.6 GB, ~15.2 GB usable |
+| peak resident, 3× internal resolution | 10.81 GB, `MemFree` 16 MB |
+| peak resident, 1× internal resolution | 9.79 GB, `MemFree` 33 MB |
+
+So the arithmetic closes to ~13.8 of 15.2 GB, and the margin is spent by page cache: the title streams 22.9 GB of RomFS through the kernel while the
+guest holds its heap. Dropping the internal resolution from 3× to 1× is worth about 1 GB and did not change the outcome alone.
+
+Three things were ruled out rather than assumed:
+
+- **the shaders**: the Khronos validation layer, enabled on the device for a full run, reported nothing about them — only pre-existing
+  `vkCmdDrawIndexed` / `vkCmdEndQuery` misuse in the emulator itself;
+- **a 16-bit storage-write path** the emulator takes on Qualcomm drivers, whose helper function it defined under a different condition than it called
+  it (fixed; the stall reproduces with the retry loop removed, so it was not the cause);
+- **a smaller reported total**: presented with 10 GiB, the title logs 62 `Unmapped InvalidateNCE … @ 0x0` straight after the Switch 2 `InfoType 33`
+  queries and never reaches shader compilation. It sizes its heap from the total and then addresses memory that only the 12 GiB layout provides.
+
+For this port that is the useful answer: the ~1 GB of emulator overhead is real, so a native host fits where this one does not, but it is small next to
+a 9 GB guest — a 16 GB device stays marginal and a 24 GB one is comfortable. Two operational notes for reproducing it: a setting in Eglantine's
+`config.ini` only takes effect when its companion `key\default` line is also flipped, and any rebuild of the shader translator moves the bundle
+(`dmsh_chain.lock`).
+
