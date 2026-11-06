@@ -223,6 +223,16 @@ static void res_add_at(id<MTLAllocation> allocation, int line) { @autoreleasepoo
     if (!g_res_objects) g_res_objects = [NSHashTable weakObjectsHashTable];
     if ([g_res_objects containsObject:r]) { pthread_mutex_unlock(&g_res_mu); return; }   // already resident (a shared texture resolved again): marking the set dirty would cost a commit that changes nothing
     { int k = 0; while (k < RS_SITES - 1 && g_rs_site[k].line && g_rs_site[k].line != line) k++; g_rs_site[k].line = line; g_rs_site[k].n++; g_rs_site[k].bytes += r.allocatedSize; }
+    // Diagnostic DM_NVN_ALLOCPROF=1: name the allocation site of an allocation big enough to matter (a multi-GB texture is 1.5-6 GB of the footprint, and the call-site line is
+    // the only thing that says which path made it)
+    if (g_allocprof > 0 && r.allocatedSize >= (512ull << 20)) {
+        int shp = [r respondsToSelector:@selector(pixelFormat)] && [r respondsToSelector:@selector(mipmapLevelCount)];
+        if (shp) { id t = (id)r;
+            MLOG("huge allocation: line %d made %.0f MB -- texture %lux%lux%lu mips %lu array %lu fmt %lu %s", line, (double)r.allocatedSize / 1048576.0, (unsigned long)[t width],
+                 (unsigned long)[t height], (unsigned long)MAX([t depth], 1l), (unsigned long)[t mipmapLevelCount], (unsigned long)[t arrayLength], (unsigned long)[t pixelFormat],
+                 [r respondsToSelector:@selector(heap)] && ((id<MTLResource>)r).heap ? "placed" : "standalone"); }
+        else MLOG("huge allocation: line %d made %.0f MB -- a buffer of %lu bytes", line, (double)r.allocatedSize / 1048576.0, (unsigned long)[(id<MTLBuffer>)r length]);
+    }
     [g_res addAllocation:(id<MTLAllocation>)r];
     [g_res_objects addObject:r];
     g_res_dirty = 1;
