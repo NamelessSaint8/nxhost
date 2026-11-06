@@ -2640,7 +2640,18 @@ static int tex_cpu_content(const tex_t *t) {
     return 1;
 }
 static id<MTLTexture> tex_mtl_(const tex_t *ct);
-static id<MTLTexture> tex_mtl(const tex_t *ct) { AP_B; id<MTLTexture> r = tex_mtl_(ct); AP_E(4); return r; }
+static id<MTLTexture> tex_mtl(const tex_t *ct) { AP_B; id<MTLTexture> r = tex_mtl_(ct); AP_E(4);
+    // Diagnostic DM_NVN_ALLOCPROF=1: a texture this large is where a footprint far above the title's own mapping lives (the census groups them), so name the
+    // guest's own description of it: dimensions, levels, layers, target and format as the title asked, beside what Metal allocated
+    if (g_allocprof > 0 && r && (r.width >= 4096 || r.height >= 4096) && (r.arrayLength >= 8 || r.mipmapLevelCount >= 8)) {
+        static int n;
+        if (n++ < 40) MLOG("big texture: guest %ux%ux%u levels %u target %d fmt %#x → Metal %lux%lux%lu mips %lu array %lu fmt %lu %.0f MB (ser %llu) %s",
+            ct->d.width, ct->d.height, ct->d.depth, ct->d.levels, ct->d.target, ct->d.format, (unsigned long)r.width, (unsigned long)r.height,
+            (unsigned long)MAX(r.depth, 1ul), (unsigned long)r.mipmapLevelCount, (unsigned long)r.arrayLength, (unsigned long)r.pixelFormat,
+            (double)r.allocatedSize / 1048576.0, (unsigned long long)ct->serial, r.heap ? "PLACED in a heap" : "standalone");
+    }
+    return r;
+}
 // A sparse texture is bound from its first level whose pages, and those of every smaller level, are all mapped: a view of levels [r, n) samples as with a minimum LOD of r.
 // The translator drops TEX's LOD clamp and residency predicate, so Monster Hunter Rise's streamed textures were sampled at levels it had not mapped yet; those read 0, which ASTC
 // decodes as its error colour (magenta clothes on the title screen). Single-layer 2D textures only; the view follows each upload, as the mappings change only with one
@@ -2874,6 +2885,36 @@ void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
         MLOG("GPU allocation growth by function: pass end %llu MB, pass begin %llu MB, pipeline fetch %llu MB, argument buffers %llu MB, texture fetch %llu MB", g_ap_fn[0] >> 20, g_ap_fn[1] >> 20, g_ap_fn[2] >> 20, g_ap_fn[3] >> 20, g_ap_fn[4] >> 20); }
     if (g_allocprof > 0) { int top[4] = {-1, -1, -1, -1}; for (int o = 0; o < 64; o++) for (int k = 0; k < 4; k++) if (top[k] < 0 || g_ap_bytes[o] > g_ap_bytes[top[k]]) { for (int j = 3; j > k; j--) top[j] = top[j - 1]; top[k] = o; break; }
         MLOG("GPU allocation growth by op: op%d %llu MB, op%d %llu MB, op%d %llu MB, op%d %llu MB", top[0], g_ap_bytes[top[0]] >> 20, top[1], g_ap_bytes[top[1]] >> 20, top[2], g_ap_bytes[top[2]] >> 20, top[3], g_ap_bytes[top[3]] >> 20); }
+    // Diagnostic DM_NVN_ALLOCPROF=1: what the residency set actually holds, against the device's own total. The difference is what the host allocates without marking resident
+    // (command buffers, pipeline states, binary archives, Metal's own bookkeeping), which is where a footprint far above the title's mapped memory has to be.
+    if (g_allocprof > 0) {
+        uint64_t ntex = 0, btex = 0, nbuf = 0, bbuf = 0, noth = 0, both = 0, big[3] = {0, 0, 0};
+        char bigd[3][72] = {{0}};
+        @autoreleasepool {
+            pthread_mutex_lock(&g_res_mu);
+            for (id o in g_res_objects) {
+                if (![o conformsToProtocol:@protocol(MTLAllocation)]) { noth++; continue; }
+                uint64_t sz = (uint64_t)[(id<MTLAllocation>)o allocatedSize];
+                if ([o respondsToSelector:@selector(pixelFormat)] && [o respondsToSelector:@selector(mipmapLevelCount)]) {   // a texture (the class is not nameable in this translation unit)
+                    id<MTLTexture> t = o; ntex++; btex += sz;
+                    for (int k = 0; k < 3; k++) if (sz > big[k]) {
+                        for (int m = 2; m > k; m--) { big[m] = big[m - 1]; memcpy(bigd[m], bigd[m - 1], sizeof bigd[0]); }
+                        big[k] = sz;
+                        snprintf(bigd[k], sizeof bigd[0], "%lux%lux%lu fmt %lu x%lu mips%lu s%lu", (unsigned long)t.width, (unsigned long)t.height,
+                                 (unsigned long)MAX(t.depth, 1ul), (unsigned long)t.pixelFormat, (unsigned long)t.arrayLength, (unsigned long)t.mipmapLevelCount,
+                                 (unsigned long)t.sampleCount);
+                        break; }
+                }
+                else if ([o respondsToSelector:@selector(length)]) { nbuf++; bbuf += sz; }
+                else { noth++; both += sz; }
+            }
+            pthread_mutex_unlock(&g_res_mu);
+        }
+        MLOG("residency census: resident set %.1f GB of %.1f GB -- %llu textures %.1f GB, %llu buffers %.1f GB, %llu other %.1f GB; largest textures: %s (%llu MB), %s (%llu MB), %s (%llu MB)",
+             (double)(btex + bbuf + both) / 1073741824.0, (double)g_dev.currentAllocatedSize / 1073741824.0, (unsigned long long)ntex, (double)btex / 1073741824.0,
+             (unsigned long long)nbuf, (double)bbuf / 1073741824.0, (unsigned long long)noth, (double)both / 1073741824.0,
+             bigd[0], big[0] >> 20, bigd[1], big[1] >> 20, bigd[2], big[2] >> 20);
+    }
 }
 void mtl_pkg_stats(uint64_t *uploads, uint64_t *reuploads) { *uploads = g_pkg_uploads; *reuploads = g_pkg_reuploads; }
 uint64_t mtl_pkg_edge_skips(void) { return g_pkg_edge_skips; }
