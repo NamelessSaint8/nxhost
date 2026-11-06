@@ -2298,6 +2298,7 @@ static int g_direct_upload_on = -1; static uint64_t g_direct_uploads, g_direct_d
 static int direct_upload_on(void) { if (g_direct_upload_on < 0) { const char *e=getenv("DM_NVN_DIRECT_UPLOAD"); g_direct_upload_on=!e||atoi(e); } return g_direct_upload_on; }
 int nvn_host_readable(uint64_t a, uint64_t n);   // hle_nvn.c: guest memory and sparse pools
 int nvn_sparse_pool(const void *pool); uint64_t nvn_sparse_gen(void); uint64_t nvn_sparse_copy(const void *pool, void *dst, uint64_t a, uint64_t n);
+uint64_t nvn_sparse_copy_zeroed(const void *pool, void *dst, uint64_t a, uint64_t n);
 int nvn_sparse_since(const void *pool, uint64_t a, uint64_t n, uint64_t gen, uint64_t stamp); void nvn_sparse_protect(const void *pool, uint64_t a, uint64_t n); int nvn_sparse_mapped(const void *pool, uint64_t a, uint64_t n);
 // reuse: a texture of the same description, idle on the GPU, to upload into instead of a new one; keep: usage the texture it replaces was upgraded to (tex_upgrade), which the new one
 // is made with: a texture drawn into and re-uploaded (a CPU write into one the game renders into) was made without render-target use again and upgraded at its next attachment, a
@@ -2429,7 +2430,11 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
     const uint8_t *src = t->mem; uint8_t *part = NULL;
     if (sparse) {
         if (!(part = malloc(t->L.size ? t->L.size : 1))) MDIE("sparse texture copy of %llu bytes failed", (unsigned long long)t->L.size);
-        nvn_sparse_copy(t->pool, part, (uint64_t)(uintptr_t)t->mem, t->L.size); src = part;
+        uint64_t miss = nvn_sparse_copy(t->pool, part, (uint64_t)(uintptr_t)t->mem, t->L.size); src = part;
+        // Diagnostic DM_NVN_ALLOCPROF=1: how much of a sparse texture is actually mapped. The gather allocates and dirties the whole storage, so the fraction that is
+        // mapped is exactly the waste of materialising a sparse texture dense -- and it decides whether a chunked gather is worth writing.
+        if (g_allocprof > 0 && t->L.size >= (512ull << 20)) MLOG("sparse gather: ser=%llu %llu MB of storage, %llu MB unmapped (%.0f%% mapped)", (unsigned long long)t->serial,
+            (unsigned long long)(t->L.size >> 20), (unsigned long long)(miss >> 20), 100.0 * (double)(t->L.size - miss) / (double)t->L.size);
     }
     up_begin();
     id<MTLBuffer> stg = [g_dev newBufferWithLength:total ? total : 16 options:MTLResourceStorageModeShared];
