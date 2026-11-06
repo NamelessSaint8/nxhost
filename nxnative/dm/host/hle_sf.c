@@ -13,19 +13,33 @@
 
 #define SF_H0 0xd0000u   // session handles: outside the kernel handle table (0x1000 + slot, 4096 slots, hle_thread.c)
 #define SF_MAX 64
-static struct { char name[16]; int used, domain; unsigned seen; } g_sf[SF_MAX];
+static struct { char name[16]; int used, domain, anon; uint32_t handle; unsigned seen; } g_sf[SF_MAX];
 static pthread_mutex_t g_sf_mu = PTHREAD_MUTEX_INITIALIZER;
 static const char *const sf_served[] = {"olsc:u", "chat:u"};
 
 static int sf_slot(uint32_t h) {
     unsigned i = h - SF_H0;
-    return i < SF_MAX && g_sf[i].used ? (int)i : -1;
+    if (i < SF_MAX && g_sf[i].used && !g_sf[i].anon) return (int)i;   // the handles the host issued: slot = handle - SF_H0
+    for (unsigned k = 0; k < SF_MAX; k++) if (g_sf[k].used && g_sf[k].anon && g_sf[k].handle == h) return (int)k;   // adopted ones, by the handle they came in on
+    return -1;
+}
+// A handle the host never issued: the guest's own (the SDK builds requests against client objects whose +4 is a kernel handle, and on Horizon that is a
+// small number). The host serves every service generically, so it answers this one under a name of its own rather than refusing it.
+static int sf_adopt(uint32_t h) {
+    pthread_mutex_lock(&g_sf_mu);
+    unsigned i = 0; while (i < SF_MAX && g_sf[i].used) i++;
+    if (i == SF_MAX) { pthread_mutex_unlock(&g_sf_mu); return -1; }
+    snprintf(g_sf[i].name, sizeof g_sf[i].name, "svc:%#x", h); g_sf[i].used = 1; g_sf[i].domain = 0; g_sf[i].anon = 1; g_sf[i].handle = h;
+    g_sf[i].seen = 0;
+    pthread_mutex_unlock(&g_sf_mu);
+    return (int)i;
 }
 static uint32_t sf_new(const char *name, int domain) {
     pthread_mutex_lock(&g_sf_mu);
     unsigned i = 0; while (i < SF_MAX && g_sf[i].used) i++;
     if (i == SF_MAX) die("sf: more than %d host service sessions", SF_MAX);
-    strlcpy(g_sf[i].name, name, sizeof g_sf[i].name); g_sf[i].used = 1; g_sf[i].domain = domain; g_sf[i].seen = 0;
+    strlcpy(g_sf[i].name, name, sizeof g_sf[i].name); g_sf[i].used = 1; g_sf[i].domain = domain; g_sf[i].anon = 0;
+    g_sf[i].handle = SF_H0 + i; g_sf[i].seen = 0;
     pthread_mutex_unlock(&g_sf_mu);
     return SF_H0 + i;
 }
@@ -64,17 +78,25 @@ HLE_FORCE("_ZN2nn2sf4hipc6client16DuplicateSessionEPNS_3svc6HandleES4_", "contro
 HLE_FORCE("_ZN2nn2sf4hipc6client18DuplicateSessionExEPNS_3svc6HandleES4_j", "control request: clone a session (with a tag) → a new host session to the same service", Result, h_sf_DupEx,
           uint32_t *out, uint32_t h, unsigned tag) { (void)tag; return h_sf_Dup(out, h); }
 
-HLE_FORCE("_ZN2nn2sf4hipc15SendSyncRequestENS_3svc6HandleEPvm", "send a request on a session (svcSendSyncRequest) → answered by the host for its sessions", Result, h_sf_Send,
-          uint32_t h, uint32_t *m, uint64_t size) {
+// Shared with svc 0x21: a title that sends through the syscall instead of the API names the same sessions, and dm_sf_new mints one for a service
+// the host answers without a name of its own.
+static Result sf_send(uint32_t h, uint32_t *m, uint64_t size) {
     int i = sf_slot(h);
-    if (i < 0 || size < 0x40) { LOG("[RED] sf: SendSyncRequest on %#x (%llu bytes), not a host session", h, (unsigned long long)size); return 0xe401u; }   // kernel ResultInvalidHandle
+    if (i < 0) {
+        if (size < 0x40 || (i = sf_adopt(h)) < 0) { LOG("[RED] sf: SendSyncRequest on %#x (%llu bytes) with no room to serve it", h, (unsigned long long)size); return 0xe401u; }
+        module_t *mod = module_of(__builtin_return_address(0));
+        LOG("sf: SendSyncRequest on %#x, a handle the host never issued -- served as %s (from %s+%#llx, header %08x %08x)", h, g_sf[i].name,
+            mod ? mod->name : "?", mod ? (unsigned long long)((uintptr_t)__builtin_return_address(0) - (uintptr_t)mod->base) : 0, m[0], m[1]);
+    }
     uint8_t *base = (uint8_t *)m;
     unsigned type = m[0] & 0xffff, nx = m[0] >> 16 & 15, nabw = (m[0] >> 20 & 15) + (m[0] >> 24 & 15) + (m[0] >> 28 & 15), ndw = m[1] & 0x3ff;
     uint32_t *p = m + 2;
     if (m[1] >> 31) { uint32_t sh = *p++; p += (sh & 1 ? 2 : 0) + (sh >> 1 & 15) + (sh >> 5 & 15); }   // special header: process ID, copy and move handles
     p += nx * 2 + nabw * 3;
     size_t data = (size_t)((uint8_t *)p - base), cm = (data + 15) & ~(size_t)15;
-    int dom = g_sf[i].domain && (type == 4 || type == 6);
+    // An adopted session's domain state is not known: the message says it (a domain request puts its header before the CMIF part)
+    int dom = g_sf[i].anon ? (*(uint32_t *)(base + cm) != 0x49434653 && *(uint32_t *)(base + cm + 16) == 0x49434653)
+                          : (g_sf[i].domain && (type == 4 || type == 6));
     unsigned dtype = dom ? base[cm] : 1, obj = dom ? *(uint32_t *)(base + cm + 4) : 0;
     size_t hin = cm + (dom ? 16 : 0);
     if (hin + 16 > size || data + ndw * 4 > size) { LOG("[RED] sf: %s: request of %u data words does not fit %llu bytes", g_sf[i].name, ndw, (unsigned long long)size); return 0xe401u; }
@@ -102,3 +124,10 @@ HLE_FORCE("_ZN2nn2sf4hipc15SendSyncRequestENS_3svc6HandleEPvm", "send a request 
     }
     return RES_OK;
 }
+
+HLE_FORCE("_ZN2nn2sf4hipc15SendSyncRequestENS_3svc6HandleEPvm", "send a request on a session (svcSendSyncRequest) → answered by the host for its sessions",
+          Result, h_sf_Send, uint32_t h, uint32_t *m, uint64_t size) {
+    return sf_send(h, m, size);
+}
+Result dm_sf_send(uint32_t h, void *m, uint64_t size) { return sf_send(h, (uint32_t *)m, size); }
+uint32_t dm_sf_new(const char *name) { return sf_new(name, 0); }

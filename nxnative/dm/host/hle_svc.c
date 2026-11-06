@@ -1,6 +1,6 @@
 // Horizon kernel system calls (triggered by the SDK runtime once the SDK is loaded). Only what the P1 boot chain needs is implemented: memory layout + heap + query + debug output + timing.
 // Register convention: inputs w1.. / outputs w0=Result, x1=value (GetInfo / SetHeapSize), consistent with the public Horizon ABI.
-#include "dm.h"
+#include "hle.h"   // Result and the host-side service entry points (hle_sf.c)
 #include <sys/mman.h>
 #include <errno.h>
 #include <unistd.h>
@@ -807,20 +807,25 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         }
         regs[0] = 0; regs[1] = v; return 0;
     }
-    case 0x21: {   // HANDLE-PASSING REPLY PROBE (labelled): nn::chat::gsv reads a handle COUNT at tls+0x0c and the vi helper mints a handle from it, so a
-                   // result-only reply can never satisfy it. This writes count 1 and one handle value, with the result at tls+0x10 (the slot the 0x44
-                   // sentinel identified). It reads no request. Drop it when svc 0x21 is implemented; see docs/SWITCH2.md.
+    case 0x21: {   // SendSyncRequest(handle). sdk's own wrapper compares the caller's buffer against tpidrro_el0 before choosing this over 0x22, so the
+                   // message buffer is this thread's local region. A title that sends through the syscall instead of the API is answered here: the handle
+                   // count nn::chat::gsv reads (tls+0x0c), the result the SDK reads (tls+0x10), and a handle word of the host's own.
+                   // What Mario Kart World does with the reply corrects the first reading of it: nn::camera::Initialize sends on handle 1 next
+                   // (main+0x1c6d430 reads the session out of its client object at +4), not on this word, so the session here is the reply's shape,
+                   // not the value the caller kept -- hle_sf.c serves that one by accepting a handle it never issued.
         uint8_t *tls = dm_tsd_get(g_keytlr);
-        if (!tls) { regs[0] = 0xe401; return 0; }
+        if (!tls) { LOG("[RED] svc 0x21 without a thread-local region"); regs[0] = 0xe401; return 0; }
+        static uint32_t session;
+        if (!session) session = dm_sf_new("hle:syscall");
         {
             uint32_t *m = (uint32_t *)tls;
             memset(tls, 0, 0x100);
-            m[0] = 0;                                   // HIPC response: type 0, no descriptors
-            m[1] = (uint32_t)((0x100 - 8) / 4);         // receive-list word count
-            *(uint32_t *)(tls + 0x0c) = 1;             // the handle count nn::chat::gsv reads
-            *(uint32_t *)(tls + 0x10) = 0;             // the result the SDK reads
-            *(uint32_t *)(tls + 0x14) = 0x1001;        // a handle value; hle_oslog.c logs what Attach receives
-            static int once; if (!once++) LOG("[svc21] handle-passing reply: count 1 at +0xc, result 0 at +0x10, handle 0x1001 at +0x14");
+            m[0] = 0;                               // HIPC response: type 0, no descriptors
+            m[1] = (uint32_t)((0x100 - 8) / 4);     // receive-list word count
+            *(uint32_t *)(tls + 0x0c) = 1;          // one handle in the reply
+            *(uint32_t *)(tls + 0x10) = 0;          // result
+            *(uint32_t *)(tls + 0x14) = session;    // a real host session: the caller's next send resolves
+            static int once; if (!once++) LOG("[svc21] reply: handle count 1, result 0, session %#x", session);
         }
         regs[0] = 0; return 0;
     }
