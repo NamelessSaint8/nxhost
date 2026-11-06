@@ -312,6 +312,16 @@ For a replaced DSP renderer the size query keeps the service's work-buffer contr
 - **Found on:** [Skyrim](../../../docs/BRINGUP_SKYRIM.md) on the Mac and the Legion Y700, 2026-11-06.
 - **Check:** `DM_AUDREN_PCM6=<file>` writes the six mix channels before the fold (6 × int16, 48 kHz); compare the rear against `0.5 * front`. Then the output's RMS should be the front pair's, not 1.35× it.
 
+## Renderers
+
+### Every audren renderer is mixed into the output
+
+- **Symptom:** a game opens a second `AudioRenderer` and part of its sound is missing; the first renderer's mix has whole 5 ms blocks of digital zero where the second renderer's content belongs, heard as holes and pops. Skyrim's second renderer is a 32-voice one opened at boot; its dump has a continuous 2 s run exactly across the first renderer's boot holes.
+- **Cause:** the host drove only the first `OpenAudioRenderer` and logged `[RED] audren: a second renderer (the host drives only one)`; the second renderer's `ExecuteAudioRendererRendering` output was rendered (by the game's thread) and discarded.
+- **Fix:** the second renderer's handle is kept and the render thread renders it once per output frame, on the same 5 ms step as the first, then adds its stereo frame to the first's (saturating). Both are paced by the one output, so their timelines stay aligned. A third renderer is still reported. `DM_AUDREN_MIX2=0` leaves the second out for an A/B.
+- **Found on:** [Skyrim](../../../docs/BRINGUP_SKYRIM.md): the boot holes fell from 60 to 4 and the player heard "much better, fewer/smaller pops"; the remainder is sub-frame holes at 7.55 s (open). The mix also raises the peak (26k of 32k on the boot clip, no clipping).
+- **Check:** `audren: a second renderer, mixed into the output` and `DM_AUDIO_DUMP`; compare the zero-run count with `DM_AUDREN_MIX2=0`.
+
 ## Timing and catch-up
 
 ### A catch-up frame that renders silence is not played

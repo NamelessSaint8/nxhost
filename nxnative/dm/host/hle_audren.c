@@ -84,6 +84,7 @@ HLE_FORCE("_ZN2nn5audio30GetAudioRendererWorkBufferSizeERKNS0_22AudioRendererPar
 }
 // ---------- rendering and output ----------
 static void *g_handle[2];                    // AudioRendererHandle (renderer object, client state)
+static void *g_handle2[2]; static _Atomic int g_open2;   // the second renderer, mixed in unless DM_AUDREN_MIX2=0
 static _Atomic int g_open;
 static void *g_render_tt;                    // the render thread (ThreadType from dm_guest_thread_spawn): Close joins it before the SDK tears the renderer down
 // The latest frame (stereo int16), per thread: a second renderer's ExecuteAudioRendererRendering runs on the game's
@@ -96,6 +97,16 @@ static pthread_mutex_t g_cq_mu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_
 static void cq_popped(void) { pthread_mutex_lock(&g_cq_mu); pthread_cond_broadcast(&g_cq_cv); pthread_mutex_unlock(&g_cq_mu); }
 
 typedef struct { void *ptr; uint64_t cap, size; } gbuf;       // same as the front of hle_audio.c's AudioOutBuffer
+static void put_frame(void *out, gbuf **free_list, int *nfree, const int16_t *src, int n) {
+    gbuf *b = free_list[--*nfree];
+    memcpy(b->ptr, src, (size_t)n * 4);
+    b->size = (uint64_t)n * 4;
+    if (!dm_pcmout_append(out, b)) {   // the output queue was full: the rendered frame is lost, an audible click
+        free_list[(*nfree)++] = b;
+        uint64_t drops = atomic_fetch_add(&g_append_drop, 1) + 1;
+        if (drops <= 8 || drops % 200 == 0) LOG("audren: the output queue was full, a rendered frame was dropped (%llu so far)", (unsigned long long)drops);
+    }
+}
 static void render_main(void *arg) {
     (void)arg;
     void (*exec)(void *, void *) = gsym("_ZN2nn5audio29ExecuteAudioRendererRenderingENS0_19AudioRendererHandleE");
@@ -104,6 +115,9 @@ static void render_main(void *arg) {
     for (int i = 0; i < NBUF; i++) { bufs[i] = (gbuf){data[i], sizeof data[i], 0}; free_list[i] = &bufs[i]; }
     dm_pcmout_start(out);
     LOG("audren: render thread started (%d buffers in flight, paced by the output)", NBUF);
+    // A second renderer is mixed in by default: the audren service mixes every renderer it opens into the one device
+    // output. DM_AUDREN_MIX2=0 leaves it out, for an A/B.
+    int mix2 = !(getenv("DM_AUDREN_MIX2") && !strcmp(getenv("DM_AUDREN_MIX2"), "0"));
     while (atomic_load(&g_open)) {
         while (!nfree) {   // wait for the output to hand a block back (silent sink / sound card, one every 5 ms); it signals each release, so the thread sleeps until then (it used to poll every 1 ms)
             gbuf *b = dm_pcmout_released(out);
@@ -123,15 +137,18 @@ static void render_main(void *arg) {
             }
         }
         else { g_frame_n = 0; exec(g_handle[0], g_handle[1]); src = g_frame; got = g_frame_n; }   // SDK: generate commands → CPU processing (output taken in the host takeover) → signal the game's renderer event
-        int n = got ? got : 240;
-        gbuf *b = free_list[--nfree];
-        if (got) memcpy(b->ptr, src, (size_t)n * 4); else memset(b->ptr, 0, (size_t)n * 4);
-        b->size = (uint64_t)n * 4;
-        if (!dm_pcmout_append(out, b)) {   // the output queue was full: the rendered frame is lost, an audible click
-            free_list[nfree++] = b;
-            uint64_t drops = atomic_fetch_add(&g_append_drop, 1) + 1;
-            if (drops <= 8 || drops % 200 == 0) LOG("audren: the output queue was full, a rendered frame was dropped (%llu so far)", (unsigned long long)drops);
+        int16_t mixed[FRAME_MAX * 2];
+        if (mix2 && atomic_load(&g_open2) && got) {   // the second renderer, one frame per output frame
+            memcpy(mixed, src, (size_t)got * 4);
+            g_frame_n = 0; exec(g_handle2[0], g_handle2[1]);
+            int sec_n = g_frame_n < got ? g_frame_n : got;
+            for (int i = 0; i < sec_n * 2; i++) { int v = mixed[i] + g_frame[i]; mixed[i] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v); }
+            src = mixed;
         }
+        int cur_n = got ? got : 240;
+        int16_t cur[FRAME_MAX * 2];
+        if (got) memcpy(cur, src, (size_t)cur_n * 4); else memset(cur, 0, (size_t)cur_n * 4);
+        put_frame(out, free_list, &nfree, cur, cur_n);
     }
     dm_pcmout_close(out);   // the output would otherwise keep its sound card callback or silent sink running and hold one of the AudioOut slots after the renderer closes
     cq_popped();   // an update waiting for queue space (catch-up pacing) sees g_open cleared
@@ -212,7 +229,15 @@ static Result ar_open(void **handle, void *ev, const uint8_t *param, void *work,
             rev_set(sev, handle[0]);
         } else { destroy(ev); hle_bind_system_event(ev, 1); }   // no free renderer event: the earlier behaviour, which needs the game's object to live
     }
-    if (atomic_load(&g_open)) { LOG("[RED] audren: a second renderer (the host drives only one)"); return r; }
+    if (atomic_load(&g_open)) {
+        // The second renderer: Skyrim opens a 32-voice one at boot and its output is not silence (a continuous 2 s
+        // run across the first renderer's boot holes). It is mixed in on the render thread unless DM_AUDREN_MIX2=0.
+        if (!atomic_exchange(&g_open2, 1)) {
+            g_handle2[0] = handle[0]; g_handle2[1] = handle[1];
+            LOG("audren: a second renderer, mixed into the output (DM_AUDREN_MIX2=0 leaves it out)");
+        } else LOG("[RED] audren: a third renderer (the host mixes two)");
+        return r;
+    }
     g_handle[0] = handle[0]; g_handle[1] = handle[1]; atomic_store(&g_open, 1);
     g_render_tt = dm_guest_thread_spawn(render_main, NULL, 9, 0x10000);
     return r;
