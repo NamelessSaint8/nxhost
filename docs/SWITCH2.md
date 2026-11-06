@@ -181,5 +181,18 @@ Two hypotheses are already excluded, which is what makes this a starting point r
 alignment patch is a **version gap**, not an oversight: the module is `nnSdk-Generic_21_4_0` (SDK 21) and that rule matches SDK 20's code shape. And no
 address region is allocated at all before the fault — instrumenting the HLE to log successful allocations prints nothing.
 
-So the open question is narrow: which field the guest reads as that base, not which NVN2 service is missing. That is where work on this port resumes.
+So the open question is narrow: which field the guest reads as that base, not which NVN2 service is missing. Naming the call sites answers most of it,
+because each one is an import:
+
+| | |
+|---|---|
+| `main+0x84978` | `nn::os::AllocateMemoryBlock(&block, 0x3600000)` — returns **`0x1000`** |
+| `sdk` | a 24-byte trampoline through a pool pointer at `0xe25fa0` |
+| `sdk` | `nn::os::detail::MemoryHeapManager::AllocateFromHeap(out, size)` — the allocator that hands back `0x1000` |
+| `main+0x84a10` | `nn::mem::StandardAllocator::Initialize(0x1000, 54 MB, false)` |
+
+`StandardAllocator::Initialize` then adds its own `0x1000` header and registers `[0x2000, 0x3601000)`, which is the range that faults. Every value in the
+crash is accounted for by that chain, and none of them is a host return: the base comes from the SDK's own memory-heap manager, so the next question is
+what initialises that manager — the NPDM's Switch 2 memory plan surface, not NVN2. That is where work on this port resumes.
+
 
