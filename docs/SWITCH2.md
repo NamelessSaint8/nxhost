@@ -385,3 +385,17 @@ So a dense upload gathered and uploaded about five times the content the title h
 The zeros were memory traffic as well as memory, which is why the run nearly doubled. What remains is one full-size Metal staging buffer per upload (line 2436, 5.8 GB while an
 upload of that array runs) and the dense materialisation itself: the array is **sparse** on the console, only mapped pages are paid for, and a dense 5.8 GB texture for a 9% mapping
 is the difference between this host's ~29 GB and the console's budget. Metal's own answer to that is sparse heaps, not a smaller format.
+
+### Sparse textures are not available, so the arrays are dense
+
+If the arrays are 2-9% mapped, the obvious question is whether Metal can hold them sparsely. `tools/mtl_sparse_probe.m` answers it on this machine (Apple M4 Max, macOS 26):
+
+| | |
+|---|---|
+| per-format sparse tile size | reported for every format, including `BC6H_RGBUfloat` (16 KB) and `ASTC_8x8_sRGB` (64 KB) |
+| `MTLHeapTypeSparse` heap | created only with an explicit size; then `newTextureWithDescriptor:offset:` returns **nil** for every format, a 512x512 BGRA8 control included -- so it is the path, not the format or the size |
+| `MTLHeapTypePlacement` + `placementSparsePageSize` | the heap and the texture are created, for the exact shapes this title uses, but the texture is **not** sparse: `isSparse` is false, `sparseTextureTier` is `None`, `updateTextureMapping:` does not exist, and `allocatedSize` is the whole dense size (5803 MB for the BC6H array, 1451 MB for the ASTC 8x8 one) |
+
+So a texture of that shape costs its dense size on this GPU, whatever the title has mapped: the 29 GB is 5.8 GB + 5.8 GB of one array plus the rest, and no Metal API turns it into 9%. The alternatives are structural rather than a format or hint -- allocate one texture per layer and only the mapped ones, with the translated shaders sampling through a table instead of a layer index, which is a shader-translation project rather than a fix.
+
+Recorded because it rules out a whole direction cheaply: a `MTLHeapTypeSparse` heap that creates fine and then refuses to place a texture is easy to read as a wrong descriptor and spend a day on.
