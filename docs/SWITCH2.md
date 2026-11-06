@@ -274,8 +274,18 @@ Wiring `0x21` into the service handler (with the gsv session's `+4` minted as a 
 ```
 
 `1217` is `0x4c1`, chat's own tag word at `tls[0]`. So the thread-local region carries the thread's **state**, not an IPC message, and the SDK's
-`msg == tpidrro_el0` comparison only says which syscall its API wrapper picks. Where chat's request buffer actually is, is still unread — that is where
-this work resumes, and the dispatch is left uncommitted until it is known, because as written it asserts "this is a request" and it is not.
+`msg == tpidrro_el0` comparison only says which syscall its API wrapper picks.
+
+One region further settles it the same way. At the syscall, `tls[0..0x7f]` is the tag followed by zeros, and `tls+0x100` is 16 zeros, a single `'S'` at
+`+0x110`, then zeros again — no `SFCI` request and no CMIF header anywhere the host could parse. `0x6c1c90` shows why: it writes a state tag
+(`0x4c1`, and after the call `0x4c1 | 1<<32`) at `tls[0]`, passes the session's `+4` field to the syscall, and reads the outcome back from `tls[8]` —
+the same slot whose `0x20` was mistaken for the abort's message. Two of the three slots are bookkeeping and the third was never a buffer.
+
+Which leaves two readings with nothing yet to separate them: either `0x21` is `SendSyncRequest` and the message is assembled *by the kernel* from session
+state, which is a far larger surface than a stub, or `0x21` on Switch 2 is a different syscall and the identification rests on the API wrapper's branch
+structure rather than on the syscall's own behaviour. The lone `'S'` at `tls+0x110` is where those separate — it names a writer mid-construction — and
+that read is where this work resumes. The dispatch is not committed: as written it asserts "this is a request" about data that is not one.
+
 
 
 
