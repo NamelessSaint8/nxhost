@@ -152,3 +152,34 @@ a 9 GB guest — a 16 GB device stays marginal and a 24 GB one is comfortable. T
 `config.ini` only takes effect when its companion `key\default` line is also flipped, and any rebuild of the shader translator moves the bundle
 (`dmsh_chain.lock`).
 
+## On the native host: where the port stands
+
+The Mac host is built per profile — `make GAME=<id>` generates `game_profile.h` from `dm/games/<id>/game.tsv` — and a Switch 2 profile needs four keys a
+split-only one does not carry: `mem_reserve`, `mem_alias`, `mem_stack`, `app_pool`. They are host address-space reservations rather than values the title
+reports, so Mario Kart World's are first-pass numbers read off the 12 GiB layout: a 20 GB reserve (12 GiB plus the graphics server's 8 GiB), a 16 GB
+alias, a 256 MB stack and a ~9.5 GiB application pool. Nothing has been measured against them yet; the profile says so where they are defined.
+
+With them the port gets further than the shader tables alone suggested:
+
+| | |
+|---|---|
+| `tools/patch_nso.py` | accepts all four Switch 2 NSOs unchanged — `main` 35,422 sites, 1.5 MB patch area; `sdk` 22,637; `subsdk0` 3,231; `subsdk1` 492 |
+| loader | maps and relocates all four (`main`: 275,810 `relr`, 3,986 abs/glob, 1,220 jump; `sdk`: 922 symbols bound to `main`) |
+| execution | `guest_main` runs and makes 33 supervisor calls, then faults |
+
+```
+CRASH sig=11 addr=0x2040 pc=sdk+0x158250 lr=sdk+0x15d8d4
+bt: sdk+0x15f6f0  main+0x84a50  main+0x84988  guest_main+0x2e8  main+0x10c
+```
+
+The registers name the input rather than just the symptom: the guest registers a 54 MB range at guest address `0x2000` — `x1=0x2000`, `x2=0x35ff000`,
+recorded as `{0x2000, 0x3601000}` through a global at `main+0x37790d0` — and the first store into it faults. The guest's own validation accepted the
+pair (non-zero, page-aligned, slot free), so the base was read out of a structure as though it held an address. Its startup path asks for the range
+through `main+0x84978`, which takes an out pointer and the 54 MB size.
+
+Two hypotheses are already excluded, which is what makes this a starting point rather than a mystery. The rewriter's skipped `AllocateAddressRegion`
+alignment patch is a **version gap**, not an oversight: the module is `nnSdk-Generic_21_4_0` (SDK 21) and that rule matches SDK 20's code shape. And no
+address region is allocated at all before the fault — instrumenting the HLE to log successful allocations prints nothing.
+
+So the open question is narrow: which field the guest reads as that base, not which NVN2 service is missing. That is where work on this port resumes.
+
