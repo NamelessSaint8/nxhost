@@ -302,7 +302,32 @@ For a replaced DSP renderer the size query keeps the service's work-buffer contr
   - the two-argument `GetHardwareOpusDecoderWorkBufferSize` is hooked beside the three-argument one.
 - **Found on:** [Hyrule Warriors: Age of Calamity](../../dm/games/01002B00111A2000/README.md) (SDK 9.6: only the `HardwareOpusMultiStreamDecoder` class and the four-argument size); [The Legend of Zelda: Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md) (1.4.3, the single-stream C interface); [Big Brain Academy: Brain vs. Brain](../../dm/games/0100620012D6E000/README.md) (SDK 11.4.3, the two-argument size); [Unicorn Overlord](../../dm/games/010069401ADB8000/README.md) (SDK 16.2.4, the multi-stream C interface; one boot).
 
+## Downmix
+
+### A rear pair that copies the front is not folded in twice
+
+- **Symptom:** the mix is overdriven and sounds like static or too much gain, while the front pair alone is clean; a game with a 6-channel DeviceSink and a stereo fold-down is affected. Skyrim: the player's A/B (front pair alone vs the full fold) was clean vs overdriven, and the effect was the same on the Mac and the Y700.
+- **Cause:** the game writes a rear pair that is the front pair at half amplitude: in 41 s of gameplay the rear L is exactly `0.5 * front L` (residual RMS 0.5 of a 16-bit sample) and the rear R the same, while centre and LFE stay all zero. The plain ITU fold then adds `0.707 * rear` to each front channel, i.e. `0.3535 * front`: +2.6 dB of the same music (RMS 1305 → 1767) with no new content, which drives the output chain into the overdrive the player hears.
+- **Fix:** the fold detects, per frame, a rear channel that is a scaled copy of its front channel (98% of the rear's energy explained by the best-fit scale), and ramps that rear pair's gain to zero over about 100 ms (`rear_gain`, 0.05 per 5 ms frame, so the decision does not click). A rear that carries something else is still folded at 0.707. `DM_AUDREN_DOWNMIX=all` restores the plain fold; `=front` is the front pair alone, for an A/B.
+- **Found on:** [Skyrim](../../../docs/BRINGUP_SKYRIM.md) on the Mac and the Legion Y700, 2026-11-06.
+- **Check:** `DM_AUDREN_PCM6=<file>` writes the six mix channels before the fold (6 × int16, 48 kHz); compare the rear against `0.5 * front`. Then the output's RMS should be the front pair's, not 1.35× it.
+
 ## Timing and catch-up
+
+### A catch-up frame that renders silence is not played
+
+- **Symptom:** whole 5 ms blocks of digital silence interrupt a sound that is already playing, heard as clicks or holes, while the output reports no underruns.
+- **Cause:** at start-up the game updates faster than the render thread, so `AudioRenderSystem::Update` renders catch-up frames. A catch-up that captures no DeviceSink, or captures a DeviceSink whose mix is all zero, is the renderer before its voices start; the frame still initialises the effects, but its output is not audio. Played as a normal block it is a 5 ms hole in the music; a run of them is the audible stutter.
+- **Fix:** the render thread drops a queued catch-up frame whose capture is empty or all zero, and counts it (`audren: a catch-up frame … not played as a silent block`). The frame has still been rendered, so effects are initialised as before.
+- **Found on:** [Skyrim](../../../docs/BRINGUP_SKYRIM.md) at boot, 2026-11-06 (8 such frames in the first seconds). It reduces the holes but does not remove every one: the remaining holes are in the game's own DSP mix (see the bring-up doc).
+- **Check:** the log line above; `DM_AUDREN_PCM6` shows whether the remaining zeros are in the guest's channels rather than the host's output.
+
+### The rendered frame is per thread
+
+- **Cause:** the frame the host copies into its output buffer was one global (`g_frame`). A game with more than one audio renderer can render the second from its own thread; that render wrote the same buffer, and the render thread could copy the other renderer's frame — silence, for a renderer the host does not drive — between the first renderer's capture and its copy.
+- **Fix:** the capture buffer and its frame count are `_Thread_local`, so each thread's `ExecuteAudioRendererRendering` writes its own and the render thread always copies its own.
+- **Found on:** [Skyrim](../../../docs/BRINGUP_SKYRIM.md) (its second renderer is opened at boot and the host drives only the first), 2026-11-06. No game symptom is claimed for this race alone; it was found while chasing the boot holes above.
+- **Check:** the `[RED] audren: a second renderer` line means a game opens more than one; the render thread's output must not change when the game renders the second.
 
 ### At least one rendered frame between two updates
 

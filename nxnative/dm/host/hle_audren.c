@@ -86,8 +86,11 @@ HLE_FORCE("_ZN2nn5audio30GetAudioRendererWorkBufferSizeERKNS0_22AudioRendererPar
 static void *g_handle[2];                    // AudioRendererHandle (renderer object, client state)
 static _Atomic int g_open;
 static void *g_render_tt;                    // the render thread (ThreadType from dm_guest_thread_spawn): Close joins it before the SDK tears the renderer down
-static int16_t g_frame[FRAME_MAX * 2]; static int g_frame_n;   // the latest frame (stereo int16)
-static _Atomic uint64_t g_frames, g_nonsilent;
+// The latest frame (stereo int16), per thread: a second renderer's ExecuteAudioRendererRendering runs on the game's
+// thread and used to write this buffer while the render thread was copying the first renderer's frame out of it,
+// so the copy could take the other renderer's silence (a whole-block hole in the audio).
+static _Thread_local int16_t g_frame[FRAME_MAX * 2]; static _Thread_local int g_frame_n;
+static _Atomic uint64_t g_frames, g_nonsilent, g_append_drop, g_silent_catchup;
 enum { CQ = 4 }; static int16_t g_cq[CQ][FRAME_MAX * 2]; static int g_cq_n[CQ]; static _Atomic uint32_t g_cq_head, g_cq_tail;   // output queue of catch-up frames
 static pthread_mutex_t g_cq_mu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g_cq_cv = PTHREAD_COND_INITIALIZER;   // the render thread signals each frame it takes off the queue (catch-up pacing)
 static void cq_popped(void) { pthread_mutex_lock(&g_cq_mu); pthread_cond_broadcast(&g_cq_cv); pthread_mutex_unlock(&g_cq_mu); }
@@ -111,13 +114,24 @@ static void render_main(void *arg) {
         if (!nfree) break;
         const int16_t *src; int got;
         uint32_t h = atomic_load(&g_cq_head);
-        if (h != atomic_load(&g_cq_tail)) { src = g_cq[h % CQ]; got = g_cq_n[h % CQ]; atomic_store(&g_cq_head, h + 1); cq_popped(); }   // play queued catch-up output first
+        if (h != atomic_load(&g_cq_tail)) {   // play queued catch-up output first
+            src = g_cq[h % CQ]; got = g_cq_n[h % CQ]; atomic_store(&g_cq_head, h + 1); cq_popped();
+            if (!got) {   // the catch-up frame captured no DeviceSink: it initialized effects, it is not audio to play
+                uint64_t n = atomic_fetch_add(&g_silent_catchup, 1) + 1;
+                if (n <= 8) LOG("audren: a catch-up frame captured no DeviceSink, not played as a silent block (%llu so far)", (unsigned long long)n);
+                continue;
+            }
+        }
         else { g_frame_n = 0; exec(g_handle[0], g_handle[1]); src = g_frame; got = g_frame_n; }   // SDK: generate commands → CPU processing (output taken in the host takeover) → signal the game's renderer event
         int n = got ? got : 240;
         gbuf *b = free_list[--nfree];
         if (got) memcpy(b->ptr, src, (size_t)n * 4); else memset(b->ptr, 0, (size_t)n * 4);
         b->size = (uint64_t)n * 4;
-        if (!dm_pcmout_append(out, b)) free_list[nfree++] = b;
+        if (!dm_pcmout_append(out, b)) {   // the output queue was full: the rendered frame is lost, an audible click
+            free_list[nfree++] = b;
+            uint64_t drops = atomic_fetch_add(&g_append_drop, 1) + 1;
+            if (drops <= 8 || drops % 200 == 0) LOG("audren: the output queue was full, a rendered frame was dropped (%llu so far)", (unsigned long long)drops);
+        }
     }
     dm_pcmout_close(out);   // the output would otherwise keep its sound card callback or silent sink running and hold one of the AudioOut slots after the renderer closes
     cq_popped();   // an update waiting for queue space (catch-up pacing) sees g_open cleared
@@ -346,7 +360,7 @@ static int capture(const uint8_t *cl, size_t len, int16_t *dst) {
             uint32_t nin = *(const uint32_t *)(b + (g_sink4 ? 0x120 : 0x130)); int16_t in[6];
             for (uint32_t j = 0; j < 6; j++) in[j] = g_sink4 && !g_sink5 ? ((const int8_t *)(b + 0x124))[j] : ((const int16_t *)(b + (g_sink4 ? 0x124 : 0x134)))[j];
             const int32_t *up = *(const int32_t *const *)(b + (g_sink4 ? 0x118 : 0x128));
-            if (!logged++) LOG("audren: DeviceSink inputs %u (%d %d …) rate %u samples per frame %u mix buffer %p upsample buffer %p%s", nin, nin ? in[0] : -1, nin > 1 ? in[1] : -1, rate, samples, (void *)mix, (void *)up,
+            if (!logged++) LOG("audren: DeviceSink inputs %u (%d %d %d %d %d %d) rate %u samples per frame %u mix buffer %p upsample buffer %p%s", nin, in[0], in[1], in[2], in[3], in[4], in[5], rate, samples, (void *)mix, (void *)up,
                                rate == 32000 ? " (32 kHz: resampled to 48 kHz on the host)" : "");
             if (!nin || samples > (rate == 48000 ? FRAME_MAX : FRAME_MAX * 2 / 3 - 1)) return 0;
             if (rate != 48000 && rate != 32000) { static int once; if (!once++) LOG("[RED] audren: renderer sample rate %u (the SDK takes 32000 or 48000): no sound", rate); return 0; }
@@ -356,13 +370,41 @@ static int capture(const uint8_t *cl, size_t len, int16_t *dst) {
             // Channel order front-left front-right center LFE back-left back-right; 6 → 2 with the system default downmix coefficients (front 1.0, center 0.707, LFE 0.251, back 0.707, Q15)
             enum { CF = 32768, CC = 23167, CL = 8224, CB = 23167 };
             static int32_t st[FRAME_MAX * 2];   // the stereo downmix before clamping (capture runs under g_render_mu)
+            // The rear pair is folded only while it carries something the front pair does not; a rear that is a scaled
+            // copy of the front (Skyrim's is half the front, sample for sample) is not added a second time, which only
+            // raised the level of the same music. DM_AUDREN_DOWNMIX=all restores the plain fold; =front is the front
+            // pair alone, for an A/B on a noisy centre, LFE or surround channel.
+            const char *dm = getenv("DM_AUDREN_DOWNMIX");
+            int front = dm && !strcmp(dm, "front"), dupmode = !(dm && !strcmp(dm, "all")) && !front;
+            static float rear_gain = 1.0f;   // 0 = not folded; ramped so a decision change does not click (capture runs under g_render_mu)
+            if (dupmode && k >= 6) {
+                double al = 0, el = 0, ar = 0, er = 0, erl = 0, err = 0;
+                for (uint32_t s = 0; s < samples; s++) {
+                    double fl = ch[0][s], rl = ch[4][s], fr = ch[1][s], rr = ch[5][s];
+                    al += fl * rl; el += fl * fl; erl += rl * rl; ar += fr * rr; er += fr * fr; err += rr * rr;
+                }
+                double sl = el > 1 ? al / el : 0, sr = er > 1 ? ar / er : 0, resl = 0, resr = 0;
+                for (uint32_t s = 0; s < samples; s++) { double d = ch[4][s] - sl * ch[0][s]; resl += d * d; d = ch[5][s] - sr * ch[1][s]; resr += d * d; }
+                int copy = erl > 1 && err > 1 && resl < 0.02 * erl && resr < 0.02 * err;   // 98% of each rear explained by a scaled front
+                rear_gain += ((copy ? 0.0f : 1.0f) - rear_gain) * 0.05f;
+            } else rear_gain = 1.0f;
             for (uint32_t s = 0; s < samples; s++) {
                 int32_t l, r;
-                if (k >= 6) { int64_t c = (int64_t)ch[2][s] * CC + (int64_t)ch[3][s] * CL;
-                              l = (int32_t)(((int64_t)ch[0][s] * CF + c + (int64_t)ch[4][s] * CB) >> 15); r = (int32_t)(((int64_t)ch[1][s] * CF + c + (int64_t)ch[5][s] * CB) >> 15); }
+                if (k >= 6 && !front) {
+                    int64_t c = (int64_t)ch[2][s] * CC + (int64_t)ch[3][s] * CL;
+                    int64_t b4 = (int64_t)(ch[4][s] * (double)rear_gain), b5 = (int64_t)(ch[5][s] * (double)rear_gain);
+                    l = (int32_t)(((int64_t)ch[0][s] * CF + c + b4 * CB) >> 15); r = (int32_t)(((int64_t)ch[1][s] * CF + c + b5 * CB) >> 15); }
                 else { l = ch[0][s]; r = k > 1 ? ch[1][s] : l; }
                 st[2 * s] = l; st[2 * s + 1] = r;
             }
+            // DM_AUDREN_PCM6=<file>: the six mix channels before the stereo fold-down, for finding a noisy centre, LFE or surround.
+            // Read at use time so DM_CTL's "env" can start it on the frame of interest (it opens once; the file keeps growing).
+            { static FILE *f6; static int opened;
+              const char *e = getenv("DM_AUDREN_PCM6");
+              if (e && *e) { if (!opened) { opened = 1; if (!(f6 = fopen(e, "wb"))) LOG("[RED] DM_AUDREN_PCM6 cannot open %s", e); }
+                  if (f6) { static int16_t six[FRAME_MAX * 6];
+                      for (uint32_t s = 0; s < samples; s++) for (uint32_t j = 0; j < 6; j++) six[s * 6 + j] = j < k ? ch[j][s] : 0;
+                      fwrite(six, sizeof(int16_t), (size_t)samples * 6, f6); } } }
             uint32_t nout = rate == 48000 ? samples : up_3_2(st, samples, st);
             uint64_t loud = 0;
             for (uint32_t s = 0; s < 2 * nout; s++) {
@@ -508,7 +550,16 @@ HLE_FORCE("_ZN2nn5audio6server17AudioRenderSystem6UpdateEPvmS3_mPKvm", "renderer
             while (atomic_load(&g_open) && t - atomic_load(&g_cq_head) >= CQ && !pthread_cond_timedwait(&g_cq_cv, &g_cq_mu, &dl)) {}
             pthread_mutex_unlock(&g_cq_mu);
         }
-        if (t - atomic_load(&g_cq_head) < CQ) { render_once(sys, g_cq[t % CQ], &g_cq_n[t % CQ]); atomic_store(&g_cq_tail, t + 1); }
+        if (t - atomic_load(&g_cq_head) < CQ) {
+            render_once(sys, g_cq[t % CQ], &g_cq_n[t % CQ]);
+            // A catch-up frame that rendered all zeros is the renderer before its voices start, not audio: play none of it
+            // (the frame has still initialised the effects) rather than a 5 ms hole in the music.
+            int nn = g_cq_n[t % CQ], nz = 0;
+            for (int i = 0; i < nn * 2 && !nz; i++) nz = g_cq[t % CQ][i] != 0;
+            if (nn && !nz) { g_cq_n[t % CQ] = 0; uint64_t c2 = atomic_fetch_add(&g_silent_catchup, 1) + 1;
+                if (c2 <= 8) LOG("audren: a catch-up frame rendered silence, not played as a silent block (%llu so far)", (unsigned long long)c2); }
+            atomic_store(&g_cq_tail, t + 1);
+        }
         else render_once(sys, NULL, NULL);   // still full (the output stopped): render anyway, output discarded
     }
     static int tr = -1; if (tr < 0) tr = getenv("DM_AUDREN_TRACE") != NULL;

@@ -33,6 +33,12 @@ Footprint settles near 1.6–1.7 GB and stays flat; the alias region maps 2.00 G
 
 `porter port <game folder> --experimental --install` produces the release APK (**1.85 MB**, `lib/arm64-v8a` only) and the 12.9 GB data pack; adding `--debug` gives the 8.2 MB development build with `DM_CTL` (key presses and screenshots from a shell). The release build was verified on the Y700 on 2026-11-03: 60 fps, 0 dropped frames, the pause menu's Frame rate row present, `DM_CTL` stripped from `env.txt`, and the saves taken in a debug session still listed under `CONTINUE` after the swap — the same package and signer keep the app's data.
 
+## Audio
+
+The game opens a 6-channel `DeviceSink`; its centre and LFE channels are silent and its rear pair is **exactly half the front pair**, so the stereo fold is duplicate-aware (a rear that is a scaled copy of its front is not added a second time). The plain ITU fold added 0.354 × the front (+2.6 dB) of the same music and the player heard it as overdrive/static on both platforms; front-pair-only was clean. `DM_AUDREN_DOWNMIX=all` restores the old fold for an A/B and `=front` plays the front pair alone. `DM_AUDREN_PCM6=<file>` writes the six channels before the fold.
+
+The first sound (the publisher logo/loading music) has whole 5 ms blocks of digital zero in it, 5–65 ms each, heard as clicks/pops. They are in the guest's own mix in all six channels, not in the output: the output reports 0 underruns and no dropped block, silent catch-up frames are dropped, and the capture buffer is per thread. The cause is still open; see [the bring-up doc](../../../../docs/BRINGUP_SKYRIM.md), session update 2026-11-06.
+
 ## Known gaps
 
 - **Saves live inside the app** (`files/save/Saves`, about 2.6 MB each). On the debug build they can be copied out with `run-as`; on the release build that is refused (`run-as: package not debuggable`), and an uninstall or Clear data deletes them. The manifest carries `ALLOW_BACKUP`, so `adb backup -f saves.ab org.nx2a.t01000a10041ea000` is the only export path the port offers today — a real export/import in the host is still missing.
