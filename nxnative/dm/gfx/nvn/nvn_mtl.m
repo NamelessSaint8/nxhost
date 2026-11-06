@@ -9771,6 +9771,18 @@ static int lc_keeps(uint32_t op) {
     }
 }
 
+// A kernel whose workgroup buffer was too large for Apple's 32 KB cap reads it through a device buffer at buffer index 30 (dmsh_build.py tg_spill). Every such kernel
+// is dispatched as one threadgroup, but two dispatches can still overlap on the GPU, so the buffer is taken from a ring of four.
+static id<MTLBuffer> g_tgsp[4]; static uint32_t g_tgsp_cap; static int g_tgsp_i;
+static uint64_t tg_spill_bind(id ce, uint32_t bytes) {
+    if (!bytes) return 0;
+    if (g_tgsp_cap < bytes) { g_tgsp_cap = bytes < 65536 ? 65536 : bytes; for (int i = 0; i < 4; i++) g_tgsp[i] = nil; }
+    int i = g_tgsp_i; g_tgsp_i = (g_tgsp_i + 1) & 3;
+    if (!g_tgsp[i]) { g_tgsp[i] = [g_dev newBufferWithLength:g_tgsp_cap options:MTLResourceStorageModePrivate];
+        if (!g_tgsp[i]) { RED_ONCE(75, "cannot allocate a %u B threadgroup spill buffer", g_tgsp_cap); return 0; }
+        res_add(g_tgsp[i]); }
+    uint64_t a = g_tgsp[i].gpuAddress; enc_c_args(ce, a, 30); return a;
+}
 static void dispatch(const p_dispatch *dp);
 // ---------- Compute dispatches moved ahead of the render pass they would split (DM_NVN_CS_HOIST) ----------
 // Metal cannot run a compute dispatch inside a render pass, so a dispatch between two draws of one pass ends it, and on a tile-based GPU every attachment is stored and loaded again:
@@ -10370,6 +10382,7 @@ static void dispatch(const p_dispatch *dp) {
     g_dispatch_dim[0] = (uint32_t)dp->x; g_dispatch_dim[1] = (uint32_t)dp->y; g_dispatch_dim[2] = (uint32_t)dp->z;   // read back by the driver segment c0 (encode_args_)
     g_c0_dim_buf = nil;
     encode_args(ce, cs, 5, 0);
+    tg_spill_bind(ce, cs->rf.tg_spill);   // a workgroup buffer past Apple's cap, at index 30 (see tg_spill_bind)
     if (dp->ind) {   // The shader reads the group counts from c0 + 0x200: copy the GPU-written ones there first (Metal 4 orders nothing inside an encoder without a barrier)
         if (g_c0_dim_buf) { [(id<MTL4ComputeCommandEncoder>)ce copyFromBuffer:(__bridge id<MTLBuffer>)ib sourceOffset:io toBuffer:g_c0_dim_buf destinationOffset:g_c0_dim_off size:12];
             if (dm_sdk_ounce()) [(id<MTL4ComputeCommandEncoder>)ce copyFromBuffer:(__bridge id<MTLBuffer>)ib sourceOffset:io toBuffer:g_c0_dim_buf destinationOffset:g_c0_dim_off - DMSH_C0_DISPATCH + DMSH_C0_DISPATCH_NVN2 size:12];

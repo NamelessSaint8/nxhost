@@ -129,6 +129,28 @@ template<typename V, typename T, typename... A> static inline __attribute__((alw
     return r;
 }}
 '''
+# Apple caps a threadgroup's static memory at 32 KB, and a larger workgroup buffer -- which SPIRV-Cross emits as a threadgroup array -- makes Metal refuse the pipeline
+# outright (Mario Kart World: 168 of its 729 compute kernels, all 49152 B, all dispatched as a single threadgroup). Those arrays move to a device buffer bound at buffer
+# index 30, taken as a *reference* parameter so that `x[i]` keeps its meaning; a pointer would turn it into arithmetic over whole arrays, and index 31 is refused by the
+# compiler (a kernel allows 0..30 and only 0 is in use).
+TG_SPILL_INDEX = 30
+TG_SPILL_CAP = 32768
+_TG_DECL = re.compile(r'^[ \t]*threadgroup\s+spvUnsafeArray<\s*([^,>]+?)\s*,\s*(\d+)\s*>\s+(\w+)\s*;[ \t]*\n?', re.M)
+_TG_BYTES = {'char': 1, 'uchar': 1, 'short': 2, 'ushort': 2, 'half': 2, 'int': 4, 'uint': 4, 'float': 4,
+             'half2': 4, 'int2': 8, 'uint2': 8, 'float2': 8, 'half3': 6, 'half4': 8, 'int4': 16, 'uint4': 16, 'float4': 16}
+def tg_spill(msl):
+    """Over-cap threadgroup arrays -> device reference parameters at buffer(30). Returns (msl, bytes spilled)."""
+    decls = list(_TG_DECL.finditer(msl))
+    total = sum(_TG_BYTES.get(m.group(1).strip(), 4) * int(m.group(2)) for m in decls)
+    if total <= TG_SPILL_CAP: return msl, 0
+    params = ''.join(', device spvUnsafeArray<%s, %s>& %s [[buffer(%d)]]' % (m.group(1).strip(), m.group(2), m.group(3), TG_SPILL_INDEX) for m in decls)
+    for m in reversed(decls): msl = msl[:m.start()] + msl[m.end():]
+    out = []
+    for ln in msl.split('\n'):
+        t = ln.rstrip()
+        if t.startswith('kernel void ') and t.endswith(')'): ln = t[:-1] + params + ')'
+        out.append(ln)
+    return '\n'.join(out), total
 def border_emu(msl):
     """The samples of the argument buffer's textures through its sampler members, T.sample(S, args) → dm_bs(T.sample(S, args), block, bit, T, S_w, args) (see BORDER_HELPERS);
     the source unchanged when it samples through none. Only samples of float textures: an integer texture is not filtered, and its border colour is Maxwell's integer one, which
@@ -1214,7 +1236,9 @@ def finish(key, w, j, c1):
     except ValueError as e: return 'HMMA rewrite failed', str(e)[:160], None
     try: src = pool_arrays(src)   # handles traced to no slot read the pools the replay keeps (see pool_arrays)
     except ValueError as e: return 'pool rewrite failed', str(e)[:160], None
-    src = border_emu(src); open(msl, 'w').write(src)   # border colours Metal lacks (see border_emu)
+    src = border_emu(src)   # border colours Metal lacks (see border_emu)
+    src, tgspill = tg_spill(src)   # workgroup buffers past Apple's cap become device parameters (see tg_spill)
+    open(msl, 'w').write(src)
     first = []
     if j['stage'] == 'cs':
         src, first = first_store(src, j.get('local')); open(msl, 'w').write(src)   # the first invocation's store, for the host (see first_store)
@@ -1262,7 +1286,7 @@ def finish(key, w, j, c1):
             'threadgroup_size': j.get('local'), 'c1': c1.hex(), 'notes': res['notes'] + (['not in the answer table, queries use defaults'] if j.get('no_facts') else []), 'drv_reads': dr, 'drv_unfillable': unfillable(dr, j['stage']),
             'bindings': binds,
             'vertex_inputs': [{'location': int(m.group(2)), 'msl_type': m.group(1)} for m in re.finditer(r'(\w+)\s+\w+\s*\[\[attribute\((\d+)\)\]\]', src)],
-            'raster': raster_facts(j['stage'], src), 'vs_pad': pad}
+            'raster': raster_facts(j['stage'], src), 'vs_pad': pad, **({'tg_spill': tgspill} if tgspill else {})}
     if j['stage'] == 'vs': full = open(msl).read(); vin_finish(key, full, refl); pull_finish(key, full, refl)   # the shadow-input and pulling libraries (dmsh_vin.py, dmsh_pull.py), from the source with every entry point
     if j['stage'] == 'ps': full = open(msl).read(); alpha_finish(key, full, refl); logic_finish(key, full, refl)   # the alpha test and logic operation libraries (dmsh_alpha.py, dmsh_logic.py), from the source with every entry point
     write_refl(key, refl)
