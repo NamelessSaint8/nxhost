@@ -295,6 +295,15 @@ HLE_FORCE("_ZN2nn2vi20GetDisplayVsyncEventEPNS_2os15SystemEventTypeEPNS0_7Displa
     LOG("vi::GetDisplayVsyncEvent: %p signalled by the host at 60 Hz%s", ev, running ? " (its thread already runs)" : ""); return RES_OK;
 }
 
+// The HDR curve a layer is presented with: Mario Kart World sets an adjustable bezier per frame from main+0x959ae0's interpolated floats. The host has one
+// layer and no display manager, so the curve has nowhere to go -- but the import must exist: it is undefined and strong (the module table has no vi), so
+// the loader bound it to 0 and the first call jumped through the PLT into address 0.
+HLE_FORCE("_ZN2nn2vi39SetLayerNextHdrAdjustableBezierMetadataEPNS0_5LayerEfff", "a layer's HDR bezier curve: nothing on the host presents through vi", void,
+          h_vi_SetBezier, void *layer, float a, float b, float c) {
+    static int n;
+    if (n++ < 4) LOG("vi::SetLayerNextHdrAdjustableBezierMetadata(%p, %.3f, %.3f, %.3f): the host's layer has no vi", layer, a, b, c);
+}
+
 // ---------- diag ----------
 // The text after LogMetaData (NN_LOG) goes straight into the host log; an abort prints the call site and exits with a failure
 HLE_FORCE("_ZN2nn4diag6detail7PutImplERKNS0_11LogMetaDataEPKcm", "game log → host log", void, h_diag_Put, const void *meta, const char *s, size_t n) {
