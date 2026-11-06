@@ -1400,6 +1400,7 @@ NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h)
 static void submit_now(NVNqueue *q, int n, const NVNcommandHandle *h) {
     SEQ("submit %d handles", n);
     gfx_enter();
+    pthread_mutex_lock(&g_sub_mu);   // one submission at a time, and in the asynchronous case the lock the replay thread holds for its job
     uint64_t t0 = now_ns(), c0 = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID), i0, y0, s0 = thr_sys_ns(); thr_counts(&i0, &y0);
     ((queue_t *)q)->submits++;
     mtl_queue_activate(((const queue_t *)q)->serial);
