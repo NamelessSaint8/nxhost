@@ -34,6 +34,7 @@
 
 typedef struct { uint16_t w, h; uint32_t fmt, mode, magic; uint32_t pad[2]; } cv_pref;   // VideoDecoderImagePreference as the host fills it (returned in x8)
 typedef struct { uint32_t magic; uint16_t w, h; uint32_t fmt, count; vpx_image_t **img; uint8_t *mem; uint64_t size; int slot; _Atomic int native; } cv_pool;   // mem, size: the game's pool memory; native: a handle was asked for (RGBA kept in mem); slot: its place in g_cv_pools + 1
+
 typedef struct { uint32_t magic, dec, idx, gen; } cv_sync;   // nn::gs::NativeSyncHandle (16 bytes)
 enum { CV_VP8, CV_VP9, CV_H264, CV_AV1 };
 static const char *const k_cv_name[] = {"VP8", "VP9", "H.264", "AV1"};
@@ -163,6 +164,24 @@ HLE_FORCE("_ZN2nn5codec36GetDecoderImagePoolNativeImageHandleEPKNS0_25VideoDecod
     return (uint32_t)p->slot << 8 | i;
 }
 // A native image handle's picture for hle_nvn.c: 1 and its memory, size and layout; 0 for a handle no pool holds
+// A one-picture pool for something that is not a decoder: nn::chat's local camera video owns a picture and hands its handle to NVN2's native-image
+// builder, which resolves it through dm_native_image like any decoded picture. The caller gets the handle and keeps no other state, so this is the
+// narrowest way to make such a handle name something real. Returns 0 when no slot or memory is left.
+uint32_t dm_picture_pool_new(uint32_t w, uint32_t h) {
+    cv_pool *p = calloc(1, sizeof *p);
+    if (!p) return 0;
+    p->mem = calloc(1, (size_t)native_size(w, h));
+    if (!p->mem) { free(p); return 0; }
+    p->w = (uint16_t)w; p->h = (uint16_t)h; p->count = 1; p->size = native_size(w, h);
+    p->native = 1;   // an atomic store: the field is _Atomic int
+    pthread_mutex_lock(&g_cv_mu);
+    uint32_t slot = 0;
+    for (uint32_t k = 0; k < 256; k++) if (!g_cv_pools[k]) { slot = k + 1; g_cv_pools[k] = p; p->slot = (int)slot; break; }
+    pthread_mutex_unlock(&g_cv_mu);
+    if (!slot) { free(p->mem); free(p); return 0; }
+    return slot << 8;   // picture 0 of that slot
+}
+
 int dm_native_image(uint32_t handle, uint8_t **mem, uint64_t *size, uint32_t *w, uint32_t *h, uint32_t *stride) {
     uint32_t slot = handle >> 8, i = handle & 0xff; int ok = 0;
     pthread_mutex_lock(&g_cv_mu);

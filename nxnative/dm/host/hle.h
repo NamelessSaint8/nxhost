@@ -68,3 +68,4 @@ int dm_movie_playing(void);   // hle_movie.c: a video decoder of the SDK's movie
 void dm_audio_suspend(int on);
 uint64_t dm_audio_render_calls(void);   // Cumulative sound card callback count (the silent sink is not counted)
 void dm_audio_reset(void);   // iOS media services reset: recreate the AudioUnits (hle_audio.c)
+uint32_t dm_picture_pool_new(uint32_t w, uint32_t h);   // hle_codec_video.c: a one-picture pool whose handle dm_native_image resolves (nn::chat's camera video)
