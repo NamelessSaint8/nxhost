@@ -47,6 +47,9 @@ static uint64_t g_fence;
 static void post(post_op o) { if (g_npost == g_postcap) { g_postcap = g_postcap ? 2 * g_postcap : 64; g_post = realloc(g_post, g_postcap * sizeof *g_post); } g_post[g_npost++] = o; }
 
 void mtl_init(void) {}
+// The Metal backend warms the device and the shader map here, before the first submission and outside the graphics gate (nvn_mtl.h). This backend has
+// nothing to warm: a submission completes at once.
+void mtl_prepare(void) {}
 void mtl_sub_begin(void) { g_npost = 0; }
 void mtl_sub_index(const uint64_t *h, int n) { (void)h; (void)n; }
 void mtl_exec_rest(const uint64_t *h, int n) { (void)h; (void)n; }

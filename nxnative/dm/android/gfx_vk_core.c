@@ -682,6 +682,9 @@ VkDescriptorSet vk_alloc_set(VkDescriptorSetLayout l) {
 static void post(post_op o) { vksub_t *s = cur(); if (s->npost == s->cappost) { s->cappost = s->cappost ? 2 * s->cappost : 64; s->post = realloc(s->post, s->cappost * sizeof *s->post); } s->post[s->npost++] = o; }
 void mtl_init(void) { vk_init(); }
 static int g_shadow_pools;
+// The Metal backend warms the device and the shader map here, before the first submission and outside the graphics gate (nvn_mtl.h); the Vulkan
+// backend's equivalent is the device itself, so it comes up before the gate rather than inside it. vk_init is idempotent -- submit_begin calls it too.
+void mtl_prepare(void) { vk_init(); }
 void mtl_sub_begin(void) {
     vk_init();
     pthread_mutex_lock(&g_sub_lock);
