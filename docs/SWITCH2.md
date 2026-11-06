@@ -303,12 +303,24 @@ result and aborts.
 One layout note from the same source: `k_process.cpp` writes the **thread handle** at `tls + 0x110`, the slot this host fills with an ordinal thread id.
 Same slot, different content — worth remembering for anything that reads it back.
 
+### A frame
 
+Four faults stood between the frontier above and a presented frame. Each was named from the guest's own code, and only the first is a stand-in:
 
+| | |
+|---|---|
+| `nn::camera::Initialize` aborts with `Result 0xe401` at `main+0xcded98` | the request comes from `main+0x1c6d430`, a 12-word `SFCI` message whose session handle the caller reads out of its client object at `+4` (`ldr w23, [x0, #4]`) — and that word is `1`, a handle the host never minted (`hle_sf.c` issues `0xd0000+`). Its origin is not in any log; the sf layer now answers such a handle as a session of its own (`svc:0x1`) instead of refusing it |
+| gsv's session, used through `svc 0x21` | `GetUserSession` hands out a block whose `+4` the SDK passes to the syscall; as the integer `1` it named no session. It is minted as a host session now, so the same field serves both readers |
+| `CRASH sig=11 addr=0 pc=0 lr=main+0x959ae8`, frame 106 | `main+0x959ae4` calls `nn::vi::SetLayerNextHdrAdjustableBezierMetadata` through a PLT stub whose GOT slot holds `0`: the import is undefined **and strong**, and the loader bound it to 0 without a word. A void stub answers it — the host has one layer and no display manager — and the loader now prints every strong import it binds to 0, because finding that null jump cost far more than the line costs to print |
+| `[nvn-mtl] FATAL submit re-entered` | `submit_now` unlocked `g_sub_mu` and never locked it: the lock was dropped in `02e336f0` while the unlock stayed, so the title's render and prepare threads replayed into one command buffer. Holding it for the whole submission is the order the comment above that mutex already claimed is valid |
 
+With those, the title presents:
 
+| | |
+|---|---|
+| swap chain | `WindowInitialize swap chain 3 textures, interval 1, first 3840x2160 format 0x25` |
+| window crop | `WindowCrop 0,0 2560x1440`, then `0,0 2048x1152` — the picture the title presents is smaller than the swap chain, and scaling it up is the **system's** job, which the host's present pass does (`present_viewport` letterboxes the crop onto the canvas) |
+| frames | 300 presented before the host's own memory watchdog stopped the run: `resident 37382 MB, GPU allocated 38440 MB` against a 24 GB guard. Steady frames are 25–50 ms with 12 ms of GPU; 87 of the 300 were long, up to 11 s, all of them pipeline compiles for pairs the boot prebuild had not built |
+| the picture | a full-frame, correctly exposed render — 10.7 k distinct colours in a 160×90 sample, mean luma 103 — not a clear colour or a partial blit |
 
-
-
-
-
+Two things this measurement corrects. A screenshot taken without `DM_NVN_SHOT_OUT` saves the **raw swap chain**, where the 2048×1152 crop sits in the top-left corner of a black 3840×2160 frame; that is what the present pass is for, and reading it as the presented picture would have sent the next hour into the wrong subsystem. And the remaining `[RED] failed to create compute pipeline: Threadgroup memory size (49152) exceeds the maximum threadgroup memory allowed (32768)` is a real ceiling rather than noise: Apple GPUs cap threadgroup memory at 32 KB, and some of this title's compute passes ask for 48 KB. Those passes are what stands between "a frame" and "a correct frame".
