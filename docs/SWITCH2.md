@@ -200,12 +200,36 @@ store faults. Sized to 25 GB, which leaves 8.5 GB of heap:
 | module initialisers | all of them — `main` 2,960 entries, `sdk` 88, `subsdk1` 4 |
 | `nnMain` | **reached** |
 
-With the RomFS mounted as `DM_ROMFS` it goes further than that: 164 supervisor calls, guest threads, an NVN shader lookup. What stops it now is
-plumbing rather than the port's own surface — the Metal shader cache has not been built for this title (`failed to load shader … metal_shader_cache`),
-and `chat:u` is a service the host does not serve (`the game connects to service chat:u itself`).
-
 Two things this measurement corrects, both of which this page asserted first: the crash was not a Switch 2 structure left unpopulated by the host, and
 the numbers in a first-pass memory plan are load-bearing rather than provisional detail.
+
+With the RomFS mounted as `DM_ROMFS` the run leaves the loader behind — 164 supervisor calls, guest threads, an NVN shader lookup — and then keeps going,
+because the two things this page blamed next were both fixable:
+
+| | |
+|---|---|
+| the shader cache the host asked for | it was never built, because `dmsh_build.py` opens `shader_map.tsv.conflicts.tsv` and digests it, so a profile without that table both fails and computes a different chain version than the header carries (`0bfb…` against `5f4f…`). With the empty table every profile from `scripts/build_ipa_from_nsp.py` gets, the Mac chain builds **11,577 of 11,603** — the 26 are the task/mesh programs, the same count the Android chain reaches — plus 7,213 alpha-test, 570 logic-operation and 3,485 pulling libraries, none failing to compile. The host then misses **no** shader, where it previously reported five on a single screen |
+| `chat:u` | served by the host session mechanism, and its first command answered with an out object rather than zeros, which clears the null dereference in `nn::chat::detail::InitializeUserService` |
+
+What stops it now is the port's own surface rather than plumbing:
+
+```
+0x6c1cb0  bl  _ZN2nn3gsv14GetUserSessionEv      ; nn::gsv::GetUserSession() → null
+0x6c1cb8  bl  _ZN2nn2os12SdkMutexType4LockEv    ; Lock(null) → SIGSEGV, pc sdk+0x171ef8
+```
+
+`nn::gsv` is the Switch 2 graphics server. The call arrives from `nn::chat::gsv::GetMetadataStreamGeneration` on the guest's `Prepare Thread`, and the
+session is null because the host has no `gsv` code at all and no `nx2:gsv` connect is ever attempted — so nothing fills the SDK's session global. That is
+requirement 1 of "what a port would still need", met for the first time from the native side.
+
+Two things worth recording about the order of events, because they bound the work. The graphics stack is fully up *before* `chat:u` is contacted:
+`vi` vsync at 60 Hz, the `nvn-mtl` window with `present tick 60 Hz` and the present-thread time-constraint policy, the 11,603-entry shader map with a
+background prefetch, a run of texture uploads, 20 live address regions, and the guest's own `Prepare Thread` and `Presentation Thread`. So the renderer is
+complete and idle when the run dies — but no frame has been presented, and the presentation thread is parked, not running.
+
+There is also one latent defect this pass surfaced and did not chase: the Mac chain prints `Attribute offset 0x5C is not valid` across 2,838 of those
+shaders. They translate and load, so it will show up as wrong geometry rather than as a crash, and it is the first thing to check when rendering starts.
+
 
 
 
