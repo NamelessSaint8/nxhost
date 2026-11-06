@@ -10332,7 +10332,9 @@ static void dispatch(const p_dispatch *dp) {
     if (!ps) {
         NSError *e = nil; uint64_t bt = bp_now(); ps = [g_dev newComputePipelineStateWithFunction:cs->fn error:&e];
         g_bp_pso_n++; g_bp_pso_ns += bp_now() - bt;
-        if (!ps) { MLOG("[RED] failed to create compute pipeline: %s", e.localizedDescription.UTF8String); return; }
+        // Diagnostic DM_NVN_ALLOCPROF=1: a kernel refused for threadgroup memory is one of a family (168 of Mario Kart World's 729), and whether a spill to a
+        // device buffer is cheap depends on how many threadgroups it launches -- so say that, once per program.
+        if (!ps) { MLOG("[RED] failed to create compute pipeline: %s -- program %.16s grid %dx%dx%d", e.localizedDescription.UTF8String, cs->key, dp->x, dp->y, dp->z); return; }
         pso_record("C\t%s\n", cs->key);
         if (cs->key[0]) pso_user_record("C\t%s\n", cs->key);
         hm_put_id(&g_cps, &k, ps);

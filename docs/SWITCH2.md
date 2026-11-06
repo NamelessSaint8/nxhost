@@ -399,3 +399,17 @@ If the arrays are 2-9% mapped, the obvious question is whether Metal can hold th
 So a texture of that shape costs its dense size on this GPU, whatever the title has mapped: the 29 GB is 5.8 GB + 5.8 GB of one array plus the rest, and no Metal API turns it into 9%. The alternatives are structural rather than a format or hint -- allocate one texture per layer and only the mapped ones, with the translated shaders sampling through a table instead of a layer index, which is a shader-translation project rather than a fix.
 
 Recorded because it rules out a whole direction cheaply: a `MTLHeapTypeSparse` heap that creates fine and then refuses to place a texture is easy to read as a wrong descriptor and spend a day on.
+
+### The 48 KB compute kernels are one threadgroup each
+
+The compute pipelines Apple refuses are uniform: of Mario Kart World's 729 compute kernels, 251 declare threadgroup arrays and **168 declare exactly 49152 B** --
+`threadgroup spvUnsafeArray<uint, 12288> _37;`, the array SPIRV-Cross emits for a workgroup buffer. Apple's limit is 32768 B, so they never create, and every dispatch of them
+is retried (12,309 attempts in one 130 s run). None of the 168 touches `.elements`, and the indices are data-dependent (`_37[int(_676)]`), so the array cannot be shrunk on
+inspection.
+
+What makes this fixable rather than a project is the dispatch shape: with the refusal path naming its program and grid (`a92` above), **every one of them is grid 1x1x1** --
+one threadgroup per dispatch. So the array can be spilled to an ordinary device buffer with no per-group indexing at all: a 48 KB scratch buffer per dispatch, bound as an
+extra buffer argument, with `threadgroup spvUnsafeArray<T, N> x;` rewritten to `device spvUnsafeArray<T, N>* x [[buffer(K)]]` (the type is kept, so `x[i]` still means what it
+meant). A dispatch in flight could overlap the next, so the host wants a small ring of these buffers rather than one.
+
+That is the next piece of work: the rewrite in `dm/gfx/tools/dmsh_build.py`, the binding and ring in `nvn_mtl.m`'s dispatch path, and the 168 kernels as the test.
