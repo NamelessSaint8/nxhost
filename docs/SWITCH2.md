@@ -350,14 +350,22 @@ residency census: resident set 33.4 GB of 37.4 GB -- 1598 textures 30.1 GB, 1105
 big texture: guest 8192x8192x68 levels 12 target 4 fmt 0x8e → Metal 8192x8192x1 mips 12 array 68 fmt 194 1451 MB (ser 31607) standalone
 ```
 
-One texture dominates: the title asks for **one** 8192x8192, 68-layer, 12-level sparse array. `tex_mtl` makes it in the guest's own block format at **1451 MB** (ASTC 8x8,
-0.25 bytes per texel), while the upload path (`pkg_upload_`) makes it at **5803 MB** (ASTC 4x4, one byte per texel) -- and three of those are alive at once, because a
-streamed package keeps its new texture, the one it replaced as `spare`, and a retiring copy until the GPU has passed it. Three 5.8 GB copies are 17.4 GB of the 33.4 GB.
+Two textures of that shape, and both are the title's own:
 
-So the two things to fix are both in `nvn_mtl.m` and neither is about the title's own needs:
+| guest format | Metal | size |
+|---|---|---|
+| `0x8E` ASTC 8x8 sRGB | `ASTC_8x8_sRGB` | **1451 MB** |
+| `0x4F` BC6H | `BC6H_RGBUfloat` | **5803 MB** |
 
-- the upload path must keep the guest's block size (1451 MB instead of 5803 MB, a 4x saving on every streamed block texture);
-- the spare must not be a whole second copy of an array this size: it exists so in-flight draws keep reading the old one, which for a 1.5-5.8 GB texture is worth a
-  different answer -- wait for the fence, or re-upload in place.
+The second is 4x the first because BC6H is a byte per texel where ASTC 8x8 is a quarter of one -- that is the guest's own format, not a rewrite of it, and the first reading of these
+numbers (an upload path densifying an ASTC texture) was wrong. What was actually wrong is **how many copies of it the host kept**: a streamed texture is re-uploaded into a new
+Metal texture and the one it replaced is kept as a *spare* so a submission still reading the old content does not wait -- so the array, its spare and the copy still retiring were
+three of it, 17.4 GB of a 33.4 GB resident set. Past 512 MB the replaced texture is retired on its fence instead, which took the frame-300 footprint from **37.1 GB to 30.9 GB**
+with no crash and no change to the picture.
 
-At ~1.45 GB with one copy, that array costs what the console's own budget would give it, and the run's ~40 GB should come down to the low teens.
+Two costs remain, both visible in the same log:
+
+- each upload of this array also allocates a full-size CPU gather (`malloc(t->L.size)`, dirtied because unmapped pages are written as zero) and a full-size Metal staging buffer
+  (line 2436), so an upload of it costs two more copies of 5.8 GB while it runs;
+- the array is **sparse** on the console -- only mapped pages are paid for -- and the host materialises it dense. That is the big one: a dense 5.8 GB texture for a sparse
+  mapping is the difference between this host's ~30 GB and the console's budget, and Metal's own answer to it is sparse heaps rather than a smaller format.
