@@ -15,7 +15,7 @@
 #define SF_MAX 64
 static struct { char name[16]; int used, domain; unsigned seen; } g_sf[SF_MAX];
 static pthread_mutex_t g_sf_mu = PTHREAD_MUTEX_INITIALIZER;
-static const char *const sf_served[] = {"olsc:u"};
+static const char *const sf_served[] = {"olsc:u", "chat:u"};
 
 static int sf_slot(uint32_t h) {
     unsigned i = h - SF_H0;
@@ -93,5 +93,12 @@ HLE_FORCE("_ZN2nn2sf4hipc15SendSyncRequestENS_3svc6HandleEPvm", "send a request 
     m[1] = (uint32_t)((end - 8) / 4 < 0x3ff ? (end - 8) / 4 : 0x3ff);
     size_t out = 0x10 + (dom ? 16 : 0);
     uint32_t *o = (uint32_t *)(base + out); o[0] = 0x4f434653; o[1] = ver; o[2] = RES_OK; o[3] = 0;   // "SFCO"; a domain's out-object count before it stays 0
+    // Probe: nn::chat::detail::InitializeUserService dereferences the object this call returns, so a zeroed reply leaves it null
+    // (SIGSEGV at sdk+0x6bc400, addr 0). Answer with an object id instead, and count it in the domain header when the session is one.
+    if (!strncmp(g_sf[i].name, "chat:u", 8) && cmd == 0) {
+        if (dom) *(uint32_t *)(base + 0x10) = 1;
+        o[4] = 1;
+        LOG("sf: chat:u command 0: out object 1 (probe, was a zeroed reply)");
+    }
     return RES_OK;
 }
