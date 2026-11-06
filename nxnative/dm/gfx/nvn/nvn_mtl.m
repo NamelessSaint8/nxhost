@@ -2790,7 +2790,12 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
                 if (pk->spare && pk->spare != nt) defer_obj_release(pk->spare);   // still in use, or of another shape: retired as before
                 if (pk->sparse) sparse_view(pk, t);
                 zb_report(t, pk->sparse ? (unsigned)pk->vbase : 0, "re-upload");
-                pk->spare = old; pk->spare_fence = g_fence + 1; g_ser_gen++; pk->stamp = st; pk->vgen = pk->vseen = vg; pk->span = nvn_dirty_span(t->mem, t->L.size); pk->seen = st; g_pkg_reuploads++; if (dirtycheck() && !pk->sparse) pk->hash = full_hash(t->mem, t->L.size); pkg_edges_take(pk, t); }
+                // Keep the replaced texture as the spare only when that is cheap: it exists so a submission still reading the old content does not wait, and a texture of
+                // 512 MB or more costs more than the wait -- Mario Kart World re-uploads one 5803 MB sparse array, and tex + spare + the copy still retiring were
+                // three of it (17.4 GB of a 33.4 GB resident set). Past the threshold the old texture is retired on its fence like any other, as for a spare of another shape.
+                if (old.allocatedSize < (512ull << 20)) { pk->spare = old; pk->spare_fence = g_fence + 1; }
+                else { if (pk->spare) { defer_obj_release(pk->spare); pk->spare = nil; } defer_obj_release(old); }
+                g_ser_gen++; pk->stamp = st; pk->vgen = pk->vseen = vg; pk->span = nvn_dirty_span(t->mem, t->L.size); pk->seen = st; g_pkg_reuploads++; if (dirtycheck() && !pk->sparse) pk->hash = full_hash(t->mem, t->L.size); pkg_edges_take(pk, t); }
             return pk->view ? pk->view : pk->tex;
         }
         pk = [NvPkg new];
