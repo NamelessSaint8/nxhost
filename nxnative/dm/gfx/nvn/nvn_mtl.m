@@ -7471,6 +7471,25 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
                 else { void *gb; uint64_t gof; if (mtl_addr(u->addr, sizeof gf, &gb, &gof)) memcpy(gf, (const uint8_t *)gb + gof, sizeof gf); }
                 PD("B %llu st%d cb reg%d addr=%#llx size=%llu gpu=%#llx shd=%d f=%g,%g,%g,%g", g_stat_pass, nvn_stage, reg, (unsigned long long)u->addr, (unsigned long long)u->size,
                    (unsigned long long)gpu, shd, gf[0], gf[1], gf[2], gf[3]);
+                // DM_NVN_UB_WATCH=1: watch the guest's own writes into each uniform binding. f= above shows what a block holds at encode time; identical values at every
+                // sighting cannot say whether the title rewrote the same bytes in between. Every guest memory pool is a tracked range (nvn_dirty_add_range, hle_nvn.c), so a
+                // stamp plus nvn_dirty_protect makes the next guest write fault and bump that page's generation; the next sighting of the same address asks nvn_dirty_since and
+                // reports whether anything wrote it in the meantime. A HOST write also stamps the page (prep_write), and a GPU write is not seen at all, so "written=1" means
+                // "something wrote these pages from the CPU since the last look", not "the title did".
+                { static int uw = -1; if (uw < 0) { uw = getenv("DM_NVN_UB_WATCH") != NULL; if (uw) MLOG("DM_NVN_UB_WATCH: uniform bindings are write-protected to see when the guest writes them"); }
+                  if (uw && ul) {
+                    enum { UBW_N = 1024 };
+                    typedef struct { uint64_t addr, stamp; int writes; } ubw_ent;
+                    static ubw_ent t[UBW_N]; static int tn;
+                    int k = -1; for (int i = 0; i < tn; i++) if (t[i].addr == u->addr) { k = i; break; }
+                    uint64_t now = nvn_dirty_now(); int wrote = 0;
+                    const void *wa = (const void *)(uintptr_t)u->addr;
+                    if (k >= 0) { wrote = nvn_dirty_since(wa, ul, t[k].stamp); t[k].stamp = now; if (wrote) t[k].writes++; }
+                    else if (tn < UBW_N) { t[tn] = (ubw_ent){u->addr, now, 0}; k = tn++; }
+                    else RED_ONCE(93, "uniform write watch table is full (%d addresses): later bindings are not watched", UBW_N);
+                    PD("W %llu st%d cb reg%d addr=%#llx size=%llu tracked=%d written=%d times=%d", g_stat_pass, nvn_stage, reg, (unsigned long long)u->addr, (unsigned long long)u->size,
+                       nvn_dirty_tracked(wa, ul), wrote, k >= 0 ? t[k].writes : -1);
+                    nvn_dirty_protect(wa, ul); } }
                 // DM_NVN_CBDUMP=directory: also saves the whole uniform block to disk as-is (F<frame>_p<pass>_st<stage>_cb<slot>_<address>.bin), for the ground-truth side to compare byte by byte by guest address
                 // DM_NVN_CBDUMP_KEY=shader key: only save for draws using that shader (any stage)
                 static const char *cbd, *cbk; static int cbd_init; if (!cbd_init) { cbd = getenv("DM_NVN_CBDUMP"); cbk = getenv("DM_NVN_CBDUMP_KEY"); cbd_init = 1; }
