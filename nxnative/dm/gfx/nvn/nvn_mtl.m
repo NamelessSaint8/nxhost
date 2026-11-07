@@ -9958,12 +9958,41 @@ static void draw(const p_draw *dw, const p_draw_idx *di) { cp_stamp start = cp_b
 // state below all checks out (full mask, full viewport, plausible depth state) and yet the target stores nothing: six depth dumps and two colour dumps, issued against the serials
 // this line prints and spread over ~12 s, all read back zero. The depth target cannot corroborate, because the state is dt1 dw0 -- depth write is off -- so a rasterised fragment would
 // leave depth at its clear value too. That leaves "no fragment ever reaches this target" as the reading to explain.
+// DM_VDRAW_DRAWS=n: read the vertex stage's slots 0-3 at EVERY draw of a pass with depth and colour, printing a slot when
+// its binding changes and stopping after n slots. The pass line below samples the first draw only, and stage 0 binds slot 0
+// at 723 distinct addresses in one run -- most of them a single 64-byte record -- so one sample cannot say what a later draw
+// reads. The words print in hex because %.6g cannot separate a float4x4 from a record whose real stride is 8 bytes: slot 0's
+// printed rows repeat two floats across the row boundary, which is what a record array looks like, not what a matrix does.
+// Row 8 is the shader's translation (076e487a86fc4eab_b reads _m0[0..3] and _m0[8]), so it prints separately when the
+// block is long enough to hold it.
+static void vdraw_draw_watch(const char *vkey) {
+    static int cap = -1; if (cap < 0) { const char *e = getenv("DM_VDRAW_DRAWS"); cap = e ? atoi(e) : 0; }
+    static uint64_t at[4], sz[4]; static int had[4];
+    if (cap <= 0) return;
+    for (int k = 0; k < 4; k++) { const p_bind_buf *u = &S.ubo[0][k];
+        if (!u->addr || (had[k] && at[k] == u->addr && sz[k] == u->size)) continue;
+        had[k] = 1; at[k] = u->addr; sz[k] = u->size;
+        void *mb; uint64_t mo; char h[256]; int n = 0, nw = (int)(u->size / 4 < 16 ? u->size / 4 : 16);
+        if (!mtl_addr(u->addr, u->size, &mb, &mo))
+            MLOG("vdraw: draw vs %s slot %d addr %#llx size %llu (not mapped)", vkey, k, (unsigned long long)u->addr, (unsigned long long)u->size);
+        else { const uint8_t *b = (const uint8_t *)mb + mo;
+            for (int i = 0; i < nw; i++) { uint32_t w; memcpy(&w, b + 4 * i, 4); n += snprintf(h + n, sizeof h - (size_t)n, " %08x", w); }
+            if (u->size >= 144) { n += snprintf(h + n, sizeof h - (size_t)n, " | row8:");
+                for (int i = 32; i < 36; i++) { uint32_t w; memcpy(&w, b + 4 * i, 4); n += snprintf(h + n, sizeof h - (size_t)n, " %08x", w); } }
+            MLOG("vdraw: draw vs %s slot %d addr %#llx size %llu rows %llu w:%s", vkey, k, (unsigned long long)u->addr,
+                 (unsigned long long)u->size, (unsigned long long)(u->size / 16), h); }
+        if (--cap == 0) { MLOG("vdraw: DM_VDRAW_DRAWS cap reached, later bindings not shown"); return; } } }
 static void vdraw_log(int pass) {
     static int on = -1; if (on < 0) { const char *e = getenv("DM_VDRAW_LOG"); on = e && atoi(e); }
-    static int last = -1; if (!on || !R.rt.depth || !R.rt.color[0] || pass == last) return;
+    static int last = -1;
+    if (!on) return;
+    NvProg *vpp = S.prog ? prog_get(S.prog) : nil;              // the vertex program this pass's first draw uses: eleven
+    const char *vkey = vpp && vpp->sh[0] ? vpp->sh[0]->key : "-";   // different full-mask passes a frame, so a size alone names none
+    if (R.rt.depth && R.rt.color[0]) vdraw_draw_watch(vkey);
+    if (!R.rt.depth || !R.rt.color[0] || pass == last) return;
     last = pass;
-    MLOG("vdraw: pass %d target %ux%u fmt %u ser %llu | depth %ux%u fmt %u ser %llu | ds dt%d dw%d df%d st%d | chmask %#x | vp %.0f,%.0f %.0fx%.0f | sc %s %d,%d %dx%d",
-         pass, R.rt.color[0]->d.width, R.rt.color[0]->d.height, R.rt.color[0]->d.format, (unsigned long long)R.rt.color[0]->serial,
+    MLOG("vdraw: pass %d vs %s target %ux%u fmt %u ser %llu | depth %ux%u fmt %u ser %llu | ds dt%d dw%d df%d st%d | chmask %#x | vp %.0f,%.0f %.0fx%.0f | sc %s %d,%d %dx%d",
+         pass, vkey, R.rt.color[0]->d.width, R.rt.color[0]->d.height, R.rt.color[0]->d.format, (unsigned long long)R.rt.color[0]->serial,
          R.rt.depth->d.width, R.rt.depth->d.height, R.rt.depth->d.format, (unsigned long long)R.rt.depth->serial,
          S.ds.dt, S.ds.dw, S.ds.df, S.ds.st, S.chmask,
          S.vp[0][0], S.vp[0][1], S.vp[0][2], S.vp[0][3],
