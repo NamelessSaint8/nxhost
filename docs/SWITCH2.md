@@ -659,3 +659,22 @@ Viewport and scissor are full-target in every one of them. So **the mask, viewpo
 It also corrects the previous reading: the target I dumped with `texraw` was **fmt 92**, while these world-colour passes are **fmt 63** -- two different textures of the same
 size, and the passdump lists 43 writers of 2048x1152. The black dump was therefore qne of an unknown 2048x1152 texture, not established as the world's own. Re-dumping with
 the serial of a fmt-63 world pass is the next step, and only then is "the world's colour target is black" a fact rather than a guess.
+
+### NVN fmt 63 is Metal fmt 92: the dump was the world's target after all
+
+The two probes print different enums -- `DM_NVN_PASSDUMP` prints the Metal pixel format, `DM_VDRAW_LOG` prints the NVN one -- and matching them by pass number in a single
+process settles it:
+
+```
+pass 32186: 2048x1152  NVN fmt 63  == Metal fmt 92  serial 48215
+pass 32191:  512x288   NVN fmt 41  == Metal fmt 30   serial 34530
+pass 32192: 1024x576   NVN fmt 41  == Metal fmt 115  serial 34542
+```
+
+So `fmt 92` in the passdump **is** `fmt 63` in the draw log: the target dumped with `texraw` was the world's own colour target, and "the world's colour target is black" stands.
+The correction that said otherwise compared a Metal number against an NVN number and is itself the error worth remembering.
+
+That leaves a tighter question than before: the per-draw state is right (full mask, full viewport and scissor, a real depth state) and the target still ends up empty. Two host-side
+mechanisms can do that without any log line -- the **store lookahead** deciding the attachment need not be written back, and **draw skipping** (`zskip`) deciding a draw's output is
+already covered. Both are the host's own optimisations rather than anything the guest asked for, which is where to look next: the world pass's draws are recorded, its state is
+correct, and nothing it produces reaches the target.
