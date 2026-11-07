@@ -511,3 +511,17 @@ vs d241dbb5bea37a6d n=16 offs 0/41 c/17 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 
 
 So the translator's `Const(0)` is a legitimate value for an unbound attribute, not a dropped one: the warning is benign, and the black picture has another cause. The lead is
 closed; the note stays in the build log as a known-benign line rather than a suspect.
+
+The streams close it twice over. Model draws (filtered to three or more live attributes, or a stride of 0x20 up) show:
+
+```
+vs 7a1585ef822af63c n=10 offs 0/34 c/105 10/105 0/0 … 14/17 18/18 | streams 0:s28/d0
+vs e4c4359e88ac765c n=15 offs 0/34 14/105 18/105 … 1c/17 20/17 … c/41 | streams 0:s36/d0
+```
+
+One stream each, stride **0x28 to 0x36**, with five to seven live attributes at 0, 0xC, 0x10, 0x14, 0x18, 0x1C, 0x20. So `0x5C` is **beyond every stride the guest uses** -- a read there
+would fall into the next vertex -- which means those loads are in code these draws never take, and the zero is harmless. The lead is closed from both directions.
+
+What the same lines show for the picture: MKW's model vertices are a single interleaved stream of 40--54 bytes, and two of the attributes carry format **105**, which the NVN format table
+(`nvn_fmt_mtl.c`) reads as `RGB10A2Uint`. Packed integer normal/tangent data would be plausible; the `Uint` reading of a model attribute is not. Since Switch 2 has its own format
+numbering, that table is now the thing to check: a misread format gives the right offsets and the wrong component types, which is exactly black geometry with no error.
