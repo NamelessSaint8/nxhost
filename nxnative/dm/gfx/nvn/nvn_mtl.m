@@ -10109,8 +10109,51 @@ static void vdraw_log(int pass) {
             p += (size_t)snprintf(g + p, sizeof g - p, " %.6g", v); }
           if (any) MLOG("vdraw:     row %d:%s", r, g); } } }
 }
+// Diagnostic DM_VATTR_VALS=n: for the first draw of each vertex program listed in DM_VDRAW_KEYS, print every live attribute's
+// first n vertices as raw 16-byte records, and the size of each uniform block that program binds. This is the input side of
+// "what does the vertex shader emit": the world prepass pulls its vertices through an index attribute -- it decodes
+// attribute m_29 as integers, multiplies by 48 and uses the result as a row index into c5 (`_m0[(w * 48) >> 4]`) -- so a
+// position exists only if those indices land inside c5's block. Raw words rather than decoded floats because the index
+// attribute's format is an integer one, which attr_read (float formats only) cannot decode.
+static void vattr_vals(const p_draw *dw, const p_draw_idx *di) {
+    static int n = -1; if (n < 0) { const char *e = getenv("DM_VATTR_VALS"); n = e ? atoi(e) : 0; if (n > 16) n = 16; }
+    if (n <= 0) return;
+    NvProg *p = S.prog ? prog_get(S.prog) : nil; const char *k = p && p->sh[0] ? p->sh[0]->key : "-";
+    if (!vdraw_key_ok(k)) return;
+    { static char seen[64][24]; static int nseen;   // once per program: the inputs do not change per draw
+      for (int i = 0; i < nseen; i++) if (!strcmp(seen[i], k)) return;
+      if (nseen >= 64) return;
+      strlcpy(seen[nseen++], k, sizeof seen[0]); }
+    MLOG("vattr %s target %ux%u chmask %#x: %d attrs, count %d, %s", k,
+         R.rt.color[0] ? R.rt.color[0]->d.width : 0, R.rt.color[0] ? R.rt.color[0]->d.height : 0, S.chmask, S.nattr,
+         dw ? dw->count : di->count, di ? "indexed" : "non-indexed");
+    int isz = di ? (di->itype == 1 ? 2 : di->itype == 2 ? 4 : 0) : 0;
+    const uint8_t *ib = NULL;
+    if (di && isz) { void *m; uint64_t o; if (mtl_addr(di->ibuf, (uint64_t)n * isz, &m, &o)) { const uint8_t *c = [(__bridge id<MTLBuffer>)m contents]; if (c) ib = c + o; } }
+    for (int a = 0; a < S.nattr && a < 16; a++) {
+        va_st at = S.attr[a]; if (!at.fmt || at.stream >= 16) continue;
+        vs_st sm = S.stream[at.stream]; NVNbufferRange vb = S.vbuf[at.stream];
+        char b[512]; size_t o = 0;
+        for (int v = 0; v < n; v++) {
+            int64_t vid;
+            if (di) { if (!ib) break; vid = (isz == 2 ? (int64_t)((const uint16_t *)ib)[v] : (int64_t)((const uint32_t *)ib)[v]) + di->base_vertex; }
+            else vid = (int64_t)dw->first + v;
+            uint64_t off = (uint64_t)vid * sm.stride + at.offset;
+            void *mb; uint64_t mo;
+            if (!mtl_addr(vb.address + off, 16, &mb, &mo)) { o += (size_t)snprintf(b + o, sizeof b - o, " -"); continue; }
+            const uint8_t *base = [(__bridge id<MTLBuffer>)mb contents]; if (!base) break;
+            uint32_t w[4]; memcpy(w, base + mo, sizeof w);
+            o += (size_t)snprintf(b + o, sizeof b - o, " [%08x %08x %08x %08x]", w[0], w[1], w[2], w[3]);
+        }
+        MLOG("  attr %d off %#x fmt %d stream %d stride %u div %u v0..%d:%s", a, at.offset, at.fmt, at.stream,
+             sm.stride, sm.divisor, n - 1, b);
+    }
+    for (int r = 0; r < 16; r++) if (S.ubo[0][r].addr)
+        MLOG("  ubo slot %d size %llu", r, (unsigned long long)S.ubo[0][r].size);
+}
 static void draw_(const p_draw *dw, const p_draw_idx *di) {
     vdraw_log((int)g_stat_pass);
+    vattr_vals(dw, di);
     // Diagnostic DM_VATTR_LOG=1: the guest's own vertex attribute table for this draw -- offset, stream and format per attribute, beside the vertex shader's key.
     // It answers a question a build cannot: 2838 shaders load a vertex attribute at byte offset 0x5C that the offline translation has no entry for (Ryujinx
     // AttributeMap returns 0 there), and whether the guest declares that offset is only visible in the per-draw state.
