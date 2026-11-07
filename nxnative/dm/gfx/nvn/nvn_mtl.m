@@ -9917,11 +9917,17 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
       if (on > 0 && S.prog) {
           NvProg *vp = prog_get(S.prog); const char *k = vp && vp->sh[0] ? vp->sh[0]->key : "-";
           static char seen[64][24]; static int nseen;
+          int nlive = 0; for (int a = 0; a < 16; a++) nlive += S.attr[a].fmt != 0;
+          unsigned str0 = 0; for (int st = 0; st < 16; st++) if (S.stream[st].stride > str0) str0 = S.stream[st].stride;
           int dup = 0; for (int i = 0; i < nseen; i++) dup |= !strcmp(seen[i], k);
-          if (!dup && nseen < 64) {
+          if (!dup && nseen < 128 && (nlive >= 3 || str0 >= 0x20)) {   // model-like draws: the first 64 were UI, one 16-byte stream and two attributes
               strlcpy(seen[nseen++], k, sizeof seen[0]);
               char b[1024]; size_t o = (size_t)snprintf(b, sizeof b, "vs %.16s n=%d offs", k, S.nattr);   // offsets only, so all 16 fit: a truncated line cannot say whether 0x5c is there
               for (int a = 0; a < 16; a++) o += (size_t)snprintf(b + o, sizeof b - o, " %x/%d", S.attr[a].offset, S.attr[a].fmt);
+              // The streams those attributes fetch from, with the divisor: a draw whose live attributes all sit in stream 0 with one stride is a vertex-fed draw, and the
+              // stride is what the guest's attribute offsets are measured against.
+              o += (size_t)snprintf(b + o, sizeof b - o, " | streams");
+              for (int st = 0; st < 16; st++) if (S.stream[st].stride) o += (size_t)snprintf(b + o, sizeof b - o, " %d:s%u/d%u", st, S.stream[st].stride, S.stream[st].divisor);
               MLOG("%s", b); } } }
     g_draw_binst = (uint32_t)(dw ? dw->base_instance : di ? di->base_instance : 0);   // c0 + 0x644 of the stages that read the driver segment (encode_args)
     if (passdump()) { NvProg *p = g_geo_program ? g_geo_program : S.prog ? prog_get(S.prog) : nil;
