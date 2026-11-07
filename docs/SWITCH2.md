@@ -447,3 +447,15 @@ package argument. With it the chain `e768d85cea2b` built completely -- 11,577 me
 exactly the kernels that used to be refused.
 
 The superseded chain `b-5f4fb6fce881` (1.5 GB) was deleted once the new one was verified, as its cache is keyed by a version nothing looks for any more.
+
+### What the 0x5C warning is not
+
+`translator 2838 in 2838 shaders Attribute offset 0x5C is not valid.` is Metal's own warning text, counted by the build like the threadgroup one. The obvious reading --
+that NVN attribute *byte offsets* are being used as Metal attribute *indices*, and 92 is out of range -- is **wrong**: the generated MSL uses `[[attribute(0)]]` through
+`[[attribute(8)]]` and nothing above 31 anywhere in the 11,577 shaders.
+
+So the offset Metal is rejecting belongs to a *byte* layout, which points at the vertex layout the host builds for a draw (a stride/offset beyond the buffer), not at the
+translated shader. That matters because it is the leading suspect for the picture: models black, sky pieces missing, with only 93 shader-load misses in the log -- a silent
+defect, exactly what bad vertex offsets look like.
+
+Next probe: take a draw whose shader warns, log the vertex layout the host constructs for it beside the guest's own attribute table (offset, stride, format), and compare.
