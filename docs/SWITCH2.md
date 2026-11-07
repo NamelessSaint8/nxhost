@@ -697,3 +697,16 @@ available for these passes, which is worth knowing on its own (the optimisation 
 With the mask, viewport, scissor, depth state, dataflow and now the store verdict all clean, what is left in the host is **draw skipping** (the zero-source skip deciding a draw's
 output is already covered). If that is not it either, the world's draws are running and their geometry collapses -- a transform read from the wrong uniform slot puts every vertex
 at one point, which also leaves a target untouched with no error anywhere.
+
+### Draw skipping is not it either: the world target stays black with it off
+
+`DM_NVN_ZSKIP=0` disables the zero-source skip, and the world's target is unchanged: 5 non-zero floats in a 200,000-value sample, max 0.0, and the frame's mean luma 11.4 (a
+transition, so darker than a settled frame). So neither host-side optimisation drops the pass's output.
+
+**Everything about the pass is now verified correct and it still writes nothing:** an attached depth target, 586 recorded draws, a full colour mask, full-target viewport and scissor,
+a plausible depth state, the store lookahead writing back, skipping disabled, and a window pass that binds the result. The world's draws are replayed and no fragment reaches the target.
+
+That leaves the draws' own geometry: if the vertex stage's transforms come from the wrong place -- a uniform slot read at the wrong offset, the usual way for a port to put every
+vertex of every model at one point -- the pass rasterises nothing, stores zeros and logs nothing. The next probe is therefore on the vertex side of one world draw: the clip-space
+position the vertex shader produces for its first vertex, beside the transform it should have used. `DM_NVN_UBP`-style buffer dumps or a `peek` of the constant buffer at the draw's
+uniform slot would give that without a rebuild.
