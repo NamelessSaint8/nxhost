@@ -678,3 +678,22 @@ That leaves a tighter question than before: the per-draw state is right (full ma
 mechanisms can do that without any log line -- the **store lookahead** deciding the attachment need not be written back, and **draw skipping** (`zskip`) deciding a draw's output is
 already covered. Both are the host's own optimisations rather than anything the guest asked for, which is where to look next: the world pass's draws are recorded, its state is
 correct, and nothing it produces reaches the target.
+
+### The store lookahead writes back everything
+
+`DM_VSTORE_LOG=1` prints the lookahead's verdict per attachment. Across 4,000 verdicts **every one is `state 1 why 6`**, and `why 6` is the fallback the code applies when the
+pass ended outside the index (`Pass ended outside the list / index unavailable: always write back`):
+
+| count | verdict |
+|---|---|
+| 2364 | depth0 state1 why6 load1 wrote1 |
+| 1094 | depth0 state1 why6 load0 wrote1 |
+| 426 | depth1 state1 why6 load1 wrote1 |
+| the rest | depth1/depth2, always `why 6` |
+
+So for this title the lookahead decides nothing and writes everything back: **it cannot be what empties the world's colour target**, and its `why 6` also says the index is not
+available for these passes, which is worth knowing on its own (the optimisation is inert, not harmful).
+
+With the mask, viewport, scissor, depth state, dataflow and now the store verdict all clean, what is left in the host is **draw skipping** (the zero-source skip deciding a draw's
+output is already covered). If that is not it either, the world's draws are running and their geometry collapses -- a transform read from the wrong uniform slot puts every vertex
+at one point, which also leaves a target untouched with no error anywhere.
