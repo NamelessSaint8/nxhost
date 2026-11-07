@@ -459,3 +459,17 @@ translated shader. That matters because it is the leading suspect for the pictur
 defect, exactly what bad vertex offsets look like.
 
 Next probe: take a draw whose shader warns, log the vertex layout the host constructs for it beside the guest's own attribute table (offset, stride, format), and compare.
+
+Follow-up attempts, all negative, narrowing where the warning can come from:
+
+| tried | result |
+|---|---|
+| attribute indices above 31 in the MSL | none -- the library uses `[[attribute(0)]]`..`[[attribute(8)]]` |
+| `xcrun metal -std=metal3.0 -c` on 400 shaders | no warning |
+| `xcrun metal -c -O1 -fpreserve-invariance` (the build's own flags) on 120 vertex shaders | no warning |
+| `metal -c` then `metallib` on 60 vertex shaders | no warning |
+| the phrase in any file of the tree, including the vendored spirv-cross and its binary | only in `dist/`'s copy of vendored Ryujinx sources, never in live code |
+
+So the text is neither ours nor reproduced by the toolchain on an arbitrary shader: it comes from the build path itself, for a subset of shaders the alphabetical sample missed. The next
+attempt should not guess a subset -- run `dmsh_build.py` with a single shader key (`<package> <cache> <key>`) for a shader that warns, and capture the exact tool invocation and its
+stderr. The build already knows which keys they are; the summary only prints the count.
