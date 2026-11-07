@@ -498,3 +498,16 @@ error. That is the shape of the picture: a component read as zero rather than a 
 The first of them, `0058e86e0e243199_b`, is a **vertex** shader whose recorded inputs are locations 1, 2, 3 and 5 -- so the map it was built from is sparse, and the
 question is now narrow: why its attribute table omits 0x5C when the code reads it. Compare that shader's declared table (the SPH attribute list the translator reads)
 against the offsets its code loads.
+
+**Closed: the guest does not bind it either.** With `DM_VATTR_LOG=1` (the probe above) the run logs the attributes the guest declares for each draw -- offset and format for all
+16 slots, once per vertex program:
+
+```
+vs d241dbb5bea37a6d n=16 offs 0/41 c/17 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0
+```
+
+64 vertex programs were sampled, typically with one or two live attributes (offset 0 format 41, offset 0xC) and the rest `fmt 0` = unbound. **No table contains 0x5C**, and
+21 of the 64 sampled programs are among the 2,838 that carry the note -- so the shaders that read 0x5C are running draws in which the guest does not declare it.
+
+So the translator's `Const(0)` is a legitimate value for an unbound attribute, not a dropped one: the warning is benign, and the black picture has another cause. The lead is
+closed; the note stays in the build log as a known-benign line rather than a suspect.
