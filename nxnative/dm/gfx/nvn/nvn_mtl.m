@@ -9924,11 +9924,12 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
     { static int on = -1; if (on < 0) { const char *e = getenv("DM_VATTR_LOG"); on = e && atoi(e); }
       if (on > 0 && S.prog) {
           NvProg *vp = prog_get(S.prog); const char *k = vp && vp->sh[0] ? vp->sh[0]->key : "-";
-          static char seen[64][24]; static int nseen;
+          static char seen[400][24]; static int nseen;   // one entry per logged program; the cap below must not exceed it
           int nlive = 0; for (int a = 0; a < 16; a++) nlive += S.attr[a].fmt != 0;
           unsigned str0 = 0; for (int st = 0; st < 16; st++) if (S.stream[st].stride > str0) str0 = S.stream[st].stride;
           int dup = 0; for (int i = 0; i < nseen; i++) dup |= !strcmp(seen[i], k);
-          if (!dup && nseen < 128 && (nlive >= 3 || str0 >= 0x20)) {   // model-like draws: the first 64 were UI, one 16-byte stream and two attributes
+          (void)nlive; (void)str0;
+          if (!dup && nseen < 400) {   // a format census wants breadth, not just the model-like draws (DM_VATTR_LOG=1)
               strlcpy(seen[nseen++], k, sizeof seen[0]);
               char b[1024]; size_t o = (size_t)snprintf(b, sizeof b, "vs %.16s n=%d offs", k, S.nattr);   // offsets only, so all 16 fit: a truncated line cannot say whether 0x5c is there
               for (int a = 0; a < 16; a++) o += (size_t)snprintf(b + o, sizeof b - o, " %x/%d", S.attr[a].offset, S.attr[a].fmt);
