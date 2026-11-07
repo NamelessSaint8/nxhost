@@ -795,7 +795,9 @@ Three further facts came out of the wider probe:
 
 ### The colour target is not all zeros either
 
-Measured on the saved `world.raw` rather than assumed: 2048x1152, one slice, **2.70 % of sampled pixels nonzero, peak channel 255**, and the non-black pixels form compact blobs in the upper-left and upper-centre rather than noise. `z0.raw` is 7.56 %. So "dumps all zeros" -- repeated in this doc and in the `vdraw` source comment -- is wrong. What the target holds reads as overlay/UI rather than world geometry, but "empty" is no longer a supportable description and should not be quoted as one.
+Measured on the saved `world.raw` rather than assumed: 2048x1152, one slice, **2.70 % of sampled pixels nonzero, peak channel 255**, and the non-black pixels form a few compact blobs across the upper band and the middle-left rather than noise. `z0.raw` is 7.56 %. So "dumps all zeros" -- repeated in this doc and in the `vdraw` source comment -- is wrong. What the target holds reads as overlay/UI rather than world geometry, but "empty" is no longer a supportable description and should not be quoted as one.
+
+**The raw's layout is the trap that produced "all zeros".** `texraw` allocates its staging row as `w * 16` bytes "to be a multiple of every uncompressed texel size", but the blit packs texels at their native 4 bytes inside that row. So a 2048-wide row is 8,192 meaningful bytes followed by 24,576 bytes of padding -- and the padding is **100 % zero**, verified. Read the raw at a 16-byte texel stride and three quarters of what you sample is padding, which is exactly how a target with content comes back "essentially all zeros". Read texel *x* of row *y* at `y * 32768 + x * 4`.
 
 ### Pick up here
 
