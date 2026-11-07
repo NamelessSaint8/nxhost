@@ -5270,6 +5270,7 @@ static int vconv_i2f(int f, int *bits, int *sgn) {   // components of an integer
 static int vconv_size(int f) {   // bytes of one element
     int ib, is, in = vconv_int(f, &ib, &is); if (in) return in * ib / 8;
     if ((in = vconv_i2f(f, &ib, &is))) return in * ib / 8;
+    if (f == 0x69 || f == 0x6A) return 4;
     switch (f) { case 0x01: case 0x02: return 1; case 0x05: case 0x06: case 0x07: case 0x0D: case 0x0E: return 2; case 0x19: case 0x1A: return 3;
                  case 0x1D: case 0x1E: case 0x1F: return 6; case 0x16: case 0x29: case 0x2A: case 0x2B: return 8; case 0x22: return 12; }
     return 4;
@@ -5295,6 +5296,12 @@ static void vconv_elem(int f, const uint8_t *p, float o[4]) {
             else if (ib == 16) { uint16_t h; memcpy(&h, p + 2 * i, 2); o[i] = is ? (float)(int16_t)h : (float)h; }
             else { uint32_t w; memcpy(&w, p + 4 * i, 4); o[i] = is ? (float)(int32_t)w : (float)w; } }
         return; }
+    if (f == 0x69 || f == 0x6A) {   // 10:10:10:2 signed: x, y, z packed in 10 bits each; Metal has no vertex format for it (nvn_fmt_mtl N), so the CPU unpacks it
+        uint32_t w; memcpy(&w, p, 4);
+        int q[3] = {(int)(w & 0x3ff), (int)(w >> 10 & 0x3ff), (int)(w >> 20 & 0x3ff)};
+        for (int i = 0; i < 3; i++) { if (q[i] & 0x200) q[i] -= 0x400;
+            o[i] = f == 0x69 ? fmaxf((float)q[i] / 511.0f, -1.0f) : (float)q[i]; }   // Snorm: signed 10-bit normalised
+        o[3] = 1.0f; return; }
     int n = vconv_ncomp(f);
     for (int i = 0; i < n; i++) switch (f) {
         case 0x0A: case 0x16: case 0x22: memcpy(o + i, p + 4 * i, 4); break;
@@ -5384,6 +5391,7 @@ static int vconv_wanted(const nvn_refl *rf, int v, const pso_key *k, int on) {  
     int a = rf->v[v].nvn, ct = rf->v[v].ct, ib, is;
     if (a >= 16) return 0;
     int f = k ? k->attr[a].fmt : S.attr[a].fmt;
+    if (f == 0x69 || f == 0x6A) return 1;   // 10:10:10:2 signed: no Metal format, always converted (see vconv_elem)
     if (vconv_i2f(f, &ib, &is)) return 1;   // whatever the input type
     if (ct == NVN_CT_FLOAT) return vconv_int(f, &ib, &is) > 0;
     if (ct != NVN_CT_UINT && ct != NVN_CT_INT) return 0;
