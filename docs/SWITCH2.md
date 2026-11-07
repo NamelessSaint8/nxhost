@@ -757,12 +757,31 @@ The native Mac host boots Mario Kart World through `nnMain`, plays the attract l
 
 So the fault is in **what the draws are given**, not in how the pass is rendered. The remaining suspect is the vertex stage's transforms.
 
+### The slots 0-3 probe answered it
+
+The `vdraw` line now prints vertex uniform blocks 0-3, each with its first four rows. On the world pass's first draw -- pass 1322, 2048x1152, `chmask 0xffffffff`, depth attached -- **every slot 0-3 is zero or denormal**:
+
+```
+vdraw: pass 1322 target 2048x1152 fmt 63 | depth 2048x1152 fmt 53 | ds dt1 dw0 df3 st0 | chmask 0xffffffff | vp 0,0 2048x1152 | sc on 0,0 2048x1152
+vdraw:   vubo slot 0 addr 0x88d5197700 size 768: 0 0 0 0 | 0 0 0 0 | 0 0 0 0 | 0 0 0 0
+vdraw:   vubo slot 1 addr 0x884bfde600 size 2432: 0 0 0 0 | 0 0 0 0 | 1.607e-40 0 0 0 | 0 0 0 0
+vdraw:   vubo slot 2 addr 0x8793cc7000 size 256: 0 0 0 0 | 0 0 0 0 | 0 0 0 0 | 0 0 0 0
+vdraw:   vubo slot 3 addr 0x8793cc7000 size 256: 0 0 0 0 | 0 0 0 0 | 0 0 0 0 | 0 0 0 0
+```
+
+The non-zero values are subnormals (`2.296e-41`, `1.607e-40`, `5.484e-39`), which are integer bit patterns read as floats -- not matrix elements. A real MVP would show a `1` on the diagonal and a plausible translation. **None of slots 0-3 carries a sane matrix.**
+
+This is the "garbage" branch: **the vertex uniform binding is the bug.** The draws reach the GPU with empty or wrongly bound constant data, so every vertex transforms to the same point and the 586 draws rasterise nothing. That matches the pass's behaviour exactly -- a full colour mask, a full viewport and scissor, a real depth state, and an all-zero target.
+
 ### Pick up here
 
-**Next probe, one run, no build:** extend the existing `vdraw` line to print vertex uniform block **slots 0-3** with each one's first four rows, not the largest block. The first attempt picked the largest (slot 6, 43,456 bytes) and it read all zeros -- a data block, not constants (`14faaeaa`). NVN's `c0` is where a title's per-draw constants live, and an MVP matrix is recognisable at a glance: a `1` in the last row's diagonal, a plausible translation, a finite depth range.
+**The question is now where the vertex uniforms should have been bound and why they were not**, not what the transform is. The draw's constant data arrives from `nvn_mtl.m`'s `S.ubo[0][*]` -- the vertex stage's 16 uniform buffer bindings -- and the host sees them empty at draw time. The suspects, in order:
 
-- **a sane matrix** in one of those slots -> the transform is fine and the next question is the vertex *stream* (whether the position attribute the shader reads is the one bound);
-- **garbage or another slot's data** -> uniform binding is the bug, and every model collapses to a point, which is exactly a pass that rasterises nothing and logs nothing.
+1. the guest's own `nn::nvn::CommandBuffer::SetUniformBuffer` calls being dropped or mis-indexed on the host;
+2. the buffer address being translated to the wrong host address;
+3. the bind happening after the draw's state is snapshotted.
+
+**Next probe:** log the guest's uniform-buffer set calls (address, size, slot) beside the host's `S.ubo` table at draw time. That needs no shader retranslation; it needs one more instrument in `nvn_mtl.m` and a rebuild. The one-run/no-build probe is spent -- the next fact requires the host to say what it was *told* to bind, not what it read from the binding.
 
 **Run recipe** (all data on the external volume):
 
