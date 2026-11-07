@@ -473,3 +473,28 @@ Follow-up attempts, all negative, narrowing where the warning can come from:
 So the text is neither ours nor reproduced by the toolchain on an arbitrary shader: it comes from the build path itself, for a subset of shaders the alphabetical sample missed. The next
 attempt should not guess a subset -- run `dmsh_build.py` with a single shader key (`<package> <cache> <key>`) for a shader that warns, and capture the exact tool invocation and its
 stderr. The build already knows which keys they are; the summary only prints the count.
+
+Located. The text is Ryujinx's, not Metal's -- `third_party/ryujinx/src/Ryujinx.Graphics.Shader/Instructions/AttributeMap.cs`:
+
+```csharp
+if (!(isPerPatch ? _attributesPerPatch : _attributes).TryGetValue(offset, out AttributeEntry entry))
+{
+    context.TranslatorContext.GpuAccessor.Log($"Attribute offset 0x{offset:X} is not valid.");
+    return Const(0);          // the load becomes a literal zero
+}
+```
+
+So in 2,838 shaders the machine code loads a vertex attribute at byte offset **0x5C that the translator's attribute map has no entry for**, and gets 0 back with no
+error. That is the shape of the picture: a component read as zero rather than a draw failing, so nothing reports it.
+
+`tools/shader_notes.py` now lists the keys behind a note (read from the built reflections, so it never costs a retranslation):
+
+```
+11577 shaders in .../b-e768d85cea2b
+  2838  Attribute offset 0x5C is not valid.
+        keys: 0058e86e0e243199_b 007fd1f61fa16b45_b ...
+```
+
+The first of them, `0058e86e0e243199_b`, is a **vertex** shader whose recorded inputs are locations 1, 2, 3 and 5 -- so the map it was built from is sparse, and the
+question is now narrow: why its attribute table omits 0x5C when the code reads it. Compare that shader's declared table (the SPH attribute list the translator reads)
+against the offsets its code loads.
