@@ -793,20 +793,36 @@ Three further facts came out of the wider probe:
 - **Slot 0 is not a matrix and not zeros.** For the world pass's first draw it is 48 rows with 121 real-number floats, and the pattern **repeats every 10 rows** -- row 1's third field differs between copies (`-4.16e+34`, `5.92e+20`, `-1.55e+26`), so it is an array of per-object records, not a transform. The "all zeros" in the earlier four-row print was a 64-byte window into that array.
 - **Most slots are zero for that draw**, including slot 4 -- the most-bound slot in the whole run. Slots 2, 3, 5, 7, 9 and 13 all alias one 256-byte address (`0x8915cc7000`), a shared zero bank.
 
-### The colour target is not all zeros either
+### The colour target IS all zeros -- verified in-process, and an earlier "not all zeros" correction is withdrawn
 
-Measured on the saved `world.raw` rather than assumed: 2048x1152, one slice, **2.70 % of sampled pixels nonzero, peak channel 255**, and the non-black pixels form a few compact blobs across the upper band and the middle-left rather than noise. `z0.raw` is 7.56 %. So "dumps all zeros" -- repeated in this doc and in the `vdraw` source comment -- is wrong. What the target holds reads as overlay/UI rather than world geometry, but "empty" is no longer a supportable description and should not be quoted as one.
+The depth-target read was run to separate "nothing rasterised" from "rasterised but colour masked". It settled the first question and, on the way, retracted a claim this doc made an hour earlier.
 
-**The raw's layout is the trap that produced "all zeros".** `texraw` allocates its staging row as `w * 16` bytes "to be a multiple of every uncompressed texel size", but the blit packs texels at their native 4 bytes inside that row. So a 2048-wide row is 8,192 meaningful bytes followed by 24,576 bytes of padding -- and the padding is **100 % zero**, verified. Read the raw at a 16-byte texel stride and three quarters of what you sample is padding, which is exactly how a target with content comes back "essentially all zeros". Read texel *x* of row *y* at `y * 32768 + x * 4`.
+The `vdraw` line now prints both targets' serials, so a `DM_CTL` `texraw` can name them without guessing:
+
+```
+vdraw: pass 1318 target 2048x1152 fmt 63 ser 34470 | depth 2048x1152 fmt 53 ser 34469 | ds dt1 dw0 df3 st0 | chmask 0xffffffff ...
+```
+
+Six depth dumps and two colour dumps were issued against the serials printed **by the same run**, spread over ~12 s (about 600 frames at 20 ms), and every one reads back clear:
+
+| sample | target | result |
+|---|---|---|
+| `d_1.raw` .. `d_6.raw` | depth 2048x1152 fmt 260, ser 34563 | **0 / 589,824 texels differ from 1.0** -- the whole buffer is the clear value |
+| `c_1.raw`, `c_2.raw` | colour 2048x1152 fmt 92, ser 34564 | **0 / 589,824 texels nonzero** |
+
+**Depth cannot answer "did geometry rasterise" in this pass.** The state is `dt1 dw0` -- depth test on, **depth write off** -- so a rasterised fragment leaves the depth buffer at clear by design. The depth read is therefore inconclusive for the geometry question and should not be quoted as evidence either way. That leaves colour as the only witness: with `chmask 0xffffffff` and a full viewport and scissor, a rasterised fragment would have written colour, and none did.
+
+**The "not all zeros" correction is withdrawn.** An earlier revision here reported 2.70 % non-black pixels in `world.raw` and treated "dumps all zeros" as wrong. But `world.raw` came from serial **31747**, which appears in **no log as a target** -- so it was never confirmed to be the world's colour target at all, and its content belongs to some other texture. Read with the run's own verified serials the world's colour target is empty in 8 of 8 samples. The original "dumps all zeros" reading stands.
+
+One layout fact from that episode does hold and is worth keeping: a `texraw` row is `w * 16` bytes but the blit packs texels at their native **4 bytes**, so texel *x* of row *y* is at `y * 32768 + x * 4`; the remaining 24,576 bytes of each row are padding and **100 % zero** (verified). Reading at a 16-byte texel stride samples three quarters padding.
 
 ### Pick up here
 
-Two questions are now open and both are cheap to close:
+**The next question is whether the draw submits vertices at all**, and the pass dump already prints what is needed without a rebuild: its `d <pass> ... vc=<n> ... vs=<key> ... prim=<n>` line carries the vertex count, primitive type and vertex-shader key per draw. A `vc` of zero or a handful says the draw is collapsing before rasterisation; a healthy `vc` with a sane primitive says the vertices exist and the transform is what throws them away.
 
-1. **Did any geometry reach the rasteriser?** The world pass has a depth attachment. Reading the depth target beside the colour target separates "nothing rasterised" (transform/uniform problem) from "rasterised but colour masked" (write-mask/blend problem). The `vdraw` line names the depth as `2048x1152 fmt 53`; `DM_CTL`'s `texraw <serial> <path>` dumps it the same way it dumped the colour target. This is the sharper of the two and needs no rebuild.
-2. **What is in the block, byte for byte?** `DM_NVN_CBDUMP=<dir>` writes whole uniform blocks per draw (`F<frame>_p<pass>_st<stage>_cb<slot>_<address>.bin`). It needs **two** variables, not one: the CBDUMP block sits inside `if (bl)`, and `bl` requires `passdump()`, so the run needs `DM_NVN_PASSDUMP=<frame>` as well as `DM_NVN_CBDUMP=<dir>` (and `DM_NVN_CBDUMP_KEY` to narrow to the world's vertex shader).
+`DM_NVN_PASSDUMP=every:<n>` is the switch; join its `d` lines to the `vdraw` line by pass number. If the vertex count is healthy, follow with the block dump: `DM_NVN_CBDUMP=<dir>` writes whole uniform blocks per draw, but needs **two** variables -- the CBDUMP block sits inside `if (bl)` and `bl` requires `passdump()` -- plus `DM_NVN_CBDUMP_KEY` to narrow to the world's vertex shader.
 
-The `vdraw` probe itself now summarises **all 16 slots over the whole block** and, with `DM_VDRAW_ROWS=1`, prints every nonzero row of any block holding a dozen or more real-number floats -- so the next run does not need to guess which slot to look at.
+The `vdraw` probe now summarises **all 16 slots over the whole block** and, with `DM_VDRAW_ROWS=1`, prints every nonzero row of any block holding a dozen or more real-number floats -- so the next run does not need to guess which slot to look at.
 
 **Run recipe** (all data on the external volume):
 
