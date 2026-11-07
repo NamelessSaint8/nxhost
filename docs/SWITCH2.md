@@ -525,3 +525,23 @@ would fall into the next vertex -- which means those loads are in code these dra
 What the same lines show for the picture: MKW's model vertices are a single interleaved stream of 40--54 bytes, and two of the attributes carry format **105**, which the NVN format table
 (`nvn_fmt_mtl.c`) reads as `RGB10A2Uint`. Packed integer normal/tangent data would be plausible; the `Uint` reading of a model attribute is not. Since Switch 2 has its own format
 numbering, that table is now the thing to check: a misread format gives the right offsets and the wrong component types, which is exactly black geometry with no error.
+
+The format table reads the observed numbers like this (`nvn_fmt_mtl.c`; the host logs them in decimal):
+
+| logged | NVN | table | meaning |
+|---|---|---|---|
+| 41 | 0x29 | `RGBA16Float` | position: four half floats, 8 B |
+| 17 | 0x11 | `RG16Float` | two half floats, 4 B |
+| 18 | 0x12 | `RG16Unorm` | two unorms, 4 B |
+| 37 | 0x25 | `RGBA8Unorm` | colour, 4 B |
+| **105** | **0x69** | **`N` -- no counterpart** | 10:10:10:2 **Snorm**, 4 B: a packed normal or tangent |
+
+So a model vertex in these draws is: half-float position at 0, a packed 10:10:10:2 signed-normalised pair at 0xC and 0x10, a two-component float and a two-component unorm
+at 0x14/0x18, and a colour at 0x1C -- a normal layout whose only unsupported member is the one that carries **normals and tangents**.
+
+That is the shape of the picture: positions decode (RGBA16Float, supported), so geometry sits where it should, while the two attributes that carry the lighting frame arrive through a
+format the table maps to nothing. A surface with a dead normal reads as black however correct the geometry is -- and no log line says so, because it is a format substitution, not a
+refusal.
+
+`vattr_bytes` already knows the size (4 bytes for 0x69), so the missing piece is the *type* the shader is handed. Because the host builds the vertex buffer per draw, it can unpack
+10:10:10:2 Snorm to RGBA16Float there, with no translation-chain change at all -- unlike a fix at build time, which would need draw state the offline build does not have.
