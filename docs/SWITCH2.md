@@ -596,3 +596,20 @@ why profiling frame 1 said "no world pass" and was misleading.
 That moves the question from "why is the world not drawn" to **"where does the 2048x1152 colour target go"**: either the composite that should sample it does not, or it samples
 the wrong texture/serial. `DM_NVN_PASSDUMP` prints attachments and reads by serial, which is the tool for that -- follow serial of pass 191835's colour target to the pass that draws
 the window.
+
+### The dataflow is intact: the window samples the world
+
+`DM_NVN_PASSDUMP=every:900` records a whole attract frame with attachments and binds by serial (F450, 40,653 lines). Following the world's colour target forward:
+
+```
+P 33816 c0 ser=31737 fmt=92 2048x1152 clear          the world's first pass writes serial 31737
+T 33924 bind st? slot? ser=31737                      the final pass binds it
+P 33924 c0 ser=2 fmt=71 3840x2160 load                and that pass is the 3840x2160 window composite
+```
+
+So the chain is complete -- world pass 33816 writes 31737, the window pass 33924 binds 31737 and is the only pass that does, and 33924 is the last pass of the frame. **Nothing is dropped between producing the
+world and compositing it**, which rules out the "the composite never samples it" hypothesis.
+
+What is left is either the target's content or the composite's draw: if serial 31737 is black, the world's 586 draws wrote nothing (depth test rejecting
+everything, a degenerate viewport, or colour writes masked); if 31737 holds the world, the composite samples it wrongly (UVs, level, blend).
+`DM_CTL texraw 31737 <path>` (or a `texdump` of the frame) answers that in one run and decides between the two.
