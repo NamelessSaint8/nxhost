@@ -7453,17 +7453,21 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             if (!u || !u->addr || !mtl_gpu_addr(u->addr, 1, &mb, &mo, &gpu)) {   // reads 0 (the all-zero bank), as an unbound texture slot does, instead of through a null pointer
                 RED_ONCE(16, "stage %d cb%d has no uniform buffer bound", nvn_stage, reg); slots[aid] = zero_bank_gpu(); USE(zero_bank(), MTLResourceUsageRead); continue; }
             uint64_t ul = cb_len(sh, reg, u->size);   // what the shader can read of it
+            int ubpart = 0; const uint8_t *pc = NULL;   // a PARTIAL shadow's CPU bytes, when ubp_get made or reused one: shd=2 below (see ubp_get's cache)
             if (g_nubd && ubd_hits(u->addr, u->addr + ul)) {   // inline updates deferred in this pass (see mtl_sub_update); ubd_conflict made sure they cover the binding or the rest can be read from memory
                 uint64_t g; const uint8_t *c; if (ubd_covers(u->addr, u->addr + ul)) gpu = ubd_shadow(u->addr, u->addr + ul);
-                else if (ubp_get(u->addr, u->addr + ul, &g, &c)) gpu = g;
+                else if (ubp_get(u->addr, u->addr + ul, &g, &c)) { gpu = g; ubpart = 1; pc = c; }
                 else RED_ONCE(92, "a uniform update deferred inside the pass covers only part of the binding (stage %d cb%d): the content before the update is read", nvn_stage, reg); }
             if (bl) {
-                // The shader is given gpu, which is u->addr unless a deferred inline update covers the binding: then it is a shadow in the ubs ring or the per-frame arena. Those are not
-                // registered memory pools, so mtl_addr cannot reach them and reading gpu through it returns nothing -- indistinguishable from a block of zeros. ubd_read gives the shadow's
-                // bytes directly. So f= below is what the vertex shader actually reads, and shd says whether a shadow was used at all.
-                int shd = g_nubd && ubd_covers(u->addr, u->addr + ul);
+                // The shader is given gpu, which is u->addr unless a deferred inline update covers the binding. A full cover binds ubd_shadow's ring copy; a partial cover binds ubp_get's
+                // shadow, which starts from memory and lays the queued inline updates over it. Either shadow lives in the ubs ring or the per-frame arena, and those are not registered memory
+                // pools, so mtl_addr cannot reach them and reading gpu through it returns nothing -- indistinguishable from a block of zeros. So f= below reads the bytes the shader actually
+                // reads: ubd_read for a full cover, the pointer ubp_get already returned for a partial one. shd says which: 0 none, 1 full shadow, 2 partial shadow. When ubp_get refused, the
+                // draw itself reads the pre-update memory (RED_ONCE 92 above), and shd stays 0.
+                int shd = ubpart ? 2 : (g_nubd && ubd_covers(u->addr, u->addr + ul));
                 float gf[4] = {0, 0, 0, 0};
-                if (shd) ubd_read(u->addr, sizeof gf, gf);
+                if (ubpart) { ubc_wait(g_ubp_ready); memcpy(gf, pc, sizeof gf); }   // the copy worker may still be filling that shadow
+                else if (shd) ubd_read(u->addr, sizeof gf, gf);
                 else { void *gb; uint64_t gof; if (mtl_addr(u->addr, sizeof gf, &gb, &gof)) memcpy(gf, (const uint8_t *)gb + gof, sizeof gf); }
                 PD("B %llu st%d cb reg%d addr=%#llx size=%llu gpu=%#llx shd=%d f=%g,%g,%g,%g", g_stat_pass, nvn_stage, reg, (unsigned long long)u->addr, (unsigned long long)u->size,
                    (unsigned long long)gpu, shd, gf[0], gf[1], gf[2], gf[3]);
