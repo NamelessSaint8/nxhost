@@ -431,3 +431,19 @@ kernel void main0(constant spvDescriptorSetBuffer0& spvDescriptorSet0 [[buffer(0
 That is the shape to build into `dmsh_build.py`: rewrite the declaration to that reference parameter, record the byte count in the shader's metadata, bind a ring of 48 KB buffers
 at argument-table index 30 in the dispatch path, and take the 168 kernels as the acceptance test. Changing the translator changes the chain version, so this costs one full
 retranslation of the 11,603 shaders and a new `b-<chain>` directory.
+
+Built and run: **zero refusals**.
+
+| | before | after |
+|---|---|---|
+| `failed to create compute pipeline` | 12,309 in 130 s | **0** |
+| shaders in the library | 11,577 | 11,577 (168 with `tg_spill`) |
+| shader load misses | 95 | 93 |
+| frames | 6,356 in 166 s | 2,853 in 156 s |
+
+The retranslation needed the game's own carriers, which had to be rebuilt first: `shader_split.py <romfs> <exefs/main> <package> ...` over Mario Kart World's dump
+produced 11,603 shaders (729 compute, matching the census) and 14 carrier files in `.gamedump/MarioKartWorld/shader/`, which is the directory `dmsh_build.py` wants as its
+package argument. With it the chain `e768d85cea2b` built completely -- 11,577 metallibs, the same count as before -- and 168 of the reflection files carry `tg_spill`,
+exactly the kernels that used to be refused.
+
+The superseded chain `b-5f4fb6fce881` (1.5 GB) was deleted once the new one was verified, as its cache is keyed by a version nothing looks for any more.
