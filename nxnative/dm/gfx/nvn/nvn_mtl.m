@@ -9910,6 +9910,19 @@ static uint32_t draw_color_writes(NvProg *pr) {
 static void draw_(const p_draw *dw, const p_draw_idx *di);
 static void draw(const p_draw *dw, const p_draw_idx *di) { cp_stamp start = cp_begin(); draw_(dw, di); cp_end(5, start); }
 static void draw_(const p_draw *dw, const p_draw_idx *di) {
+    // Diagnostic DM_VATTR_LOG=1: the guest's own vertex attribute table for this draw -- offset, stream and format per attribute, beside the vertex shader's key.
+    // It answers a question a build cannot: 2838 shaders load a vertex attribute at byte offset 0x5C that the offline translation has no entry for (Ryujinx
+    // AttributeMap returns 0 there), and whether the guest declares that offset is only visible in the per-draw state.
+    { static int on = -1; if (on < 0) { const char *e = getenv("DM_VATTR_LOG"); on = e && atoi(e); }
+      if (on > 0 && S.prog) {
+          NvProg *vp = prog_get(S.prog); const char *k = vp && vp->sh[0] ? vp->sh[0]->key : "-";
+          static char seen[64][24]; static int nseen;
+          int dup = 0; for (int i = 0; i < nseen; i++) dup |= !strcmp(seen[i], k);
+          if (!dup && nseen < 64) {
+              strlcpy(seen[nseen++], k, sizeof seen[0]);
+              char b[1024]; size_t o = (size_t)snprintf(b, sizeof b, "vs %.16s n=%d offs", k, S.nattr);   // offsets only, so all 16 fit: a truncated line cannot say whether 0x5c is there
+              for (int a = 0; a < 16; a++) o += (size_t)snprintf(b + o, sizeof b - o, " %x/%d", S.attr[a].offset, S.attr[a].fmt);
+              MLOG("%s", b); } } }
     g_draw_binst = (uint32_t)(dw ? dw->base_instance : di ? di->base_instance : 0);   // c0 + 0x644 of the stages that read the driver segment (encode_args)
     if (passdump()) { NvProg *p = g_geo_program ? g_geo_program : S.prog ? prog_get(S.prog) : nil;
         PD("j %llu draw-entry vs=%s fs=%s gs=%s prim=%d count=%d instances=%d indexed=%d indirect=%#llx discard=%d feedback=%d", g_stat_pass + !g_enc,
