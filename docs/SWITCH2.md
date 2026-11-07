@@ -640,3 +640,22 @@ replayed, and they leave nothing in the colour attachment. The remaining candida
 
 A passdump already prints the pass's attachments; what it does not print is the per-draw depth state, viewport and mask, which is the next probe: log those for the first
 draw of pass 33994 and compare against what a 2048x1152 world pass should have.
+
+### The per-draw state is right, and the dump was of the wrong target
+
+`DM_VDRAW_LOG=1` prints the first draw of every pass that has a depth attachment: both formats, the depth test / write / compare, the colour write mask, the viewport and the
+scissor. Across a run the 2048x1152 colour passes read:
+
+| count | target | depth state | mask |
+|---|---|---|---|
+| 5305 | 2048x1152 fmt 63 | dt1 dw0 df3 | `0xffffffff` |
+| 2427 | 2048x1152 fmt 63 | dt1 dw0 df4 | `0xffffffff` |
+| 1229 | 2048x1152 fmt 63 | dt1 dw1 df4 | `0xffffffff` |
+| 2025 | 2048x1152 fmt 63 | dt1 dw0 df2 | `0xffffffff` |
+| 74 | 2048x1152 fmt 63 | dt1 dw1 df2 | **`0`** -- a depth prepass, correctly masked |
+
+Viewport and scissor are full-target in every one of them. So **the mask, viewport and scissor are not the fault**, and the depth state varies as a real renderer's would.
+
+It also corrects the previous reading: the target I dumped with `texraw` was **fmt 92**, while these world-colour passes are **fmt 63** -- two different textures of the same
+size, and the passdump lists 43 writers of 2048x1152. The black dump was therefore qne of an unknown 2048x1152 texture, not established as the world's own. Re-dumping with
+the serial of a fmt-63 world pass is the next step, and only then is "the world's colour target is black" a fact rather than a guess.
