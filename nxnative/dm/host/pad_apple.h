@@ -7,6 +7,8 @@
 #pragma once
 #import <GameController/GameController.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 #include "dm_input.h"
 
 static inline int dm_pad_labelled(GCController *c) {
@@ -16,6 +18,10 @@ static inline int dm_pad_labelled(GCController *c) {
 // DM_BTN_A / B / X / Y of the pad's pressed face buttons
 static inline uint64_t dm_pad_face(GCExtendedGamepad *g) {
     GCControllerButtonInput *a = g.buttonA, *b = g.buttonB, *x = g.buttonX, *y = g.buttonY;
-    if (!dm_pad_labelled(g.controller)) { GCControllerButtonInput *t = a; a = b; b = t; t = x; x = y; y = t; }   // by position: right A, bottom B, top X, left Y
+    // DM_PAD_FACE=labels maps every pad name for name (an Xbox pad's A is its bottom button), so the printed label is
+    // what the game gets. The default keeps the Switch's positions (right A) on non-Nintendo pads, as before.
+    static int labels = -1;
+    if (labels < 0) { const char *f = getenv("DM_PAD_FACE"); labels = f && !strcmp(f, "labels"); }
+    if (!labels && !dm_pad_labelled(g.controller)) { GCControllerButtonInput *t = a; a = b; b = t; t = x; x = y; y = t; }   // by position: right A, bottom B, top X, left Y
     return (a.isPressed ? DM_BTN_A : 0) | (b.isPressed ? DM_BTN_B : 0) | (x.isPressed ? DM_BTN_X : 0) | (y.isPressed ? DM_BTN_Y : 0);
 }

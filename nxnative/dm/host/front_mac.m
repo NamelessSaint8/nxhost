@@ -12,6 +12,8 @@
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
 #import <GameController/GameController.h>
+#import <ApplicationServices/ApplicationServices.h>   // CGAssociateMouseAndMouseCursorPosition for mouse look
+#include <stdatomic.h>
 #include "dm.h"
 #include "dm_input.h"
 #include "front.h"
@@ -107,10 +109,38 @@ static void cursor_hide_for_input(void) {
     NSView *v = g_win.contentView;
     if (NSPointInRect([v convertPoint:g_win.mouseLocationOutsideOfEventStream fromView:nil], v.bounds)) [NSCursor setHiddenUntilMouseMoves:YES];
 }
+// DM_MOUSE=look: mouse look instead of the absolute touchscreen. Relative motion becomes a short right-stick pulse, the
+// left/right/middle buttons become R/ZL/ZR, and Esc releases the pointer (a click on the picture captures it again).
+// The default is touch, as before; touch games are unaffected.
+static int g_mouse_look, g_look_on;
+static int32_t g_look_rx, g_look_ry;
+static _Atomic uint64_t g_look_until, g_look_gen;
+static double g_look_sensitivity = 1200;
+static void mouse_look_set(int on);
 static void push(void) {
     int32_t lx = (g_d - g_a) * 32767, ly = (g_w - g_s) * 32767;
     int32_t rx = (g_rr - g_rl) * 32767, ry = (g_ru - g_rd) * 32767;
+    if (g_look_on && now_ns() < atomic_load(&g_look_until)) {
+        rx += g_look_rx; ry += g_look_ry;
+        rx = rx > 32767 ? 32767 : rx < -32767 ? -32767 : rx; ry = ry > 32767 ? 32767 : ry < -32767 ? -32767 : ry;
+    }
     dm_input_set(g_btn, lx, ly, rx, ry);
+}
+static void mouse_look_set(int on) {
+    if (!g_mouse_look || on == g_look_on) return;
+    g_look_on = on;
+    if (on) { CGAssociateMouseAndMouseCursorPosition(false); [NSCursor hide]; }
+    else { CGAssociateMouseAndMouseCursorPosition(true); [NSCursor unhide]; g_look_rx = g_look_ry = 0; atomic_store(&g_look_until, 0); g_btn &= ~(DM_BTN_R | DM_BTN_ZL | DM_BTN_ZR); push(); }
+}
+static void look_pulse(int32_t rx, int32_t ry) {
+    g_look_rx = rx; g_look_ry = ry;
+    atomic_store(&g_look_until, now_ns() + 25000000ull);
+    uint64_t gen = atomic_fetch_add(&g_look_gen, 1) + 1;
+    push();
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 25 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+        if (atomic_load(&g_look_gen) != gen) return;   // a later move owns the pulse now
+        g_look_rx = g_look_ry = 0; atomic_store(&g_look_until, 0); push();
+    });
 }
 static int key_bit(unsigned short code) {
     switch (code) {
@@ -125,15 +155,24 @@ static int key_bit(unsigned short code) {
 static void on_key(NSEvent *e, int down) {
     if (!g_input_on) return;
     unsigned short c = e.keyCode;
+    if (g_mouse_look && c == 53 && down) { mouse_look_set(!g_look_on); return; }   // Esc releases or recaptures the pointer
     switch (c) { case 13: g_w = down; break; case 0: g_a = down; break; case 1: g_s = down; break; case 2: g_d = down; break; }
     // An arrow key pressed with Shift held is the right stick until it is released; without Shift, the D-pad. The keyboard had no right stick: a 3D game's camera
     // could be turned only with a controller (Donkey Kong Bananza)
     int *rs = c == 123 ? &g_rl : c == 126 ? &g_ru : c == 124 ? &g_rr : c == 125 ? &g_rd : NULL;
     if (rs && (down ? (e.modifierFlags & NSEventModifierFlagShift) != 0 : *rs)) { *rs = down; push(); return; }
     int b = key_bit(c);
-    uint64_t m = b >= 0 ? 1ull << b : c == 49 ? DM_BTN_SHAKE : 0;   // Space: shaken while held
+    // The PC map, only in mouse-look mode: E activates, Space jumps (Y), Shift sprints (L); the mouse buttons are R/ZL/ZR.
+    if (g_mouse_look) { if (c == 14) b = 0; else if (c == 49) b = 3; }
+    uint64_t m = b >= 0 ? 1ull << b : (!g_mouse_look && c == 49) ? DM_BTN_SHAKE : 0;   // Space: shaken while held (touch mode)
     g_btn = down ? (g_btn | m) : (g_btn & ~m);
     if (down && (m || c == 13 || c == 0 || c == 1 || c == 2)) cursor_hide_for_input();   // a key the game takes (WASD: the left stick)
+    push();
+}
+static void on_flags(NSEvent *e) {   // mouse-look mode: Shift is sprint (L), as a PC player expects; the arrows still use it for the camera
+    if (!g_input_on || !g_mouse_look) return;
+    int down = (e.modifierFlags & NSEventModifierFlagShift) != 0;
+    g_btn = down ? (g_btn | DM_BTN_L) : (g_btn & ~DM_BTN_L);
     push();
 }
 
@@ -144,6 +183,7 @@ static void on_key(NSEvent *e, int down) {
 // With DM_PAD_MERGE=1 every controller is player 1, as before (the last one moved wins; when the last one goes away its buttons and sticks are released)
 static pad_slots g_slots;
 static GCController *g_held[DM_PLAYERS];   // the controller of each slot, kept alive while it holds it (the slot table keys on its pointer)
+static int g_stick_gate[DM_PLAYERS];       // after focus regain a stick is ignored until it has been centred (input_release / pad_read)
 static int g_merge, g_kbd_own;
 static int32_t pad_axis(float v) { return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * DM_STICK_MAX); }
 // A controller's state for player p, GameController or raw HID: a pressed button or a stick past 15% hides the pointer (cursor_hide_for_input), a resting stick's drift does not
@@ -162,7 +202,28 @@ static void pad_read(GCExtendedGamepad *g) {
     K(g.buttonMenu, DM_BTN_PLUS); K(g.buttonOptions, DM_BTN_MINUS); K(g.leftThumbstickButton, DM_BTN_LS); K(g.rightThumbstickButton, DM_BTN_RS);   // nil on pads without them: not pressed
     K(g.dpad.left, DM_BTN_LEFT); K(g.dpad.up, DM_BTN_UP); K(g.dpad.right, DM_BTN_RIGHT); K(g.dpad.down, DM_BTN_DOWN);
     #undef K
-    pad_set(p, m, pad_axis(g.leftThumbstick.xAxis.value), pad_axis(g.leftThumbstick.yAxis.value), pad_axis(g.rightThumbstick.xAxis.value), pad_axis(g.rightThumbstick.yAxis.value));
+    {   // DM_PAD_LOG=1: when the host received each button change, and how often the handler runs (a 4-5 s lag shows here or not)
+        static int on = -1; static uint64_t last[DM_PLAYERS], reads;
+        if (on < 0) on = getenv("DM_PAD_LOG") && atoi(getenv("DM_PAD_LOG"));
+        if (on) { reads++; if (m != last[p]) { LOG("[pad] player %d buttons %#llx at %.3f s (%llu reads)", p + 1, m, (now_ns() - g_t0_ns) / 1e9, (unsigned long long)reads); last[p] = m; } }
+    }
+    int32_t lx = pad_axis(g.leftThumbstick.xAxis.value), ly = pad_axis(g.leftThumbstick.yAxis.value);
+    int32_t rx = pad_axis(g.rightThumbstick.xAxis.value), ry = pad_axis(g.rightThumbstick.yAxis.value);
+    {   // DM_PAD_LOG=2: the sticks the host reads, with time, to tell a controller-link delay from a guest one
+        static int son = -1; static int32_t l0[DM_PLAYERS][4];
+        if (son < 0) son = getenv("DM_PAD_LOG") && atoi(getenv("DM_PAD_LOG")) >= 2;
+        if (son) { int32_t *l = l0[p];
+            if (abs(lx - l[0]) > 1200 || abs(ly - l[1]) > 1200 || abs(rx - l[2]) > 1200 || abs(ry - l[3]) > 1200) {
+                LOG("[pad] player %d sticks %d %d %d %d at %.3f s", p + 1, lx, ly, rx, ry, (now_ns() - g_t0_ns) / 1e9);
+                l[0] = lx; l[1] = ly; l[2] = rx; l[3] = ry;
+            } }
+    }
+    if (g_stick_gate[p]) {   // focus came back with a stick held: wait for it to be centred before it moves the game again
+        const int32_t dead = DM_STICK_MAX * 15 / 100;
+        if (abs(lx) <= dead && abs(ly) <= dead && abs(rx) <= dead && abs(ry) <= dead) g_stick_gate[p] = 0;
+        else { lx = ly = rx = ry = 0; }
+    }
+    pad_set(p, m, lx, ly, rx, ry);
 }
 // Home and Capture: without this macOS takes them as system gestures (Home opens the Games app); the host gives them no function
 static void pad_keep_system_buttons(GCController *c) { for (NSString *b in @[GCInputButtonHome, GCInputButtonShare]) c.physicalInputProfile.buttons[b].preferredSystemGestureState = GCSystemGestureStateDisabled; }
@@ -234,8 +295,10 @@ static void input_release(void) {
     [NSCursor setHiddenUntilMouseMoves:NO];
     display_awake(0);
     g_input_on = 0;
+    for (int p = 0; p < DM_PLAYERS; p++) g_stick_gate[p] = 1;
     dm_motion_pro_active(0);
     g_btn = 0; g_w = g_a = g_s = g_d = 0; g_rl = g_ru = g_rr = g_rd = 0; push();
+    if (g_mouse_look) mouse_look_set(0);   // give the pointer back while another app has focus
     if (g_mouse_down) { g_mouse_down = 0; dm_touch_set(NULL, 0); }
     if (g_merge) { if (merge_pads_left(nil)) dm_pad_set(0, 0, 0, 0, 0); return; }
     for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p]) dm_pad_set_player(p, 0, 0, 0, 0, 0);
@@ -244,6 +307,7 @@ static void input_release(void) {
 static void input_resume(void) {
     display_awake(1);
     g_input_on = 1;
+    if (g_mouse_look) mouse_look_set(1);   // the game window is key again: capture the pointer for look
     dm_motion_pro_active(1);
     if (g_merge) { for (GCController *c in GCController.controllers) if (c.extendedGamepad) pad_read(c.extendedGamepad); }
     else for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p].extendedGamepad) pad_read(g_held[p].extendedGamepad);
@@ -285,13 +349,32 @@ static void pads_start(void) {
     dm_motion_pro_start(pro_devices_changed);
     hidpad_start();
 }
+// Some pads (the 8BitDo Ultimate 2's virtual GameController device) deliver stick changes through no valueChangedHandler
+// at all, so a stick read only on the next button event stayed deflected and the character turned until the next press.
+// Polling every attached pad at 120 Hz gives the game the current stick on every frame, whatever the handler does.
+static dispatch_source_t g_pad_poll;
+static void pad_poll_all(void) {
+    if (!g_input_on) return;
+    if (g_merge) { for (GCController *c in GCController.controllers) if (c.extendedGamepad) pad_read(c.extendedGamepad); }
+    else for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p].extendedGamepad) pad_read(g_held[p].extendedGamepad);
+    for (hid_pad *d = g_hidpads; d; d = d->next) hidpad_read(d);
+}
+static void pad_poll_start(void) {
+    const char *e = getenv("DM_PAD_POLL"); if (e && !atoi(e)) return;
+    g_pad_poll = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    if (!g_pad_poll) return;
+    dispatch_source_set_timer(g_pad_poll, DISPATCH_TIME_NOW, 8 * NSEC_PER_MSEC, 1 * NSEC_PER_MSEC);
+    dispatch_source_set_event_handler(g_pad_poll, ^{ pad_poll_all(); });
+    dispatch_resume(g_pad_poll);
+    LOG("front end: controllers polled at 120 Hz (DM_PAD_POLL=0 turns the poll off)");
+}
 
 // Mouse as a single-point touchscreen (front.h dm_touch_set): left button down / drag = finger 0, release = lifted. The content view takes the clicks,
 // not a window-wide event monitor, so clicks on the title bar, the window buttons and the resize edges still reach AppKit.
 @interface DmGameView : NSView @end
 @implementation DmGameView
-- (void)mouseDown:(NSEvent *)e { [self mouseDragged:e]; }
-- (void)mouseDragged:(NSEvent *)e {
+- (BOOL)acceptsFirstResponder { return YES; }
+- (void)touchAt:(NSEvent *)e {
     if (!g_input_on) return;
     NSPoint p = [self convertPoint:e.locationInWindow fromView:nil]; NSSize b = self.bounds.size;
     double w = b.width, h = b.height;
@@ -301,7 +384,33 @@ static void pads_start(void) {
     dm_touch t = {0, (float)fmin(fmax((p.x - x0) / w, 0), 0.999), (float)fmin(fmax(1 - (p.y - y0) / h, 0), 0.999)};   // The AppKit view origin is at bottom left, the touchscreen origin is at top left
     dm_touch_set(&t, 1); g_mouse_down = 1;
 }
-- (void)mouseUp:(NSEvent *)e { (void)e; if (g_mouse_down) { g_mouse_down = 0; dm_touch_set(NULL, 0); } }
+- (void)mouseMoved:(NSEvent *)e {   // look mode: relative motion is a short right-stick pulse (look_pulse)
+    if (!g_input_on || !g_mouse_look || !g_look_on) return;
+    double dx = e.deltaX, dy = e.deltaY;
+    if (!dx && !dy) return;
+    int32_t rx = (int32_t)(dx * g_look_sensitivity), ry = (int32_t)(dy * g_look_sensitivity);
+    rx = rx > 32767 ? 32767 : rx < -32767 ? -32767 : rx; ry = ry > 32767 ? 32767 : ry < -32767 ? -32767 : ry;
+    if (rx || ry) look_pulse(rx, ry);
+}
+- (void)mouseDown:(NSEvent *)e {
+    if (g_mouse_look) {
+        if (!g_look_on) { mouse_look_set(1); return; }   // a click on the picture captures the pointer again after Esc
+        g_btn |= DM_BTN_R; push(); return;                // attack
+    }
+    [self touchAt:e];
+}
+- (void)mouseDragged:(NSEvent *)e {
+    if (g_mouse_look) { [self mouseMoved:e]; return; }
+    [self touchAt:e];
+}
+- (void)mouseUp:(NSEvent *)e {
+    if (g_mouse_look) { g_btn &= ~DM_BTN_R; push(); return; }
+    (void)e; if (g_mouse_down) { g_mouse_down = 0; dm_touch_set(NULL, 0); }
+}
+- (void)rightMouseDown:(NSEvent *)e { (void)e; if (g_mouse_look && g_look_on) { g_btn |= DM_BTN_ZL; push(); } }
+- (void)rightMouseUp:(NSEvent *)e { (void)e; if (g_mouse_look) { g_btn &= ~DM_BTN_ZL; push(); } }
+- (void)otherMouseDown:(NSEvent *)e { (void)e; if (g_mouse_look && g_look_on) { g_btn |= DM_BTN_ZR; push(); } }
+- (void)otherMouseUp:(NSEvent *)e { (void)e; if (g_mouse_look) { g_btn &= ~DM_BTN_ZR; push(); } }
 // The drawable follows the view in pixels: a layer assigned to a layer-backed view kept the drawable at the first window's 1280x720 in fullscreen too, so the game picture was
 // scaled down to it and up again by the compositor
 - (void)fitDrawable {
@@ -1205,6 +1314,13 @@ void front_run(void (*guest)(void)) {
         [win makeKeyAndOrderFront:nil];
         screen_refresh(win.screen ?: NSScreen.mainScreen);
         g_win = win;
+        { const char *m = getenv("DM_MOUSE");
+          if (m && !strcmp(m, "look")) {
+              const char *s = getenv("DM_MOUSE_SENS"); if (s && *s) g_look_sensitivity = atof(s);
+              g_mouse_look = 1; win.acceptsMouseMovedEvents = YES; [win makeFirstResponder:v];
+              mouse_look_set(1);
+              LOG("front end: mouse look (DM_MOUSE=look): relative motion is the right stick, left/right/middle = R/ZL/ZR, Esc releases the pointer");
+          } }
         [NSApp activateIgnoringOtherApps:YES];
         // A host another process starts (scripts/regress.py) is not activated (its focus state stays 2), so its window opened wherever it landed in the window order, and behind
         // another app's window macOS fires its display link about once a second: Breath of the Wild stepped up to 3 vsyncs at boot and never came back (20 fps runs).
@@ -1264,8 +1380,13 @@ void front_run(void (*guest)(void)) {
                 pads_changed(conn ? nil : c); }];
         dm_haptics_apple_init();
         pads_start();
-        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown | NSEventMaskKeyUp handler:^NSEvent *(NSEvent *e) {
+        pad_poll_start();
+        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown | NSEventMaskKeyUp | NSEventMaskFlagsChanged handler:^NSEvent *(NSEvent *e) {
             if (e.window != win) return e;   // Only swallow keys for the game window; other windows such as the software keyboard input box receive typing as usual
+            if (e.type == NSEventTypeFlagsChanged) {   // mouse look: Shift is sprint (L); other modifiers stay with AppKit
+                if (g_mouse_look && (e.keyCode == 56 || e.keyCode == 60)) { on_flags(e); return nil; }
+                return e;
+            }
             if (e.type == NSEventTypeKeyDown && (e.modifierFlags & NSEventModifierFlagCommand)) return e;   // ⌘ shortcuts go to the menu; a key released while ⌘ is held still reaches the game, or it would stay pressed
             if (!e.isARepeat) on_key(e, e.type == NSEventTypeKeyDown);
             return nil;   // Swallow it to avoid the system beep
