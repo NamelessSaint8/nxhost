@@ -618,3 +618,25 @@ One operational note for that dump: **serials are assigned per run**, so they ca
 serial read from an earlier log answers `[texraw] ser=31737: no host texture`. The passdump and the `texraw` must therefore happen in the *same* process: start the host with
 `DM_CTL` and `DM_NVN_PASSDUMP=every:900`, read the world pass's serial from that run's log once the dump frame has gone by, then append `texraw <serial> <path>` to the control file.
 A host launched with a trailing `&` inside a shell call is killed when that call returns, which is how the first attempt lost its window.
+
+### The world's colour target is black
+
+The dump, in the process that printed the serial (this run's was `31747`, and serials differ per run):
+
+```
+[texraw] ser=31747 2048x1152 format 92 type 2 -> shots/world.raw
+37748736 bytes for 2359296 texels = 16 bytes per texel
+RGBA32F interpretation: 5 non-zero values in a 200,000-value sample, max 0.0
+```
+
+So the 2048x1152 target the window composites is **essentially all zeros**. The composite is innocent: it samples the right serial, and what it samples is black.
+
+That places the fault inside the world pass itself -- pass 33994 in that frame, 2048x1152 against a Depth32FloatS8 target with 586 draws. The draws are recorded and
+replayed, and they leave nothing in the colour attachment. The remaining candidates, all inside that pass:
+
+- the depth test rejecting every fragment (clear value and compare function -- an inverted comparison against a cleared buffer rejects everything);
+- a viewport or scissor that does not cover the target (or is degenerate) for those draws;
+- the colour write mask cleared for them.
+
+A passdump already prints the pass's attachments; what it does not print is the per-draw depth state, viewport and mask, which is the next probe: log those for the first
+draw of pass 33994 and compare against what a 2048x1152 world pass should have.
