@@ -9936,14 +9936,18 @@ static void vdraw_log(int pass) {
          S.ds.dt, S.ds.dw, S.ds.df, S.ds.st, S.chmask,
          S.vp[0][0], S.vp[0][1], S.vp[0][2], S.vp[0][3],
          R.has_sc ? "on" : "off", R.sc.x, R.sc.y, R.sc.w, R.sc.h);
-    // The vertex stage's uniform blocks, with the first sixteen floats of the biggest one: the transform a collapsed world would be reading wrongly. Nothing else in the host is
-    // left to explain a pass that draws 586 times into a target that stays empty, so the next fact is what the shader is actually given.
-    { int best = -1; for (int k = 0; k < 16; k++) if (S.ubo[0][k].addr && (!(best + 1) || S.ubo[0][k].size > S.ubo[0][best].size)) best = k;
-      if (best >= 0) { void *mb; uint64_t mo; const p_bind_buf *u = &S.ubo[0][best];
-        int ok = mtl_addr(u->addr, u->size < 64 ? u->size : 64, &mb, &mo);
-        char f[400]; size_t o = 0;
-        if (ok) { const float *q = (const float *)((const uint8_t *)mb + mo); for (int i = 0; i < 16 && o < sizeof f - 24; i++) o += (size_t)snprintf(f + o, sizeof f - o, " %.4g", q[i]); }
-        MLOG("vdraw:   vubo slot %d addr %#llx size %llu%s%s", best, (unsigned long long)u->addr, (unsigned long long)u->size, ok ? ":" : " (not mapped)", ok ? f : ""); } }
+    // The vertex stage's uniform blocks 0-3, each with its first four rows: NVN's c0 is where a title's per-draw constants live, and a model-view-projection matrix is
+    // recognisable at a glance (a 1 in the last row's diagonal, a plausible translation, a finite depth range). The previous probe picked the largest block, slot 6, and read all
+    // zeros -- a data block, not constants. Nothing else in the host is left to explain a pass that draws 586 times into a target that stays empty.
+    for (int k = 0; k < 4; k++) { const p_bind_buf *u = &S.ubo[0][k];
+      if (!u->addr) continue;
+      uint64_t want = u->size < 64 ? u->size : 64;
+      void *mb; uint64_t mo;
+      int ok = mtl_addr(u->addr, want, &mb, &mo);
+      if (ok) { const float *q = (const float *)((const uint8_t *)mb + mo); int n = (int)(want / 4); char f[512]; size_t o = 0;
+        for (int i = 0; i < n && i < 16 && o < sizeof f - 32; i++) { if (i % 4 == 0 && i) o += (size_t)snprintf(f + o, sizeof f - o, " |"); o += (size_t)snprintf(f + o, sizeof f - o, " %.4g", q[i]); }
+        MLOG("vdraw:   vubo slot %d addr %#llx size %llu%s%s", k, (unsigned long long)u->addr, (unsigned long long)u->size, n < 16 ? " (truncated)" : ":", f); }
+      else MLOG("vdraw:   vubo slot %d addr %#llx size %llu (not mapped)", k, (unsigned long long)u->addr, (unsigned long long)u->size); }
 }
 static void draw_(const p_draw *dw, const p_draw_idx *di) {
     vdraw_log((int)g_stat_pass);
