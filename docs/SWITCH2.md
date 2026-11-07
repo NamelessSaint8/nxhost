@@ -816,13 +816,33 @@ Six depth dumps and two colour dumps were issued against the serials printed **b
 
 One layout fact from that episode does hold and is worth keeping: a `texraw` row is `w * 16` bytes but the blit packs texels at their native **4 bytes**, so texel *x* of row *y* is at `y * 32768 + x * 4`; the remaining 24,576 bytes of each row are padding and **100 % zero** (verified). Reading at a 16-byte texel stride samples three quarters padding.
 
+### The draws submit real vertex counts, and the world renders as a depth prepass plus a colour pass
+
+`DM_NVN_PASSDUMP=every:60` (one dumped frame per second) produced 724 `D` lines in 45 s. Its `D <pass> prim=… vc=… inst=… blend=… wm=… dt=… dw=…` line records the first draw of each pass, so `vc` and `prim` answer the vertex-count question without a rebuild. Filtered to the world's 2048x1152 target there are **100 sampled draws across 10 frames** (F30…F570):
+
+| colour mask | depth write | draws |
+|---|---|---|
+| `wm=0xffffffff` | `dw=0` | 54 |
+| `wm=0xffffffff` | `dw=1` | 25 |
+| `wm=0` | `dw=1` | 7 |
+| `wm=0xfffffff3` | `dw=0` | 7 |
+| `wm=0x7f` | `dw=0` | 7 |
+
+**31 of the 100 submit more than 100 vertices**, up to `vc=8340` with `prim=4` (triangle list). The world is drawn as a **pair per frame**: a depth prepass (`wm=0 dw=1`, colour writes off) and then a colour pass (`wm=0xffffffff dw=0`), each submitting 8,340 vertices, plus a 2,400-vertex and a 366-vertex × 10-instance draw. That is ~22,740 vertices per frame over 157,502 across the sample.
+
+So **vertices are submitted in healthy counts** and the draw is not collapsing before the rasteriser. What follows from the depth dumps: the prepass writes depth (`dw=1`) with 8,340 vertices and the depth target still reads at its clear value in every sample -- and the colour pass writes colour with a full mask and reads zero. Both witnesses agree that no fragment survives. That places the fault in what the vertex shader computes from its uniforms: every vertex is transformed outside the clip volume.
+
+The shader keys for those draws are in the `K` lines: the prepass runs vertex `5b120bbfcd3f2fef_b` / fragment `f60860d120dc8735_b`, and the neighbouring colour pass `076e487a86fc4eab_b` / `20ca484afb5d9d95_b`.
+
+Two probe-joining traps this run exposed: the pass dump's `D` line and the `vdraw` line **are offset by one pass** (vdraw pass 8073 reports 512x288 while `D` pass 8073 reports 1024x576), so join on the target size rather than trusting the number; and `every:N` dumps only frame `f % N == N/2`, so a pass present in a `vdraw` line need not appear in a `D` line at all.
+
 ### Pick up here
 
-**The next question is whether the draw submits vertices at all**, and the pass dump already prints what is needed without a rebuild: its `d <pass> ... vc=<n> ... vs=<key> ... prim=<n>` line carries the vertex count, primitive type and vertex-shader key per draw. A `vc` of zero or a handful says the draw is collapsing before rasterisation; a healthy `vc` with a sane primitive says the vertices exist and the transform is what throws them away.
+**The next question is what the vertex shader reads**, and the answer is now specific: dump the uniform blocks of vertex shader `5b120bbfcd3f2fef_b` (the depth prepass) and `076e487a86fc4eab_b` (its colour pass) and look for a 4x4 transform whose rows are sane.
 
-`DM_NVN_PASSDUMP=every:<n>` is the switch; join its `d` lines to the `vdraw` line by pass number. If the vertex count is healthy, follow with the block dump: `DM_NVN_CBDUMP=<dir>` writes whole uniform blocks per draw, but needs **two** variables -- the CBDUMP block sits inside `if (bl)` and `bl` requires `passdump()` -- plus `DM_NVN_CBDUMP_KEY` to narrow to the world's vertex shader.
+`DM_NVN_CBDUMP=<dir>` writes whole uniform blocks per draw but needs **two** variables -- the CBDUMP block sits inside `if (bl)` and `bl` requires `passdump()` -- plus `DM_NVN_CBDUMP_KEY=<key>` to narrow to one shader. Set all three in one run and the directory fills with `F<frame>_p<pass>_st<stage>_cb<slot>_<address>.bin`.
 
-The `vdraw` probe now summarises **all 16 slots over the whole block** and, with `DM_VDRAW_ROWS=1`, prints every nonzero row of any block holding a dozen or more real-number floats -- so the next run does not need to guess which slot to look at.
+The `vdraw` probe also summarises **all 16 slots over the whole block** and, with `DM_VDRAW_ROWS=1`, prints every nonzero row of any block holding a dozen or more real-number floats -- the cheap way to see which slot carries the transform before dumping bytes.
 
 **Run recipe** (all data on the external volume):
 
