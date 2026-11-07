@@ -557,3 +557,22 @@ each 10-bit signed component unpacked to a float, divided by 511 and clamped for
 
 The result, by eye: **the title screen now comes up completely, and lit particles drift across it from right to left.** Before this the picture was black apart from unlit shapes.
 The 3D world behind the title still does not draw -- a separate question, and the next one.
+
+### Every vertex format the title uses, and none of them is missing
+
+Widening the probe to any first-seen vertex program (353 of them) gives 19 distinct attribute formats. Read against `nvn_fmt_mtl.c`, and against `vfmt()` in `nvn_mtl.m`
+(the *vertex* mapping, which differs from the texture one):
+
+| fmt | NVN | table (texture) | `vfmt()` (vertex) | uses |
+|---|---|---|---|---|
+| 46 | 0x2E | `RGB32Float` gate: `Float4` | `Float4` | 581 |
+| 105 | 0x69 | **`N`** | `Int1010102Normalized`, and now CPU-unpacked | 510 |
+| 17 / 18 | 0x11 / 0x12 | `RG16Float` / `RG16Unorm` | `Half2` / `UShort2Normalized` | 471 |
+| 37 | 0x25 | `RGBA8Unorm` | `UChar4Normalized` | 341 |
+| **34** | **0x22** | **`N`** (no RGB32 *texture*) | **`Float3`** | 232 |
+| 13, 39, 1, 22, 38, 19, 5, 15, 42, 3, 10, 45 | | all supported | all supported | 585 |
+
+So the two `N` entries the texture table shows are both fine as **vertex** attributes: `0x22` is a three-float position and maps to `Float3`; `0x69` maps to
+`Int1010102Normalized` and is unpacked on the CPU. **The format list is not what keeps the 3D world off the screen** -- every format the title binds has a vertex path.
+
+That leaves the world pass's own state: depth (a world draw failing a depth test against an uncleared or wrong-formatted target), culling, or the transforms it is given.
