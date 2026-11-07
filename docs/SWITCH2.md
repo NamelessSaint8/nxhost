@@ -838,11 +838,29 @@ Two probe-joining traps this run exposed: the pass dump's `D` line and the `vdra
 
 ### Pick up here
 
-**The next question is what the vertex shader reads**, and the answer is now specific: dump the uniform blocks of vertex shader `5b120bbfcd3f2fef_b` (the depth prepass) and `076e487a86fc4eab_b` (its colour pass) and look for a 4x4 transform whose rows are sane.
+**The world's vertex shader does not read slot 0.** Its reflection (`.../metal_shader_cache/cas/shader/<hash>/mac/5b120bbfcd3f2fef_b.json`, key `bindings`) gives four constant-buffer bindings, each `constant _16*` -- one 64-byte block, i.e. one matrix -- at argument ids 0-3:
 
-`DM_NVN_CBDUMP=<dir>` writes whole uniform blocks per draw but needs **two** variables -- the CBDUMP block sits inside `if (bl)` and `bl` requires `passdump()` -- plus `DM_NVN_CBDUMP_KEY=<key>` to narrow to one shader. Set all three in one run and the directory fills with `F<frame>_p<pass>_st<stage>_cb<slot>_<address>.bin`.
+| binding | arg id | NVN slot |
+|---|---|---|
+| `vp_c5` | 0 | **reg 2** |
+| `vp_c9` | 1 | **reg 6** |
+| `vp_c6` | 2 | **reg 3** |
+| `vp_c4` | 3 | **reg 1** |
 
-The `vdraw` probe also summarises **all 16 slots over the whole block** and, with `DM_VDRAW_ROWS=1`, prints every nonzero row of any block holding a dozen or more real-number floats -- the cheap way to see which slot carries the transform before dumping bytes.
+Every probe up to here read slot 0, which this shader never touches. That is why "slot 0 is a per-object record array" kept coming back: it is a per-object record array, and it is not the transform.
+
+**Those four slots read as integer bit patterns, not matrices.** With `DM_NVN_PASSDUMP=every:60` the new `B` line prints each cbuf binding's resolved address and its first four floats. Joined to the 2048x1152 passes (64 passes appear in both logs), the vertex stage's binds at reg 1/2/3/6 read like `f=0,0,2.07334e+15,1.70958e-43` and `f=1.62124e+23,1.05329e+21,1.06814e-05,8.44843e+20` -- denormals (`1.70958e-43` is the integer 122 read as a float) and 1e+20-scale values. A matrix row is not there. This survives `DM_NVN_UB_DEFER=0`, where no inline update is deferred and raw memory is exactly what the shader reads, so it is not a shadow artefact.
+
+**The probe had to be fixed twice to say that truthfully**, and both are traps for the next run:
+
+- The `vdraw` probe and `CBDUMP` both read `u->addr`, the guest address. The draw does not: when an inline uniform update is deferred inside the pass, it binds a **shadow** -- `ubd_shadow` when the updates cover the whole binding, `ubp_get` when they cover only part (`nvn_mtl.m`, the `NVN_RB_CBUF` branch). So both instruments can print a copy the shader never sees. The `vc-run.log` counters confirm the mechanism is live: `in-pass uniform updates deferred 984`, `partly covered 754`.
+- Reading the shadow's address through `mtl_addr` returns nothing, because the ubs ring and the per-frame arena are not registered memory pools -- indistinguishable from a block of zeros. `ubd_read` gives the shadow's bytes directly. A first attempt that read `gpu` through `mtl_addr` reported `f=0,0,0,0` for all 662 binds, which was a mapping failure, not zeros.
+
+**The next question is whether the reflection's slot numbers are right.** `vp_c5` named for constant register 5 reads NVN slot 2, `vp_c9` reads 6, `vp_c6` reads 3, `vp_c4` reads 1 -- a uniform offset of 3. Either the translator maps SPIR-V binding N to NVN slot N-3 correctly (NVN's c[] base is offset from the SPIR-V decoration) or it does not, and the shader is reading four slots that hold unrelated data. That is checkable offline against the shader's own SPIR-V binding decorations -- no run needed -- and it is the difference between "the guest puts no matrix there" and "the host asks for the wrong slot".
+
+If the mapping is right, the blocks the guest binds at 1/2/3/6 genuinely carry no matrix and the next suspect is the guest's own uniform update for those slots. If the mapping is wrong, every world draw has read garbage since the port began, which is exactly a pass that submits 8,340 vertices and rasterises nothing.
+
+The `vdraw` probe also summarises all 16 slots over the whole block and, with `DM_VDRAW_ROWS=1`, prints every nonzero row of any block holding a dozen or more real-number floats. Note its `first real row -1:` lines print a **stale** `f` buffer when a slot has no real floats -- the string is only filled when `first >= 0` -- so those values are the previous slot's and mean nothing.
 
 **Run recipe** (all data on the external volume):
 
