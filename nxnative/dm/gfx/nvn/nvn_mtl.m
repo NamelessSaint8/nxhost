@@ -9917,7 +9917,22 @@ static uint32_t draw_color_writes(NvProg *pr) {
 }
 static void draw_(const p_draw *dw, const p_draw_idx *di);
 static void draw(const p_draw *dw, const p_draw_idx *di) { cp_stamp start = cp_begin(); draw_(dw, di); cp_end(5, start); }
+// Diagnostic DM_VDRAW_LOG=1: for the first draw of each pass that has a depth attachment, the state that can leave a world pass's colour target black -- the depth compare and
+// write enable, the colour write mask, the viewport and scissor against the target's size. Mario Kart World's world pass records 586 draws, runs against Depth32FloatS8 and
+// stores an all-zero 2048x1152 target (texraw), so one of these three is refusing or masking every fragment.
+static void vdraw_log(int pass) {
+    static int on = -1; if (on < 0) { const char *e = getenv("DM_VDRAW_LOG"); on = e && atoi(e); }
+    static int last = -1; if (!on || !R.rt.depth || !R.rt.color[0] || pass == last) return;
+    last = pass;
+    MLOG("vdraw: pass %d target %ux%u fmt %u | depth %ux%u fmt %u | ds dt%d dw%d df%d st%d | chmask %#x | vp %.0f,%.0f %.0fx%.0f | sc %s %d,%d %dx%d",
+         pass, R.rt.color[0]->d.width, R.rt.color[0]->d.height, R.rt.color[0]->d.format,
+         R.rt.depth->d.width, R.rt.depth->d.height, R.rt.depth->d.format,
+         S.ds.dt, S.ds.dw, S.ds.df, S.ds.st, S.chmask,
+         S.vp[0][0], S.vp[0][1], S.vp[0][2], S.vp[0][3],
+         R.has_sc ? "on" : "off", R.sc.x, R.sc.y, R.sc.w, R.sc.h);
+}
 static void draw_(const p_draw *dw, const p_draw_idx *di) {
+    vdraw_log((int)g_stat_pass);
     // Diagnostic DM_VATTR_LOG=1: the guest's own vertex attribute table for this draw -- offset, stream and format per attribute, beside the vertex shader's key.
     // It answers a question a build cannot: 2838 shaders load a vertex attribute at byte offset 0x5C that the offline translation has no entry for (Ryujinx
     // AttributeMap returns 0 there), and whether the guest declares that offset is only visible in the per-draw state.
