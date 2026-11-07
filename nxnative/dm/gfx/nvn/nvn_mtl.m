@@ -7842,6 +7842,12 @@ static void sd_finish(void) {
     else for (int i = 0; i < g_nsd; i++) sd_need(&g_sd[i], 6);   // Pass ended outside the list / index unavailable: always write back
     for (int i = 0; i < g_nsd; i++) {
         sd_att *t = &g_sd[i]; int udc_dead = udc_on() && t->load && !t->wrote;
+        // Diagnostic DM_VSTORE_LOG=1: the store lookahead's verdict for this pass's attachments -- the state it decided (2 = its content is already in memory, 1 = decided for
+        // another reason) and why. A world pass whose colour target stores zeros while every per-draw state is correct is explained here if the verdict says "not needed".
+        { static int von = -1; if (von < 0) { const char *e = getenv("DM_VSTORE_LOG"); von = e && atoi(e); }
+          static int logged; if (von && logged < 4000) { logged++;
+            MLOG("vstore: pass %llu idx %d ser %llu %.1f MB depth %d state %d why %d load %d wrote %d udc_dead %d", (unsigned long long)g_stat_pass, t->idx,
+                 (unsigned long long)t->ser, (double)t->bytes / 1048576.0, t->depth, t->state, t->why, t->load, t->wrote, udc_dead); } }
         // A color attachment written in the same pass as the window texture does not enter the ledger: it is a link in the present chain, not a transient attachment that is 'reset every frame before use'.
         // The in-run 'upscale' pass writes two textures at once - scene texture + window texture - and the UI composite was merged into the same pass, so in-run nobody reads back the scene texture; as soon as the game stops drawing 3D (loading screen)
         // a separate composite pass samples it afterwards instead. 'About to enter the loading screen' is only known after the previous frame was submitted, so prediction cannot stop it: on iPad true fullscreen every install hits it once on the first act change
