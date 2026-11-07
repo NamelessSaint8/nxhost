@@ -9925,15 +9925,16 @@ static void draw_(const p_draw *dw, const p_draw_idx *di);
 static void draw(const p_draw *dw, const p_draw_idx *di) { cp_stamp start = cp_begin(); draw_(dw, di); cp_end(5, start); }
 // Diagnostic DM_VDRAW_LOG=1: for the first draw of each pass that has a depth attachment, the state that can leave a world pass's colour target black -- the depth compare and
 // write enable, the colour write mask, the viewport and scissor against the target's size. Mario Kart World's world pass records 586 draws and runs against Depth32FloatS8. The
-// state below all checks out (full mask, full viewport, plausible depth state) and yet the picture behind the title stays black. The target is not literally all zeros -- a texraw
-// of it holds 2.7% non-black pixels in a few compact blobs -- so "the pass writes nothing" is the wrong reading and this probe is looking for where the fragments go.
+// state below all checks out (full mask, full viewport, plausible depth state) and yet the target stores nothing: six depth dumps and two colour dumps, issued against the serials
+// this line prints and spread over ~12 s, all read back zero. The depth target cannot corroborate, because the state is dt1 dw0 -- depth write is off -- so a rasterised fragment would
+// leave depth at its clear value too. That leaves "no fragment ever reaches this target" as the reading to explain.
 static void vdraw_log(int pass) {
     static int on = -1; if (on < 0) { const char *e = getenv("DM_VDRAW_LOG"); on = e && atoi(e); }
     static int last = -1; if (!on || !R.rt.depth || !R.rt.color[0] || pass == last) return;
     last = pass;
-    MLOG("vdraw: pass %d target %ux%u fmt %u | depth %ux%u fmt %u | ds dt%d dw%d df%d st%d | chmask %#x | vp %.0f,%.0f %.0fx%.0f | sc %s %d,%d %dx%d",
-         pass, R.rt.color[0]->d.width, R.rt.color[0]->d.height, R.rt.color[0]->d.format,
-         R.rt.depth->d.width, R.rt.depth->d.height, R.rt.depth->d.format,
+    MLOG("vdraw: pass %d target %ux%u fmt %u ser %llu | depth %ux%u fmt %u ser %llu | ds dt%d dw%d df%d st%d | chmask %#x | vp %.0f,%.0f %.0fx%.0f | sc %s %d,%d %dx%d",
+         pass, R.rt.color[0]->d.width, R.rt.color[0]->d.height, R.rt.color[0]->d.format, (unsigned long long)R.rt.color[0]->serial,
+         R.rt.depth->d.width, R.rt.depth->d.height, R.rt.depth->d.format, (unsigned long long)R.rt.depth->serial,
          S.ds.dt, S.ds.dw, S.ds.df, S.ds.st, S.chmask,
          S.vp[0][0], S.vp[0][1], S.vp[0][2], S.vp[0][3],
          R.has_sc ? "on" : "off", R.sc.x, R.sc.y, R.sc.w, R.sc.h);
