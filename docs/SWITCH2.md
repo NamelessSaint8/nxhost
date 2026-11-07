@@ -895,6 +895,38 @@ DM_CTL=$W/ctl.txt ./dmhost $W/patched > $W/logs/run.log 2>&1
 
 Diagnostics worth knowing: `DM_VDRAW_LOG=1` (per-pass depth/mask/viewport/scissor + vertex UBO), `DM_VSTORE_LOG=1` (store verdicts), `DM_NVN_PASSDUMP=every:<n>` (attachments and binds by serial), `DM_NVN_GPUPROF=every:<n>` (per-pass timing table), `DM_NVN_ALLOCPROF=1` (residency census), `DM_CTL` commands `shot`, `texraw`, `texdump`, `passdump`, `dump`.
 
+### The slot 0-3 read, done per draw: there is no transform there
+
+The `vdraw` pass line samples **one draw per pass**, and stage 0 binds slot 0 at hundreds of distinct addresses in a run, so one sample cannot say what a later draw reads. `DM_VDRAW_DRAWS=n` in `nvn_mtl.m` closes that: `vdraw_draw_watch()` reads the vertex stage's slots 0-3 at **every** draw of a pass that has depth and colour, skipping a slot whose binding is unchanged, and prints each binding's first 16 words in hex plus its row 8. A 45 s run with `DM_VDRAW_DRAWS=400` printed **400 bindings over 159 distinct addresses** before the cap stopped it (`vdraw: DM_VDRAW_DRAWS cap reached, later bindings not shown`).
+
+**No 4x4 transform in any of them.** Decoding each record's hex words as little-endian floats and testing every 1-float offset for an orthonormal 3x3 -- unit-length, mutually perpendicular rows, a test that survives the zeros a matrix contains and does not depend on the row grid -- finds **0 hits in 400**. A matrix would show a row of three unit-length, perpendicular vectors; nothing does.
+
+**The blocks are 8-byte-stride records, and that is what the "2-float shift" is.** Every other 32-bit word is zero:
+
+```
+slot 0 size 384 rows 24  w: 00004000 00000000 00000185 00000000 008125d1 00000000 00000000 00000000 bcca0000 00000100 ...
+```
+
+As floats that reads `2.3e-41, 0, 5.4e-43, 0, 1.2e-38, 0 ...` -- integers as floats. A row boundary in the row printer therefore lands between two records of *a 4-byte value and a 4-byte zero*, which is exactly why consecutive printed rows looked like they overlapped. The block is a record array, not a matrix, and the 8-byte stride is why `%.6g` could not separate the two.
+
+Slot 0's sizes in the 400-draw sample: **384 B (29), 512 B (28), 128 B (21), 768 B (7), 576 B (7), 256 B (3)** -- so a size alone names no draw, and "the 768-byte block" is one of six shapes.
+
+**Two independent cross-checks on the same build agree.** `nxnative/dm/tools/vdraw_slots.py` over the per-pass row log -- 637 blocks in 628 full-mask passes -- reports **0/637 matrix-shaped 4x4 in every one of the 16 slots**. A flat-stream test that reconstructs each block's floats and searches for an orthonormal 4x4 at every 1-float offset finds **0 of 7,014 blocks**. So "no matrix" is not an artefact of looking at the wrong slots or the wrong row alignment.
+
+**And the colour pass's shader does not read slot 0.** The pass runs **7 distinct vertex shaders** -- `50a275e9d32af1c7_b` in 64 of 372 full-mask colour passes, then `a032c25f0e940a2f_b`, `8c4284bece28616f_b`, `8b9900cb243803d8_b`, `0bd62f72ce386929_b`, `6773916ae36fd3ef_b`, `fdef50a1c55bdde3_b` -- each with its own descriptor set. The dominant one declares:
+
+```c
+constant _10* support_buffer [[id(0)]];
+constant _16* vp_c0  [[id(1)]];  constant _16* vp_c1  [[id(2)]];
+constant _16* vp_c14 [[id(3)]];  constant _16* vp_c15 [[id(4)]];
+constant _16* vp_c9  [[id(5)]];  constant _16* vp_c4  [[id(6)]];
+const device _31* vp_s0 [[id(7)]]; const device _31* vp_s1 [[id(8)]];
+```
+
+With `slot = c - 3`, that is **c4 -> slot 1, c9 -> 6, c14 -> 11, c15 -> 12**, plus two storage buffers. Its fixed matrix reads are `_m0[1..4]` of `c14` (slot 11) and `_m0[1]` of `c15` (slot 12); `c4`'s reads are dynamic row indices (`_m0[int(_76)][_78]`), a per-instance row array. **Slot 0 is read by none of the seven.** The earlier "the colour pass's shader reads slot 0 as `vp_c3`" was about `076e487a86fc4eab_b`, which is a neighbouring shader and not in this pass's key list at all -- so its slot 0 is not the colour pass's matrix, and its 256-byte block is not either.
+
+**Two limits on the instrument, both cheap to close.** It prints only 16 words -- 64 bytes, 4 rows -- per binding, so the shader's `c14` row 4 at bytes 64-79 falls just outside the window; widening the word count to the block's size would cover it. And the 400-binding cap leaves the sample at 159 addresses, not the several hundred stage 0 binds in one run; the binary is now built, so a larger cap costs only a run.
+
 ### Traps this hunt already paid for (do not re-chase)
 
 - **`Attribute offset 0x5C is not valid`** -- benign: no guest draw binds that offset, and it lies past every vertex stride. `tools/shader_notes.py` lists the keys behind any translator note without a retranslation.
