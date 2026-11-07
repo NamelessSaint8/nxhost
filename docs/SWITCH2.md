@@ -576,3 +576,23 @@ So the two `N` entries the texture table shows are both fine as **vertex** attri
 `Int1010102Normalized` and is unpacked on the CPU. **The format list is not what keeps the 3D world off the screen** -- every format the title binds has a vertex path.
 
 That leaves the world pass's own state: depth (a world draw failing a depth test against an uncleared or wrong-formatted target), culling, or the transforms it is given.
+
+### The world pass exists, with depth, and then goes nowhere
+
+`DM_NVN_GPUPROF=every:900` profiles a whole attract frame instead of frame 1. Frame 1800 has **126 render passes, 21 of them with a depth attachment** -- and the
+world is unmistakably in there:
+
+| pass | size | colours | depth | draws | what it looks like |
+|---|---|---|---|---|---|
+| 191835 | 2048x1152 | 1 (fmt 92) | 1 (fmt 260) | **586** | the world's main pass |
+| 191813 | 2048x1152 | 1 | 1 | 585 | its twin (or a second view) |
+| 191812, 191834 | 2048x1152 | 1 | 1 | 310 | shadow-caster or depth-only work |
+| 191809-191811 | **3072x3072** | **0** | 1 (fmt 250) | 74-78 | **shadow maps**, depth only |
+| 191820 | 1024x576 | 1 (fmt 115) | 1 | 75 | a lit sub-pass (fmt 115 is RGBA16F) |
+
+So depth is attached, cleared or loaded, and six hundred draws go through it: the world is **drawn**, not skipped. Frame 1 by contrast has five passes and no depth at all -- which is
+why profiling frame 1 said "no world pass" and was misleading.
+
+That moves the question from "why is the world not drawn" to **"where does the 2048x1152 colour target go"**: either the composite that should sample it does not, or it samples
+the wrong texture/serial. `DM_NVN_PASSDUMP` prints attachments and reads by serial, which is the tool for that -- follow serial of pass 191835's colour target to the pass that draws
+the window.
