@@ -613,3 +613,8 @@ world and compositing it**, which rules out the "the composite never samples it"
 What is left is either the target's content or the composite's draw: if serial 31737 is black, the world's 586 draws wrote nothing (depth test rejecting
 everything, a degenerate viewport, or colour writes masked); if 31737 holds the world, the composite samples it wrongly (UVs, level, blend).
 `DM_CTL texraw 31737 <path>` (or a `texdump` of the frame) answers that in one run and decides between the two.
+
+One operational note for that dump: **serials are assigned per run**, so they cannot be carried between processes -- `31737` in one run is `31753` in the next, and a `texraw` for a
+serial read from an earlier log answers `[texraw] ser=31737: no host texture`. The passdump and the `texraw` must therefore happen in the *same* process: start the host with
+`DM_CTL` and `DM_NVN_PASSDUMP=every:900`, read the world pass's serial from that run's log once the dump frame has gone by, then append `texraw <serial> <path>` to the control file.
+A host launched with a trailing `&` inside a shell call is killed when that call returns, which is how the first attempt lost its window.
