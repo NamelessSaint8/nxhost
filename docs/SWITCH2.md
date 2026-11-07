@@ -545,3 +545,15 @@ refusal.
 
 `vattr_bytes` already knows the size (4 bytes for 0x69), so the missing piece is the *type* the shader is handed. Because the host builds the vertex buffer per draw, it can unpack
 10:10:10:2 Snorm to RGBA16Float there, with no translation-chain change at all -- unlike a fix at build time, which would need draw state the offline build does not have.
+
+### The normals were packed, and that was the black
+
+MKW's model vertices carry normals and tangents as **10:10:10:2 signed** (NVN `0x69`, `0x6A`) at offsets 0xC and 0x10 of the interleaved stream. `nvn_fmt_mtl.c` maps that
+group's signed members to `N`, and Metal has no vertex format for them either, so the attribute reached the shader through a format that does not describe it: positions
+(`RGBA16Float`, `0x29`) decoded correctly while the lighting frame did not, which is black geometry with nothing in the log.
+
+The host already converts vertex data on the CPU for the formats Metal cannot express (`vconv_wanted` -> `vconv_fill` -> a `Float4` attribute), so `0x69`/`0x6A` now join that path:
+each 10-bit signed component unpacked to a float, divided by 511 and clamped for the normalised variant, alpha `1`.
+
+The result, by eye: **the title screen now comes up completely, and lit particles drift across it from right to left.** Before this the picture was black apart from unlit shapes.
+The 3D world behind the title still does not draw -- a separate question, and the next one.
