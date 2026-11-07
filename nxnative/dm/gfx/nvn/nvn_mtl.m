@@ -619,6 +619,33 @@ int mtl_gpu_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off, uint64_
     return ok;
 }
 
+// Diagnostic DM_POOL_PROBE=1: for each distinct address a probed binding uses, list every pool whose range holds it and say which
+// one pool_find returns. A pool wraps guest memory with newBufferWithBytesNoCopy over the guest address, so the pool that really
+// holds an address has buf.contents + (addr - base) == addr; any other pool that also covers it is a wrong answer that still looks
+// plausible, and it is what mtl_addr would then read.
+static void pool_probe(uint64_t addr, uint64_t len) {
+    static int on = -1; if (on < 0) on = getenv("DM_POOL_PROBE") != NULL;
+    if (!on) return;
+    static uint64_t seen[32]; static int nseen;
+    for (int i = 0; i < nseen; i++) if (seen[i] == addr) return;
+    if (nseen < 32) seen[nseen++] = addr;
+    pthread_mutex_lock(&g_mu);
+    MLOG("pool probe: addr %#llx len %llu over %d pools", (unsigned long long)addr, (unsigned long long)len, g_npool);
+    for (int i = 0; i < g_npool; i++) if (addr >= g_pools[i].lo && addr + len <= g_pools[i].hi) {
+        const uint8_t *c = (const uint8_t *)[g_pools[i].buf contents];
+        MLOG("  holds: pool %d %#llx..%#llx base %#llx contents %p off %#llx exact=%d", i,
+             (unsigned long long)g_pools[i].lo, (unsigned long long)g_pools[i].hi, (unsigned long long)g_pools[i].base,
+             c, (unsigned long long)(addr - g_pools[i].base), c + (addr - g_pools[i].base) == (const uint8_t *)(uintptr_t)addr);
+    }
+    MLOG("  pool_find -> %d", pool_find(addr, len));
+    { const pc_ent *c = pc_get(addr, len);   // the fast path mtl_addr takes before pool_find is ever consulted
+      if (c) MLOG("  pc_get: hit lo %#llx..%#llx base %#llx contents %p gpu %#llx exact=%d", (unsigned long long)c->lo,
+                  (unsigned long long)c->hi, (unsigned long long)c->base, (const uint8_t *)[c->buf contents], (unsigned long long)c->gpu,
+                  (const uint8_t *)[c->buf contents] + (addr - c->base) == (const uint8_t *)(uintptr_t)addr);
+      else MLOG("  pc_get: miss"); }
+    pthread_mutex_unlock(&g_mu);
+}
+
 // ---------- Submission ----------
 static void defer_reset(void); static void defer_fallback(void);
 typedef struct { int kind; volatile uint32_t *val; uint32_t mode, v; uint64_t addr; uint32_t type; void *vis; uint32_t seg; } post_op;   // vis: the visibility slot table for kind 3, the readback for kind 4; seg: the segment it was encoded in (sub_cut)
@@ -7468,7 +7495,8 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
                 float gf[4] = {0, 0, 0, 0};
                 if (ubpart) { ubc_wait(g_ubp_ready); memcpy(gf, pc, sizeof gf); }   // the copy worker may still be filling that shadow
                 else if (shd) ubd_read(u->addr, sizeof gf, gf);
-                else { void *gb; uint64_t gof; if (mtl_addr(u->addr, sizeof gf, &gb, &gof)) memcpy(gf, (const uint8_t *)gb + gof, sizeof gf); }
+                else { void *gb; uint64_t gof; if (mtl_addr(u->addr, sizeof gf, &gb, &gof)) {   // mtl_addr hands back the MTLBuffer, not its bytes: read through contents or the row prints the object's own memory
+                    const uint8_t *c = [(__bridge id<MTLBuffer>)gb contents]; if (c) memcpy(gf, c + gof, sizeof gf); } }
                 PD("B %llu st%d cb reg%d addr=%#llx size=%llu gpu=%#llx shd=%d f=%g,%g,%g,%g", g_stat_pass, nvn_stage, reg, (unsigned long long)u->addr, (unsigned long long)u->size,
                    (unsigned long long)gpu, shd, gf[0], gf[1], gf[2], gf[3]);
                 // DM_NVN_UB_WATCH=1: watch the guest's own writes into each uniform binding. f= above shows what a block holds at encode time; identical values at every
@@ -9958,28 +9986,87 @@ static void draw(const p_draw *dw, const p_draw_idx *di) { cp_stamp start = cp_b
 // state below all checks out (full mask, full viewport, plausible depth state) and yet the target stores nothing: six depth dumps and two colour dumps, issued against the serials
 // this line prints and spread over ~12 s, all read back zero. The depth target cannot corroborate, because the state is dt1 dw0 -- depth write is off -- so a rasterised fragment would
 // leave depth at its clear value too. That leaves "no fragment ever reaches this target" as the reading to explain.
-// DM_VDRAW_DRAWS=n: read the vertex stage's slots 0-3 at EVERY draw of a pass with depth and colour, printing a slot when
-// its binding changes and stopping after n slots. The pass line below samples the first draw only, and stage 0 binds slot 0
-// at 723 distinct addresses in one run -- most of them a single 64-byte record -- so one sample cannot say what a later draw
-// reads. The words print in hex because %.6g cannot separate a float4x4 from a record whose real stride is 8 bytes: slot 0's
-// printed rows repeat two floats across the row boundary, which is what a record array looks like, not what a matrix does.
-// Row 8 is the shader's translation (076e487a86fc4eab_b reads _m0[0..3] and _m0[8]), so it prints separately when the
-// block is long enough to hold it.
+// DM_VDRAW_DRAWS=n: read the vertex stage's uniform slots at EVERY draw of a pass with depth and colour, printing a slot
+// when its binding changes and stopping after n slots. The pass line below samples the first draw only, and stage 0 binds
+// slot 0 at 723 distinct addresses in one run -- most of them a single 64-byte record -- so one sample cannot say what a
+// later draw reads. The words print in hex because %.6g cannot separate a float4x4 from a record whose real stride is 8
+// bytes: slot 0's printed rows repeat two floats across the row boundary, which is what a record array looks like, not
+// what a matrix does.
+// DM_VDRAW_SLOTS=a,b,c-d: which slots it reads (default 0-3). Slots 0-3 are not where a world matrix can be -- the colour
+// pass's seven vertex programs read c14 and c15, which is slots 11 and 12, and the prepass reads 1, 2, 3 and 6 -- so this
+// is what points the read at the blocks the shaders actually consume.
+// DM_VDRAW_WORDS=n: words printed per block (default 1024 = 4 KiB). A longer block also prints its last 32 words after a
+// marker, because a translation row sits at the end of a block as often as at the start, and the old 16-word window ended
+// at byte 63 -- just before c14's fourth row.
+// DM_VDRAW_KEYS=k1,k2: only print draws whose vertex program is one of these. A pass runs hundreds of draws and slot 12 is
+// rebound at most of them, so without this the cap is spent long before the pass it is aimed at -- the first run of this
+// probe used all 4,000 bindings and never reached the colour pass's dominant program.
+static int vdraw_key_ok(const char *vkey) {
+    static int ready; static char keys[512];
+    if (!ready) { ready = 1; const char *e = getenv("DM_VDRAW_KEYS"); if (e) snprintf(keys, sizeof keys, ",%s,", e); }
+    if (!keys[0]) return 1;
+    char pat[80]; snprintf(pat, sizeof pat, ",%s,", vkey);
+    return strstr(keys, pat) != NULL;
+}
+static int g_vdraw_src;
+static int vdraw_read_gpu(uint64_t addr, size_t n, void *out) {   // the bytes the shader would be given: a shadow when one covers the binding
+    g_vdraw_src = 0;
+    if (g_nubd && ubd_hits(addr, addr + n) && ubd_covers(addr, addr + n)) { ubd_read(addr, n, out); g_vdraw_src = 1; return 1; }   // deferred inline update, full cover
+    { uint64_t g; const uint8_t *c; if (pend_hits(addr, n) && ubp_get(addr, addr + n, &g, &c)) { ubc_wait(g_ubp_ready); memcpy(out, c, n); g_vdraw_src = 2; return 1; } }   // partial cover, shadow in the ring
+    { void *mb; uint64_t mo; if (mtl_addr(addr, n, &mb, &mo)) {   // through contents: mb is the MTLBuffer, and reading it as bytes returns the object's own fields
+        const uint8_t *c = [(__bridge id<MTLBuffer>)mb contents]; if (c) { memcpy(out, c + mo, n); g_vdraw_src = 3; return 1; } } }
+    return 0;
+}
+static int vdraw_read(uint64_t addr, size_t n, void *out) {   // what the guest wrote at the address, exactly as DM_NVN_CBDUMP reads it
+    memcpy(out, (const void *)(uintptr_t)addr, n); return 1;
+}
+static int g_vdraw_want[16], g_vdraw_want_ready;
+static void vdraw_slots_init(void) {
+    if (g_vdraw_want_ready) return; g_vdraw_want_ready = 1;
+    const char *e = getenv("DM_VDRAW_SLOTS");
+    if (!e || !*e) { for (int k = 0; k < 4; k++) g_vdraw_want[k] = 1; return; }
+    char spec[96]; snprintf(spec, sizeof spec, "%s", e);
+    for (char *p = spec; *p; ) {
+        while (*p == ',' || *p == ' ') p++;
+        if (!*p) break;
+        char *end; long lo = strtol(p, &end, 10), hi = lo;
+        if (*end == '-') hi = strtol(end + 1, &end, 10);
+        p = end;
+        if (lo < 0 || hi > 15 || hi < lo) continue;
+        for (long k = lo; k <= hi; k++) g_vdraw_want[k] = 1;
+    }
+}
 static void vdraw_draw_watch(const char *vkey) {
     static int cap = -1; if (cap < 0) { const char *e = getenv("DM_VDRAW_DRAWS"); cap = e ? atoi(e) : 0; }
-    static uint64_t at[4], sz[4]; static int had[4];
+    static int wcap = -1; if (wcap < 0) { const char *e = getenv("DM_VDRAW_WORDS"); wcap = e ? atoi(e) : 1024; if (wcap < 1) wcap = 1024; }
+    static uint64_t at[16], sz[16]; static int had[16];
+    static char h[16384]; static uint8_t hb[4096], tb[128];
     if (cap <= 0) return;
-    for (int k = 0; k < 4; k++) { const p_bind_buf *u = &S.ubo[0][k];
+    if (!vdraw_key_ok(vkey)) return;
+    vdraw_slots_init();
+    if (wcap > (int)sizeof hb / 4) wcap = (int)sizeof hb / 4;
+    for (int k = 0; k < 16; k++) { if (!g_vdraw_want[k]) continue; const p_bind_buf *u = &S.ubo[0][k];
         if (!u->addr || (had[k] && at[k] == u->addr && sz[k] == u->size)) continue;
         had[k] = 1; at[k] = u->addr; sz[k] = u->size;
-        void *mb; uint64_t mo; char h[256]; int n = 0, nw = (int)(u->size / 4 < 16 ? u->size / 4 : 16);
-        if (!mtl_addr(u->addr, u->size, &mb, &mo))
-            MLOG("vdraw: draw vs %s slot %d addr %#llx size %llu (not mapped)", vkey, k, (unsigned long long)u->addr, (unsigned long long)u->size);
-        else { const uint8_t *b = (const uint8_t *)mb + mo;
-            for (int i = 0; i < nw; i++) { uint32_t w; memcpy(&w, b + 4 * i, 4); n += snprintf(h + n, sizeof h - (size_t)n, " %08x", w); }
-            if (u->size >= 144) { n += snprintf(h + n, sizeof h - (size_t)n, " | row8:");
-                for (int i = 32; i < 36; i++) { uint32_t w; memcpy(&w, b + 4 * i, 4); n += snprintf(h + n, sizeof h - (size_t)n, " %08x", w); } }
-            MLOG("vdraw: draw vs %s slot %d addr %#llx size %llu rows %llu w:%s", vkey, k, (unsigned long long)u->addr,
+        pool_probe(u->addr, u->size);
+        size_t szb = (size_t)u->size, head = szb < (size_t)wcap * 4 ? szb : (size_t)wcap * 4, tail = szb > head ? sizeof tb : 0;
+        int n = 0, ok = vdraw_read(u->addr, head, hb);
+        if (!ok && head > 256) { head = 256; tail = sizeof tb; ok = vdraw_read(u->addr, head, hb); }   // fewer bytes reachable than the guest declared: print what resolves rather than nothing
+        if (tail > szb - head) tail = szb - head;   // a block shorter than the tail must not print the same words twice
+        if (!ok || (tail && !vdraw_read(u->addr + (szb - tail), tail, tb)))
+            MLOG("vdraw: draw vs %s target %ux%u chmask %#x slot %d addr %#llx size %llu rows %llu (unreadable)", vkey,
+                 R.rt.color[0]->d.width, R.rt.color[0]->d.height, S.chmask, k, (unsigned long long)u->addr,
+                 (unsigned long long)u->size, (unsigned long long)(u->size / 16));
+        else { size_t i; uint8_t alt[16], late[16]; int differs = 0, late_same = -1;   // does the shader-read path (shadow / mtl_addr) disagree with the guest's own bytes?
+            if (head >= sizeof alt && vdraw_read_gpu(u->addr, sizeof alt, alt) && memcmp(alt, hb, sizeof alt)) differs = 1;
+            if (differs) { memcpy(late, (const void *)(uintptr_t)u->addr, sizeof late); late_same = !memcmp(late, alt, sizeof late); }
+            for (i = 0; i < head; i += 4) { uint32_t w; memcpy(&w, hb + i, 4); n += snprintf(h + n, sizeof h - (size_t)n, " %08x", w); }
+            if (differs) { n += snprintf(h + n, sizeof h - (size_t)n, " | shadepath[%d] late_same=%d:", g_vdraw_src, late_same);
+                for (i = 0; i < sizeof alt; i += 4) { uint32_t w; memcpy(&w, alt + i, 4); n += snprintf(h + n, sizeof h - (size_t)n, " %08x", w); } }
+            if (tail) { n += snprintf(h + n, sizeof h - (size_t)n, " .. %llu words ..", (unsigned long long)((szb - head - tail) / 4));
+                for (i = 0; i < tail; i += 4) { uint32_t w; memcpy(&w, tb + i, 4); n += snprintf(h + n, sizeof h - (size_t)n, " %08x", w); } }
+            MLOG("vdraw: draw vs %s target %ux%u chmask %#x slot %d addr %#llx size %llu rows %llu w:%s", vkey,
+                 R.rt.color[0]->d.width, R.rt.color[0]->d.height, S.chmask, k, (unsigned long long)u->addr,
                  (unsigned long long)u->size, (unsigned long long)(u->size / 16), h); }
         if (--cap == 0) { MLOG("vdraw: DM_VDRAW_DRAWS cap reached, later bindings not shown"); return; } } }
 static void vdraw_log(int pass) {
@@ -10004,8 +10091,8 @@ static void vdraw_log(int pass) {
     for (int k = 0; k < 16; k++) { const p_bind_buf *u = &S.ubo[0][k];
       if (!u->addr) continue;
       void *mb; uint64_t mo;
-      if (!mtl_addr(u->addr, u->size, &mb, &mo)) { MLOG("vdraw:   vubo slot %d addr %#llx size %llu (not mapped)", k, (unsigned long long)u->addr, (unsigned long long)u->size); continue; }
-      const float *q = (const float *)((const uint8_t *)mb + mo); int n = (int)(u->size / 4);
+      if (!mtl_addr(u->addr, u->size, &mb, &mo) || ![(__bridge id<MTLBuffer>)mb contents]) { MLOG("vdraw:   vubo slot %d addr %#llx size %llu (not mapped)", k, (unsigned long long)u->addr, (unsigned long long)u->size); continue; }
+      const float *q = (const float *)((const uint8_t *)[(__bridge id<MTLBuffer>)mb contents] + mo); int n = (int)(u->size / 4);
       int nz = 0, sane = 0, first = -1;
       for (int i = 0; i < n; i++) { float v = q[i];
         if (v != 0.0f) nz++;
