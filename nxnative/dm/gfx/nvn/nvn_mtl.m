@@ -7458,8 +7458,15 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
                 else if (ubp_get(u->addr, u->addr + ul, &g, &c)) gpu = g;
                 else RED_ONCE(92, "a uniform update deferred inside the pass covers only part of the binding (stage %d cb%d): the content before the update is read", nvn_stage, reg); }
             if (bl) {
-                PD("B %llu st%d cb reg%d addr=%#llx size=%llu pool=%#llx+%#llx f=%g,%g,%g,%g", g_stat_pass, nvn_stage, reg, (unsigned long long)u->addr, (unsigned long long)u->size,
-                   (unsigned long long)(u->addr - mo), (unsigned long long)mo, ((float *)u->addr)[0], ((float *)u->addr)[1], ((float *)u->addr)[2], ((float *)u->addr)[3]);
+                // The shader is given gpu, which is u->addr unless a deferred inline update covers the binding: then it is a shadow in the ubs ring or the per-frame arena. Those are not
+                // registered memory pools, so mtl_addr cannot reach them and reading gpu through it returns nothing -- indistinguishable from a block of zeros. ubd_read gives the shadow's
+                // bytes directly. So f= below is what the vertex shader actually reads, and shd says whether a shadow was used at all.
+                int shd = g_nubd && ubd_covers(u->addr, u->addr + ul);
+                float gf[4] = {0, 0, 0, 0};
+                if (shd) ubd_read(u->addr, sizeof gf, gf);
+                else { void *gb; uint64_t gof; if (mtl_addr(u->addr, sizeof gf, &gb, &gof)) memcpy(gf, (const uint8_t *)gb + gof, sizeof gf); }
+                PD("B %llu st%d cb reg%d addr=%#llx size=%llu gpu=%#llx shd=%d f=%g,%g,%g,%g", g_stat_pass, nvn_stage, reg, (unsigned long long)u->addr, (unsigned long long)u->size,
+                   (unsigned long long)gpu, shd, gf[0], gf[1], gf[2], gf[3]);
                 // DM_NVN_CBDUMP=directory: also saves the whole uniform block to disk as-is (F<frame>_p<pass>_st<stage>_cb<slot>_<address>.bin), for the ground-truth side to compare byte by byte by guest address
                 // DM_NVN_CBDUMP_KEY=shader key: only save for draws using that shader (any stage)
                 static const char *cbd, *cbk; static int cbd_init; if (!cbd_init) { cbd = getenv("DM_NVN_CBDUMP"); cbk = getenv("DM_NVN_CBDUMP_KEY"); cbd_init = 1; }
