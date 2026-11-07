@@ -724,3 +724,72 @@ looks like rather than a constant block. So this answers nothing yet -- the prob
 live) and print each one's first four rows, which is how a model-view-projection matrix reads.
 
 Recorded so the next run does not repeat "biggest block" as if it were the transform.
+
+## Where this leaves the port (2026-11-06)
+
+### What runs now
+
+The native Mac host boots Mario Kart World through `nnMain`, plays the attract loop and draws a picture a person recognises:
+
+| | |
+|---|---|
+| title screen | **complete, lit** -- packed normals unpacked on the host (`32bdfda7`), with lit particles drifting across |
+| compute | **0** refused pipelines, from 12,309 retries per run: the 168 kernels declaring 48 KB of threadgroup memory spill to a device buffer (`e768d85cea2b`, `ee6d6bf9`) |
+| stability | **176,820 frames in 3,001 s** (~59 fps) with zero crashes or aborts |
+| footprint | **28.8 GB** at frame 300, from 37.1: spare copies retired (`6f470f7e`) and the sparse gather stopped zero-filling (`81e2bc61`) |
+| shaders | 11,577 of 11,603 build and load; 93 distinct misses per run |
+| vertex formats | 19 distinct formats across 353 programs, **every one has a vertex path** (`8d1513f0`) |
+
+### The one open item
+
+**The 3D world behind the title does not appear.** Everything measurable about the pass that should draw it is correct and its colour target still stores zeros:
+
+| verified | how |
+|---|---|
+| the pass exists and draws | 2048x1152, depth attached, **586 draws** (`DM_NVN_GPUPROF=every:900`) |
+| colour write mask | full `0xffffffff` on every world colour draw (`DM_VDRAW_LOG`) |
+| viewport and scissor | full target on every one of them |
+| depth state | varies as a real renderer's does (dt1 dw0 df3/df4/df2, dt1 dw1 df4/df2) |
+| dataflow | the window pass binds the world's own serial (`554c3f1c`) |
+| the target's content | **black** -- 5 non-zero floats in a 200,000-value sample (`00d2a00a`, format resolved in `e412b175`) |
+| the store lookahead | inert: all 4,000 verdicts are `state 1 why 6` = always write back |
+| draw skipping | `DM_NVN_ZSKIP=0` changes nothing (`2c9c3fac`) |
+
+So the fault is in **what the draws are given**, not in how the pass is rendered. The remaining suspect is the vertex stage's transforms.
+
+### Pick up here
+
+**Next probe, one run, no build:** extend the existing `vdraw` line to print vertex uniform block **slots 0-3** with each one's first four rows, not the largest block. The first attempt picked the largest (slot 6, 43,456 bytes) and it read all zeros -- a data block, not constants (`14faaeaa`). NVN's `c0` is where a title's per-draw constants live, and an MVP matrix is recognisable at a glance: a `1` in the last row's diagonal, a plausible translation, a finite depth range.
+
+- **a sane matrix** in one of those slots -> the transform is fine and the next question is the vertex *stream* (whether the position attribute the shader reads is the one bound);
+- **garbage or another slot's data** -> uniform binding is the bug, and every model collapses to a point, which is exactly a pass that rasterises nothing and logs nothing.
+
+**Run recipe** (all data on the external volume):
+
+```
+cd nxnative/dm/host
+make GAME=0400C3F00006E000 -j8 dmhost
+W=/Volumes/Data/Dev/nxhost/.gamedump/MarioKartWorld
+DM_WINDOW=1 DM_MEM_CAP_GB=48 DM_MSL_DIR=$W/root/build/cache/metal_shader_cache \
+DM_ROMFS="/Volumes/Data/Switch/Mario Kart World/917504/romfs" DM_SAVE=$W/save DM_TEMP=$W/tmp \
+DM_CTL=$W/ctl.txt ./dmhost $W/patched > $W/logs/run.log 2>&1
+```
+
+Diagnostics worth knowing: `DM_VDRAW_LOG=1` (per-pass depth/mask/viewport/scissor + vertex UBO), `DM_VSTORE_LOG=1` (store verdicts), `DM_NVN_PASSDUMP=every:<n>` (attachments and binds by serial), `DM_NVN_GPUPROF=every:<n>` (per-pass timing table), `DM_NVN_ALLOCPROF=1` (residency census), `DM_CTL` commands `shot`, `texraw`, `texdump`, `passdump`, `dump`.
+
+### Traps this hunt already paid for (do not re-chase)
+
+- **`Attribute offset 0x5C is not valid`** -- benign: no guest draw binds that offset, and it lies past every vertex stride. `tools/shader_notes.py` lists the keys behind any translator note without a retranslation.
+- **`N` in `nvn_fmt_mtl.c`** is a *texture* verdict; `vfmt()` is the vertex table and covers both leftovers (`0x22` -> `Float3`, `0x69` -> `Int1010102Normalized`, now CPU-unpacked).
+- **Metal has no usable sparse placement here**: `MTLHeapTypeSparse` places nothing, `MTLHeapTypePlacement` places densely. The 8K arrays stay dense; their footprint is understood, not fixable by API.
+- **`DM_NVN_GPUPROF=1` profiles frame 1**, which has five colour-only passes and no world: use `every:<n>`.
+- **Texture serials are per run** -- a `texraw` must be issued in the process that printed the serial, and the passdump and the texraw must share one host.
+- **The two probes print different enums**: passdump gives Metal formats, `vdraw` NVN ones. Join on pass number (63 == 92, 41 == 30, 41 == 115).
+- **One dark capture proves nothing**: the attract loop is always fading; take two and compare.
+- **`dmhost` is one binary per game**: check the `build: … profile` line before diagnosing a crash; a mismatch dies at `SetHeapSize`.
+- **Any edit to `dmsh_build.py` bumps the chain** and orphans the shader cache; after such an edit run `dmsh_chain.py --header` and retranslate (which needs the game's carriers: `shader_split.py` with `DM_GAME` and the repo venv).
+
+### Housekeeping left
+
+- `~/dm-work/build/cache/metal_shader_cache/cas` (4.2 GB) still on the internal disk -- owned by the other repo's build tooling, not this run.
+- The user's `front_mac.m` and `pad_apple.h` edits are uncommitted and untouched by this work.
