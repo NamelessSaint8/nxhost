@@ -9924,8 +9924,9 @@ static uint32_t draw_color_writes(NvProg *pr) {
 static void draw_(const p_draw *dw, const p_draw_idx *di);
 static void draw(const p_draw *dw, const p_draw_idx *di) { cp_stamp start = cp_begin(); draw_(dw, di); cp_end(5, start); }
 // Diagnostic DM_VDRAW_LOG=1: for the first draw of each pass that has a depth attachment, the state that can leave a world pass's colour target black -- the depth compare and
-// write enable, the colour write mask, the viewport and scissor against the target's size. Mario Kart World's world pass records 586 draws, runs against Depth32FloatS8 and
-// stores an all-zero 2048x1152 target (texraw), so one of these three is refusing or masking every fragment.
+// write enable, the colour write mask, the viewport and scissor against the target's size. Mario Kart World's world pass records 586 draws and runs against Depth32FloatS8. The
+// state below all checks out (full mask, full viewport, plausible depth state) and yet the picture behind the title stays black. The target is not literally all zeros -- a texraw
+// of it holds 2.7% non-black pixels in a few compact blobs -- so "the pass writes nothing" is the wrong reading and this probe is looking for where the fragments go.
 static void vdraw_log(int pass) {
     static int on = -1; if (on < 0) { const char *e = getenv("DM_VDRAW_LOG"); on = e && atoi(e); }
     static int last = -1; if (!on || !R.rt.depth || !R.rt.color[0] || pass == last) return;
@@ -9936,18 +9937,30 @@ static void vdraw_log(int pass) {
          S.ds.dt, S.ds.dw, S.ds.df, S.ds.st, S.chmask,
          S.vp[0][0], S.vp[0][1], S.vp[0][2], S.vp[0][3],
          R.has_sc ? "on" : "off", R.sc.x, R.sc.y, R.sc.w, R.sc.h);
-    // The vertex stage's uniform blocks 0-3, each with its first four rows: NVN's c0 is where a title's per-draw constants live, and a model-view-projection matrix is
-    // recognisable at a glance (a 1 in the last row's diagonal, a plausible translation, a finite depth range). The previous probe picked the largest block, slot 6, and read all
-    // zeros -- a data block, not constants. Nothing else in the host is left to explain a pass that draws 586 times into a target that stays empty.
-    for (int k = 0; k < 4; k++) { const p_bind_buf *u = &S.ubo[0][k];
+    // The vertex stage's uniform blocks 0-15, summarised over the WHOLE block rather than its first four rows: the earlier form printed 64 bytes of a 768-byte binding and so
+    // could only ever report "row 0 is zeros". NVN's c0 is where a title's per-draw constants live and a model-view-projection matrix is recognisable at a glance (a 1 on the last
+    // row's diagonal, a plausible translation, a finite depth range), so this counts the floats that look like real numbers instead of integer bit patterns and prints the first
+    // row holding them. That separates "the matrix is at a later row" from "the block really is empty" -- the two readings a first-four-rows print cannot tell apart.
+    for (int k = 0; k < 16; k++) { const p_bind_buf *u = &S.ubo[0][k];
       if (!u->addr) continue;
-      uint64_t want = u->size < 64 ? u->size : 64;
       void *mb; uint64_t mo;
-      int ok = mtl_addr(u->addr, want, &mb, &mo);
-      if (ok) { const float *q = (const float *)((const uint8_t *)mb + mo); int n = (int)(want / 4); char f[512]; size_t o = 0;
-        for (int i = 0; i < n && i < 16 && o < sizeof f - 32; i++) { if (i % 4 == 0 && i) o += (size_t)snprintf(f + o, sizeof f - o, " |"); o += (size_t)snprintf(f + o, sizeof f - o, " %.4g", q[i]); }
-        MLOG("vdraw:   vubo slot %d addr %#llx size %llu%s%s", k, (unsigned long long)u->addr, (unsigned long long)u->size, n < 16 ? " (truncated)" : ":", f); }
-      else MLOG("vdraw:   vubo slot %d addr %#llx size %llu (not mapped)", k, (unsigned long long)u->addr, (unsigned long long)u->size); }
+      if (!mtl_addr(u->addr, u->size, &mb, &mo)) { MLOG("vdraw:   vubo slot %d addr %#llx size %llu (not mapped)", k, (unsigned long long)u->addr, (unsigned long long)u->size); continue; }
+      const float *q = (const float *)((const uint8_t *)mb + mo); int n = (int)(u->size / 4);
+      int nz = 0, sane = 0, first = -1;
+      for (int i = 0; i < n; i++) { float v = q[i];
+        if (v != 0.0f) nz++;
+        if (v != v || v > 1e-30f || v < -1e-30f) { sane++; if (first < 0) first = i; } }   // a real number, not an integer read as a float
+      char f[512]; size_t o = 0;
+      if (first >= 0) { int r = first & ~3; for (int i = r; i < r + 4 && i < n && o < sizeof f - 32; i++) o += (size_t)snprintf(f + o, sizeof f - o, " %.6g", q[i]); }
+      MLOG("vdraw:   vubo slot %d addr %#llx size %llu rows %d: nonzero %d, real-number floats %d, first real row %d:%s", k, (unsigned long long)u->addr, (unsigned long long)u->size,
+           n / 4, nz, sane, first < 0 ? -1 : first / 4, f);
+      // A block with a dozen or more real-number floats is the shape a 4x4 transform plus a few scalars makes, so print every row of it rather than a count: that is what tells a
+      // matrix apart from 4-byte integer noise. Gated by DM_VDRAW_ROWS so an ordinary run stays one line per slot.
+      static int rows = -1; if (rows < 0) { const char *e = getenv("DM_VDRAW_ROWS"); rows = e && atoi(e); }
+      if (rows && sane >= 12) { for (int r = 0; r < n / 4; r++) { char g[512]; size_t p = 0; int any = 0;
+          for (int i = r * 4; i < r * 4 + 4; i++) { float v = q[i]; if (v != 0.0f) any = 1;
+            p += (size_t)snprintf(g + p, sizeof g - p, " %.6g", v); }
+          if (any) MLOG("vdraw:     row %d:%s", r, g); } } }
 }
 static void draw_(const p_draw *dw, const p_draw_idx *di) {
     vdraw_log((int)g_stat_pass);

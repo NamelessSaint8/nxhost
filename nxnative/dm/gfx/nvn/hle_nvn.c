@@ -1076,7 +1076,7 @@ NVN(nvnCommandBufferBindUniformBuffer, void, NVNcommandBuffer *c, NVNshaderStage
     // DM_NVN_UBO_LOG=1: the guest's own uniform-buffer binds, as the replay receives them. A world pass whose vdraw slots 0-3 read zero has either never been told to bind
     // anything or been told the wrong address, and this is the only place that distinction is visible: the replay only stores what this records.
     { static int on = -1; if (on < 0) { const char *e = getenv("DM_NVN_UBO_LOG"); on = e ? atoi(e) : 0; }
-      if (on) { static int nseen; if (nseen++ < 400) LOG("ubo bind: st %d slot %d addr %#llx size %zu", st, i, (unsigned long long)a, n); } }
+      if (on) { static int nseen; if (nseen++ < (on > 1 ? on : 400)) LOG("ubo bind: st %d slot %d addr %#llx size %zu", st, i, (unsigned long long)a, n); } }
     if ((unsigned)st < 6 && (unsigned)i < 16 && n <= UINT32_MAX) {
         *REC(c, OP_BIND_UBO_SMALL, p_bind_ubo_small) = (p_bind_ubo_small){(uint16_t)st, (uint16_t)i, (uint32_t)n, a}; return;
     }
