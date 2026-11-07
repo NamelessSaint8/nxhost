@@ -710,3 +710,17 @@ That leaves the draws' own geometry: if the vertex stage's transforms come from 
 vertex of every model at one point -- the pass rasterises nothing, stores zeros and logs nothing. The next probe is therefore on the vertex side of one world draw: the clip-space
 position the vertex shader produces for its first vertex, beside the transform it should have used. `DM_NVN_UBP`-style buffer dumps or a `peek` of the constant buffer at the draw's
 uniform slot would give that without a rebuild.
+
+### The vertex uniform block, first attempt
+
+The probe now prints the largest vertex-stage uniform block with its first sixteen floats. The world pass answers:
+
+```
+vdraw:   vubo slot 6 addr 0x8882033a00 size 43456: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+```
+
+43,456 bytes and the first 64 bytes zero. That is probably **not** the transform: the biggest block is a data block, and a 43 KB slot starting with zeros is what a resident buffer
+looks like rather than a constant block. So this answers nothing yet -- the probe picks the largest slot, and it should name slots 0-3 (NVN's `c0` is where a title's per-draw constants
+live) and print each one's first four rows, which is how a model-view-projection matrix reads.
+
+Recorded so the next run does not repeat "biggest block" as if it were the transform.
