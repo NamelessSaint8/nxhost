@@ -781,16 +781,30 @@ Two things this leaves standing, and one it clears:
 - **standing:** the 768-byte slot 0 is the right size for a constant block (768 B = 192 floats = 48 vec4 rows, far more than an MVP needs), so that address is the one worth reading;
 - **standing:** the draw-time zeros still have to be explained -- they are now an unread block rather than a misread one.
 
+### The cap raise answered the binding question: the binding is correct
+
+`DM_NVN_UBO_LOG` now takes its cap from the switch's own value (`1` keeps the 400-line sample, a larger number is the cap), so `DM_NVN_UBO_LOG=1000000` logs the whole run: **665,747 binds**.
+
+With the cap gone, the draw's address **is in the log, in the same file**. Pass 1323's `vdraw` line reads `vubo slot 0 addr 0x87af197700 size 768`, and the same log carries `ubo bind: st 0 slot 0 addr 0x87af197700 size 768` **109 times**. Addresses are per-run, but these two lines come from one run, so the match is exact: the replay holds precisely what the guest bound. **The binding is not the bug.** The earlier "garbage branch" reading was an artefact of the 400-line cap, and raising it settles the question the cap was blocking.
+
+Three further facts came out of the wider probe:
+
+- **The vertex stage binds slots 0-13, not 0-3.** Slot 0 is bound 13,161 times; the *hottest* bindings are **slot 4 at 256 B (82,471 binds)** and **slot 12 at 384 B (80,577)**. The original probe read only slots 0-3, so it never looked at the busiest two.
+- **Slot 0 is not a matrix and not zeros.** For the world pass's first draw it is 48 rows with 121 real-number floats, and the pattern **repeats every 10 rows** -- row 1's third field differs between copies (`-4.16e+34`, `5.92e+20`, `-1.55e+26`), so it is an array of per-object records, not a transform. The "all zeros" in the earlier four-row print was a 64-byte window into that array.
+- **Most slots are zero for that draw**, including slot 4 -- the most-bound slot in the whole run. Slots 2, 3, 5, 7, 9 and 13 all alias one 256-byte address (`0x8915cc7000`), a shared zero bank.
+
+### The colour target is not all zeros either
+
+Measured on the saved `world.raw` rather than assumed: 2048x1152, one slice, **2.70 % of sampled pixels nonzero, peak channel 255**, and the non-black pixels form compact blobs in the upper-left and upper-centre rather than noise. `z0.raw` is 7.56 %. So "dumps all zeros" -- repeated in this doc and in the `vdraw` source comment -- is wrong. What the target holds reads as overlay/UI rather than world geometry, but "empty" is no longer a supportable description and should not be quoted as one.
+
 ### Pick up here
 
-**The next fact is the content of the 768-byte block the draw actually holds**, not a wider bind census. The bind log did its job: it separated "never bound" from "bound somewhere unexpected" and answered *bound somewhere unexpected*. The question is whether `0x8448d97700` (768 B, the common case) or `0x88d5197700` (the pass-1322 case) contains a matrix.
+Two questions are now open and both are cheap to close:
 
-Two ways to read it, either enough:
+1. **Did any geometry reach the rasteriser?** The world pass has a depth attachment. Reading the depth target beside the colour target separates "nothing rasterised" (transform/uniform problem) from "rasterised but colour masked" (write-mask/blend problem). The `vdraw` line names the depth as `2048x1152 fmt 53`; `DM_CTL`'s `texraw <serial> <path>` dumps it the same way it dumped the colour target. This is the sharper of the two and needs no rebuild.
+2. **What is in the block, byte for byte?** `DM_NVN_CBDUMP=<dir>` writes whole uniform blocks per draw (`F<frame>_p<pass>_st<stage>_cb<slot>_<address>.bin`). It needs **two** variables, not one: the CBDUMP block sits inside `if (bl)`, and `bl` requires `passdump()`, so the run needs `DM_NVN_PASSDUMP=<frame>` as well as `DM_NVN_CBDUMP=<dir>` (and `DM_NVN_CBDUMP_KEY` to narrow to the world's vertex shader).
 
-1. **Raise the cap and re-run.** The 400-line limit in `nvnCommandBufferBindUniformBuffer` is a sample, not a design constraint; raising it to the whole run and grepping for the draw's address would show the bind that set it. Cheap, one rebuild, no shader work.
-2. **Read the block at the draw.** `DM_NVN_CBDUMP=<dir>` already saves whole uniform blocks to disk per draw (`F<frame>_p<pass>_st<stage>_cb<slot>_<address>.bin`), gated on the shader key by `DM_NVN_CBDUMP_KEY`. Point it at the world pass's vertex shader and read the file: a sane MVP shows a `1` on the diagonal and a plausible translation; zeros mean the bind carried an empty buffer.
-
-Option 2 needs no code change, but **two** variables, not one: the CBDUMP block sits inside `if (bl)`, and `bl` requires `passdump()`, so the run needs `DM_NVN_PASSDUMP=<frame>` as well as `DM_NVN_CBDUMP=<dir>` (and `DM_NVN_CBDUMP_KEY` to narrow it to the world's vertex shader). Option 1 needs the 400-line cap raised in `hle_nvn.c`.
+The `vdraw` probe itself now summarises **all 16 slots over the whole block** and, with `DM_VDRAW_ROWS=1`, prints every nonzero row of any block holding a dozen or more real-number floats -- so the next run does not need to guess which slot to look at.
 
 **Run recipe** (all data on the external volume):
 
