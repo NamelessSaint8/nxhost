@@ -838,6 +838,8 @@ Two probe-joining traps this run exposed: the pass dump's `D` line and the `vdra
 
 ### Pick up here
 
+> **Correction, made after this section was written: the uniform *contents* below are an instrument artefact, not a finding.** The `B` line's `f=` and the slot summary printed the `MTLBuffer` object instead of its bytes; with that fixed, the same bindings hold ordinary floats -- `c14` a unit basis plus a world-space translation, `c15` a scale. See *The slot read was reading the MTLBuffer object, not the buffer*. **Everything below about which slots a shader binds, and about `reg = c - 3`, still holds. Every sentence about what a block holds as "integer bit patterns" does not.**
+
 **The world's two vertex shaders read different slots, and the offset of 3 is correct ABI.** The prepass shader `5b120bbfcd3f2fef_b` (`.../metal_shader_cache/cas/shader/<hash>/mac/<key>.json`, key `bindings`) declares four constant-buffer bindings at argument ids 0-3:
 
 | binding | arg id | NVN slot |
@@ -897,6 +899,8 @@ Diagnostics worth knowing: `DM_VDRAW_LOG=1` (per-pass depth/mask/viewport/scisso
 
 ### The slot 0-3 read, done per draw: there is no transform there
 
+> **Superseded.** The readings below were produced by a pointer bug in the instrument, not by the game -- see *The slot read was reading the MTLBuffer object, not the buffer* further down. The blocks hold ordinary floats, including a unit basis and a world-space translation. Kept as instrument history, not as a finding.
+
 The `vdraw` pass line samples **one draw per pass**, and stage 0 binds slot 0 at hundreds of distinct addresses in a run, so one sample cannot say what a later draw reads. `DM_VDRAW_DRAWS=n` in `nvn_mtl.m` closes that: `vdraw_draw_watch()` reads the vertex stage's slots 0-3 at **every** draw of a pass that has depth and colour, skipping a slot whose binding is unchanged, and prints each binding's first 16 words in hex plus its row 8. A 45 s run with `DM_VDRAW_DRAWS=400` printed **400 bindings over 159 distinct addresses** before the cap stopped it (`vdraw: DM_VDRAW_DRAWS cap reached, later bindings not shown`).
 
 **No 4x4 transform in any of them.** Decoding each record's hex words as little-endian floats and testing every 1-float offset for an orthonormal 3x3 -- unit-length, mutually perpendicular rows, a test that survives the zeros a matrix contains and does not depend on the row grid -- finds **0 hits in 400**. A matrix would show a row of three unit-length, perpendicular vectors; nothing does.
@@ -926,6 +930,31 @@ const device _31* vp_s0 [[id(7)]]; const device _31* vp_s1 [[id(8)]];
 With `slot = c - 3`, that is **c4 -> slot 1, c9 -> 6, c14 -> 11, c15 -> 12**, plus two storage buffers. Its fixed matrix reads are `_m0[1..4]` of `c14` (slot 11) and `_m0[1]` of `c15` (slot 12); `c4`'s reads are dynamic row indices (`_m0[int(_76)][_78]`), a per-instance row array. **Slot 0 is read by none of the seven.** The earlier "the colour pass's shader reads slot 0 as `vp_c3`" was about `076e487a86fc4eab_b`, which is a neighbouring shader and not in this pass's key list at all -- so its slot 0 is not the colour pass's matrix, and its 256-byte block is not either.
 
 **Two limits on the instrument, both cheap to close.** It prints only 16 words -- 64 bytes, 4 rows -- per binding, so the shader's `c14` row 4 at bytes 64-79 falls just outside the window; widening the word count to the block's size would cover it. And the 400-binding cap leaves the sample at 159 addresses, not the several hundred stage 0 binds in one run; the binary is now built, so a larger cap costs only a run.
+
+### The slot read was reading the MTLBuffer object, not the buffer --- read this before the two sections above
+
+**The reading above is wrong, and the bug is in the instrument, not in the game.** `mtl_addr()` returns the `id<MTLBuffer>` in its `buf` out-parameter, and every caller that wants bytes goes through `[(__bridge id<MTLBuffer>)mb contents]` before adding the offset. Three diagnostic sites did not: the `B` line's `f=` fallback, the `vdraw` slot summary, and this section's per-draw watch all did `memcpy(dst, (const uint8_t *)mb + off, n)`. That reads the **buffer object's own memory** at that offset -- isa pointer, retain counts, inline flags -- which is exactly why every block "held 8-byte-stride integer records" with small integers where floats should be, and why the numbers looked like `2.3e-41`, `5.4e-43`, `1.7e-43`: those are `122`, `4` and `123` read as floats, from the object's fields.
+
+**The falsifying measurement.** `DM_NVN_CBDUMP` writes a binding's bytes with `fwrite((const void *)u->addr, ...)` -- a raw read of the guest address, through no cache and no shadow -- and names the file after the same pass number the `B` line prints. For 50a275e9d32af1c7_b at pass 6386 (`shd=0`, so the shader is given guest memory):
+
+| reg | `B` line `f=` (before the fix) | guest memory at the same address |
+|---|---|---|
+| 1 | `0, 0, 0, 0` | `-0.934952, 0, 0.354773, 304.267` |
+| 6 | `2.57e-11, 1.67e-43, 2.35e-11, 1.67e-43` | `0, 0, 0, 1` |
+| 11 (`c14`) | `3.77e+27, 6.8e+25, 1.8e+25, 201.4` | `2246.04, 308.34, 5061.48, 0` |
+| 12 (`c15`) | `0, 0, 0, 0` | `1, 0, 0, 0.561` |
+
+Every one disagrees. `pool_find` was checked and returned the correct pool with `contents + (addr - base) == addr` (`exact=1`), and `pc_get` agreed with it, so the lookup was never the fault -- only the final dereference.
+
+**After the fix the uniforms are ordinary float transforms.** `c14` (slot 11) is a basis with a translation, read straight out of the guest's own memory: rows 1 and 2 are `(0.49531, 0.59787, -0.63026)` and `(-0.78626, 0, -0.6179)` -- each unit length to three digits and perpendicular to 1e-4 -- row 0 carries `(-2357.1, 246.88, 4885.1)`, and `c15` (slot 12) is `(1, 0, 0, 0.561)` over `(0.34907, 0.4, 0, 0)`, a scale. Over 952 draws of the world pass, the corrected watch finds a unit, perpendicular row pair at word 4 of `c14` in **952 of 952**, an orthonormal 3x3 at word 0 of `c4` (slot 1) in **952 of 952**, and a basis at word 9 of the 43,456-byte slot 6 in 476.
+
+**So the vertex uniforms are not the fault, and the two sections above must be read as instrument history.** "No 4x4 transform in slots 0-3", "the blocks are 8-byte-stride integer records", "row 0 reads integer bit patterns", and the two cross-checks that agreed with them were all computed from the same wrong pointer: `vdraw_slots.py` read rows the summary had printed, and the flat-stream scan read the same rows, so agreement between them proved only that one bug fed both. The `dm-shape` conclusion stands only as a description of an MTLBuffer object's fields.
+
+**What the corrected read says about slot 0** (the `support_buffer` and the `vp_c3` neighbouring shader): a 384-byte block whose row 0 is `0.0078125, 128, 0.0078125, 1` -- reciprocals and a resolution, a viewport, not a record table. The 64 KB `st0 reg0` binding that the write watch reported is the same kind of block.
+
+**The three fixes** are at `nvn_mtl.m` 7498 (the `B` line), 10015 (`vdraw_read_gpu`) and 10093 (the slot summary), all now `[(__bridge id<MTLBuffer>)mb contents]`. `nxnative/dm/tools/vdraw_blocks.py` decodes a per-draw log and judges a block by three tests -- all-zero, an affine 4x4 at the shader's read window, and a unit/perpendicular row pair -- with `--target 2048x1152` to keep a key's shadow pass (128x128) out of the world pass's rows.
+
+**The next question is no longer "are the uniforms right".** They are: a unit basis and a plausible world-space translation reach the vertex shader on the colour pass. Whatever empties the world target is downstream of that.
 
 ### Traps this hunt already paid for (do not re-chase)
 
