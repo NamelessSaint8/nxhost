@@ -956,6 +956,18 @@ Every one disagrees. `pool_find` was checked and returned the correct pool with 
 
 **The next question is no longer "are the uniforms right".** They are: a unit basis and a plausible world-space translation reach the vertex shader on the colour pass. Whatever empties the world target is downstream of that.
 
+### The screen has a sky; the pass called "the world" still writes an empty, unregistered target
+
+**A clean run -- every probe off -- shows a scene.** 2026-11-07, `DM_WINDOW=1`, no `DM_VDRAW_*`, no `DM_VATTR_VALS`: `nxnative/dm/tools/pngstat.py` measures `shots/clean1.png` at **27.6 % lit pixels over 1,647 coarse colours**, with the coarse histogram topped by `#006688`, `#005588` and `#004477` (sky) over `#aa6644`, `#999944` and `#aa9955` (ground and karts). So the sky and the coloured particles are not an artefact of instrumentation: the same frame appears when nothing is switched on.
+
+**Two things the same runs measure.** The content occupies only the **top-left 53 %** of the 3840x2160 window -- 2048/3840 and 1152/2160 -- so the present path is placing the 2048x1152 image 1:1 instead of scaling it; the rest of the window is black, which is why a single eyeball can read "black screen" from a frame that has a picture in it. And a `texdump` frame contains a 2048x1152 colour target at **94.1 % lit with no black grid cell**, whose serial appears in **no** `vdraw` line at all.
+
+**The world pass's own target is still empty, and is not even a host texture.** Reading the serial the pass line prints (`target 2048x1152 fmt 63 ser N`) with `texraw` answers `[texraw] ser=N: no host texture`; reading its depth serial (`fmt 260` = Depth32FloatS8) gives 37 MB of zeros at the documented `y*bpr + x*4` layout. A greedy `sed` over the pass line takes the *depth* serial, which is how the first attempt at this measured the depth target and reported "all zeros" for the colour -- pick the first `ser` field explicitly.
+
+**So the frame's picture does not come from the pass the log calls the world.** A `vdraw` line is printed only for passes that have both depth and colour, so a pass with no depth attachment is invisible to it -- and the target that holds the scene is exactly such a target, unnamed by any line. Naming which pass writes it is the next probe: log the colour target for *every* pass, not only the depth-bearing ones, then follow that target's consumer.
+
+**What the vertex stage is fed, for the record** (`DM_VATTR_VALS=6`): the prepass submits **8,340 indexed vertices** with attribute 0 at offset 0, stride 40, format 34, reading floats (`-0.301, 0.423, -0.044` at vertex 0), and binds `c5` at slot 2 as **2,688 bytes** -- 42 rows, enough for the `(w * 48) >> 4` row index its MSL computes as long as `w` stays under 56. The colour-pass program `50a275e9d32af1c7_b` binds 16 attributes over one stream of stride 8, with slot blocks 192 B at 11 and 12, 2,432 B at 1 and 43,456 B at 6.
+
 ### Traps this hunt already paid for (do not re-chase)
 
 - **`Attribute offset 0x5C is not valid`** -- benign: no guest draw binds that offset, and it lies past every vertex stride. `tools/shader_notes.py` lists the keys behind any translator note without a retranslation.
