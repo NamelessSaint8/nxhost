@@ -1087,6 +1087,33 @@ SamplerType type = ConvertSamplerType(dim);
 
 **What that leaves is the mismatch itself, and it points the other way from the earlier reading.** `d92d9b75e2cc7dad_b` declares slot 0 as 2D because the shader's own instruction says so; the game binds a 3D texture there (NVN target 2, Metal type 7, format 0x49). So the shader is *not* asking for a 3D read — the earlier "both programs really sample a 3D texture" was an inference from the bound descriptor, and the instruction contradicts it. The host's `tex_fit` already bridges "wants 3D, holds 2D" and "wants 2D, holds cube", but has no case for "wants 2D, holds 3D", so it falls through to `tex_mis_note(..., "bound as is")` and binds a 3D texture to a 2D sampler. The next question is whether the dimension field is being read correctly for these shaders (`x.Bits(61, 64)` against NAK's `sm70_encode.rs`), and whether the host should make a 2D view of the 3D texture — that is the shape the run's 20 mismatches take.
 
+### The dimension field was right, no view exists, and the slot now reads zero
+
+**The field, checked against NAK, is correct.** `sm70_encode.rs`'s `set_tex_dim` asserts `range.len() == 3` and is called with `61..64`, which Rust treats as bits 61-63. Ryujinx's `x.Bits(61, 64)` delegates to `Field(lo, hi)`, documented `// Bits [lo, hi)` and computed as `hi - lo`, so it reads the same three bits — and bit 64 is `Rc`'s start (`Rc => Bits(64, 72)`), so nothing bleeds into `dst2`. The value maps are identical entry for entry (`0 _1D, 4 Array1D, 1 _2D, 5 Array2D, 2 _3D, 3 Cube, 7 ArrayCube`). The game's own bytes settle the value: `ps_shader.bin` records 295 (`d92d9b75e2cc7dad`) and 328 (`39b8dddb6ebad571`) carry **every** texture instruction at `dim = 1`, which is 2D, so the emitted `texture2d` is right and the answer-table rows were the wrong instrument.
+
+**No view exists from a 3D texture.** `newTextureViewWithPixelFormat` refuses all of them, measured one process per case because each abort kills the process:
+
+| base → view | result |
+|---|---|
+| 3D → 2D | abort: `source texture textureType (MTLTextureType3D) not compatible with texture view textureType (MTLTextureType2D)` |
+| 3D → 2DArray | abort |
+| 3D → Cube | abort |
+| 3D → 3D | works only with `slices:1` |
+
+So "wants 2D, holds 3D" cannot be bridged by a view at all. The host's own Vulkan layer (`dm/gfx/vk/hle_vk.m`) maps `VK_IMAGE_VIEW_TYPE_2D` onto the same call and hits the same wall; a real Vulkan driver (Adreno) does allow 2D views of 3D images, so this is a Metal limit, not a Vulkan one.
+
+**So the slot reads zero.** `tex_fit` now returns `dummy_tex(MTLTextureType2D, NVN_DPF_FLOAT)` for that case, the same fallback the reverse case uses, and logs once (`319f5739`):
+
+```
+2D binding fallback: texture ID 337 is a 3D volume 64x64x64 (Metal format 140); zero 2D texture bound
+```
+
+First real run: that line appears **once**, and `[RED] texture type mismatch` is **0**, where the earlier run had `d92d9b75e2cc7dad_b` declaring slot 0 as 2D against texture 337. The unit test asserts the dummy's type, its resource ID, and that a `texture2d` read of it is zero (68 checks). The cost is the volume's data for that slot; the alternative, a per-frame blit of depth plane 0, would keep it at the price of a copy and view-cache invalidation.
+
+**The picture at the reference frame is unchanged, and that is expected.** The 27.6 % / 1,623-colour frame is captured around frame 170, *before* the bind (first seen at frame ~1116 in a fast run), so the fix cannot show there. The same-scene A/B is still open: the attract loop's frame rate follows window focus (~4 fps unfocused, ~21 fps focused), so wall-clock shots land on different scenes — a 150 s run with the fix reached frame 3,022 and one without reached 858, and neither pair was the same scene. That comparison needs an event-triggered or driven run, not a clock.
+
+**The sound was the app, not the host.** A Metal test binary opens no audio device; the noise stopped when the app hosting the session was restarted, and no `dmhost` was running at the time.
+
 ### Traps this hunt already paid for (do not re-chase)
 
 - **`Attribute offset 0x5C is not valid`** -- benign: no guest draw binds that offset, and it lies past every vertex stride. `tools/shader_notes.py` lists the keys behind any translator note without a retranslation.
