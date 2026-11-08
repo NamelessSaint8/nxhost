@@ -1027,11 +1027,21 @@ static void vdraw_passshot(id e) {
         if (want_frame == -2) { const char *s = getenv("DM_VDRAW_SHOT_FRAME"); want_frame = s ? atol(s) : -1; }
         if (want_frame >= 0 && (long)atomic_load(&g_cur_frame) < want_frame) return;
     }
-    static long want_w = -1, want_h = -1;
-    if (want_w < 0) { want_w = 2048; want_h = 1152; const char *s = getenv("DM_VDRAW_SHOT_WH");
-        if (s && sscanf(s, "%ldx%ld", &want_w, &want_h) != 2) { want_w = 2048; want_h = 1152; } }
+    // DM_VDRAW_SHOT_WH=<w>x<h>[,<w>x<h>...] or "any": which target sizes to dump. One size is not enough -- a program that
+    // draws into a 640x360 buffer was invisible to a 2048x1152-only dump and read as "empty" in the inventory.
+    static struct { long w, h; } want[8]; static int nwant = -1, any_size;
+    if (nwant < 0) {
+        nwant = 0; const char *s = getenv("DM_VDRAW_SHOT_WH");
+        if (s && !strcmp(s, "any")) any_size = 1;
+        else if (s && *s) { for (const char *q = s; *q && nwant < 8; ) { long a = 0, b = 0;
+            if (sscanf(q, "%ldx%ld", &a, &b) == 2) { want[nwant].w = a; want[nwant].h = b; nwant++; }
+            q = strchr(q, ','); if (!q) break; q++; } }
+        if (!nwant && !any_size) { want[nwant].w = 2048; want[nwant].h = 1152; nwant = 1; }
+    }
     NSUInteger w = t.width, h = t.height;
-    if ((long)w != want_w || (long)h != want_h) return;
+    if (!any_size) { int hit = 0;
+        for (int i = 0; i < nwant; i++) if ((long)w == want[i].w && (long)h == want[i].h) { hit = 1; break; }
+        if (!hit) return; }
     if (t.storageMode == MTLStorageModeMemoryless || t.pixelFormat == MTLPixelFormatInvalid) {
         MLOG("[passshot] pass %llu %lux%lu fmt %lu storage %lu: not readable", (unsigned long long)pass, (unsigned long)w,
              (unsigned long)h, (unsigned long)t.pixelFormat, (unsigned long)t.storageMode);
