@@ -6,11 +6,14 @@
 # entry, and both programs then really sample a 3D texture. The host's own bind check reports it
 # ("declares slot 0 as Metal type 2, texture ID is type 7 (NVN target 2 ...); bound as is"), and a 3D
 # texture read through a texture2d is an undefined read, not a view Metal can make.
-# STATUS 2026-11-07: these two rows are NOT yet taking effect. With them present the build clears the
-# "not in the answer table" note for both keys (10848 -> 10846), so the row does reach the job, but the
-# generated MSL still declares texture2d and the host still reports one mismatch for d92d9b75e2cc7dad_b.
-# Slot 1 is the number the translator itself prints ("texture handle A (constant buffer -1, slot 1)");
-# slot 0 was tried first and did not work either. Next: compare the job JSON dmsh_build writes with what
-# Program.cs Get("tex", slot) expects, and confirm dmsh_xlate reads that same job.
-39b8dddb6ebad571	{"tex":{"1":"3d"}}
-d92d9b75e2cc7dad	{"tex":{"1":"3d"}}
+# STATUS 2026-11-07: these rows are NOT live. What is established:
+#  - the row reaches the build: the "not in the answer table" note clears (10,848 -> 10,846);
+#  - translation really re-runs with it: a fresh DMSH_CAS and just these two keys gives
+#    "Metal cache: mac 0 reused, 6 compiled";
+#  - the type still does not change: the .metal declares texture2d, the note "texture handle A ...
+#    using 2D" still fires 470 times, and d92d9b75e2cc7dad_b still mismatches at bind time.
+# Slots 0, 1 and both together were tried. Program.cs reads _job["tex"][slot.ToString()] with the slot
+# derived from the handle byte offset, so the remaining suspect is the job the translator receives.
+# Next: add a job dump to dmsh_build (a source edit, so it bumps the chain) or capture the temp job file.
+39b8dddb6ebad571	{"tex":{"0":"3d","1":"3d"}}
+d92d9b75e2cc7dad	{"tex":{"0":"3d","1":"3d"}}
