@@ -10263,6 +10263,12 @@ static void vattr_vals(const p_draw *dw, const p_draw_idx *di) {
         MLOG("  ubo slot %d size %llu", r, (unsigned long long)S.ubo[0][r].size);
 }
 static void draw_(const p_draw *dw, const p_draw_idx *di) {
+    // Diagnostic DM_VDRAW_SKIP=<shader key prefix>: drop the draws of one vertex program and let the rest of the frame run, so
+    // "does this pass matter to the picture" is answered by two screenshots instead of by reasoning about the pass graph.
+    { static const char *skip; static int init;
+      if (!init) { init = 1; skip = getenv("DM_VDRAW_SKIP"); }
+      if (skip && *skip) { NvProg *pp = S.prog ? prog_get(S.prog) : nil;
+          if (pp && pp->sh[0] && pp->sh[0]->key[0] && !strncmp(pp->sh[0]->key, skip, strlen(skip))) return; } }
     vdraw_log((int)g_stat_pass);
     vattr_vals(dw, di);
     // Diagnostic DM_VATTR_LOG=1: the guest's own vertex attribute table for this draw -- offset, stream and format per attribute, beside the vertex shader's key.
@@ -10719,9 +10725,15 @@ static void dispatch(const p_dispatch *dp) {
             uint32_t a[3] = {0}; vm_size_t g = 0;
             if (dp->ind) vm_read_overwrite(mach_task_self(), (vm_address_t)dp->ind, sizeof a, (vm_address_t)a, &g);
             uint32_t w0[5] = {0}; if (g_watch_lo) memcpy(w0, (const void *)(uintptr_t)g_watch_lo, sizeof w0);   // the record as this dispatch starts
+            uint32_t c3[2] = {0}, s0v[2] = {0};   // the kernel's own inputs: cbuf reg 0 word 0 (.x/.y) and sbuf reg 1 word 0
+            { void *m; uint64_t o; const uint8_t *c;
+              if (S.ubo[5][0].addr && mtl_addr(S.ubo[5][0].addr, sizeof c3, &m, &o) && (c = [(__bridge id<MTLBuffer>)m contents])) memcpy(c3, c + o, sizeof c3);
+              if (S.ssbo[5][1].addr && mtl_addr(S.ssbo[5][1].addr, sizeof s0v, &m, &o) && (c = [(__bridge id<MTLBuffer>)m contents])) memcpy(s0v, c + o, sizeof s0v); }
             MLOG("watch dispatch %s: %s groups %u %u %u threads %u %u %u (ind %#llx reads %u %u %u); record before %u %u %u %d %u",
                  cs->key, dp->ind ? "indirect" : "direct", dp->x, dp->y, dp->z, cs->rf.tg[0], cs->rf.tg[1], cs->rf.tg[2],
                  (unsigned long long)dp->ind, a[0], a[1], a[2], w0[0], w0[1], w0[2], (int)w0[3], w0[4]);
+            MLOG("watch dispatch %s: cbuf reg0 word0 %u (%.6g) %u (%.6g); sbuf reg1 word0 %u (%.6g)", cs->key,
+                 c3[0], (double)*(float *)&c3[0], c3[1], (double)*(float *)&c3[1], s0v[0], (double)*(float *)&s0v[0]);
             {   // and after it: which words of the whole binding changed? A hit here says the kernel writes elsewhere in the block
                 size_t wl = g_watch_len ? g_watch_len : 20; if (wl > 4096) wl = 4096;
                 uint8_t *before = malloc(wl);   // blocks cannot capture arrays: the snapshots go on the heap
