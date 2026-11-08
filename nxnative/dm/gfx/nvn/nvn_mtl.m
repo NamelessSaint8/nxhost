@@ -10212,9 +10212,19 @@ static void vattr_vals(const p_draw *dw, const p_draw_idx *di) {
       for (int i = 0; i < nseen; i++) if (!strcmp(seen[i], k)) return;
       if (nseen >= 64) return;
       strlcpy(seen[nseen++], k, sizeof seen[0]); }
-    MLOG("vattr %s target %ux%u chmask %#x: %d attrs, count %d, %s", k,
+    MLOG("vattr %s target %ux%u chmask %#x: %d attrs, count %d, %s, mdi_cnt %#llx i %d live %d, first %d", k,
          R.rt.color[0] ? R.rt.color[0]->d.width : 0, R.rt.color[0] ? R.rt.color[0]->d.height : 0, S.chmask, S.nattr,
-         dw ? dw->count : di->count, di ? "indexed" : "non-indexed");
+         dw ? dw->count : di->count, di ? "indexed" : "non-indexed",
+         (unsigned long long)(di ? di->mdi_cnt : dw ? dw->mdi_cnt : 0), di ? di->mdi_i : dw ? dw->mdi_i : 0,
+         (uint64_t)(di ? di->mdi_cnt : dw->mdi_cnt) ? mdi_live(di ? di->mdi_cnt : dw->mdi_cnt, di ? di->mdi_i : dw->mdi_i) : -1,
+         dw ? dw->first : 0);
+    if (di && di->mdi_cnt) {   // a multi-draw reads its counts from the argument records: di->count is 0 and says nothing
+        uint64_t rec = di->ind + (uint64_t)di->mdi_i * 20;   // indexCount, instanceCount, firstIndex, baseVertex, baseInstance
+        uint32_t r[5] = {0}; void *m; uint64_t o;
+        if (mtl_addr(rec, sizeof r, &m, &o)) { const uint8_t *c = [(__bridge id<MTLBuffer>)m contents]; if (c) memcpy(r, c + o, sizeof r); }
+        MLOG("  mdi record %#llx: indexCount %u instanceCount %u firstIndex %u baseVertex %d baseInstance %u", (unsigned long long)rec,
+             r[0], r[1], r[2], (int)r[3], r[4]);
+    }
     int isz = di ? (di->itype == 1 ? 2 : di->itype == 2 ? 4 : 0) : 0;
     const uint8_t *ib = NULL;
     if (di && isz) { void *m; uint64_t o; if (mtl_addr(di->ibuf, (uint64_t)n * isz, &m, &o)) { const uint8_t *c = [(__bridge id<MTLBuffer>)m contents]; if (c) ib = c + o; } }
