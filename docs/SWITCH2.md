@@ -1041,6 +1041,16 @@ watch dispatch 3aa955bf42b91d65_b: record after 18 0 0 0 0  (unchanged)     (24 
 
 **What that leaves.** The record's `indexCount` is right and its `instanceCount` is 0, the one dispatch that binds the block does not touch it, and nothing else reports a write to its page. So either the record is filled by a shader the watch never saw write (a different binding, an image store, or a pass that runs before the watch was armed), or nothing fills it at all and the title expects these counts to arrive some other way. The next probe widens the comparison from the 20-byte record to the whole 1,536-byte block across that dispatch, which distinguishes "this kernel writes elsewhere in the block" from "this kernel writes nothing here".
 
+**Widened to the whole block: still nothing. 0 of 1,536 bytes change, in all 24 samples.** The probe now records the binding's size and diffs every 4-byte word of it across the dispatch:
+
+```
+watch dispatch 3aa955bf42b91d65_b: block 1536 bytes across the dispatch: 0 words changed     (24 of 24)
+```
+
+and the kernel's own reflection shows four storage buffers -- reg 1 read-only, regs **2, 4 and 5 read-write** -- so the block at register 2 really is one of its declared outputs. It is bound as an output and nothing in it moves.
+
+**The kernel is doing no work, and its inputs are the next thing to read.** Its MSL stores to `cp_s1._m0[0]` (a counter, guarded by `_71 >= cp_c3._m0[0].x`), atomically adds into `cp_s2`, and writes two entries of `cp_s3` -- and none of those changed, which fits a dispatch that finds nothing to do. Its inputs are `cp_c3._m0[0].x` (a count) and `cp_s0._m0[0]` (a float read as a uint). If those are zero the cull is correct to produce zero, and the chain leads one stage further upstream: whoever was supposed to fill *that* count. Reading those two words at the dispatch is the next measurement.
+
 **What the vertex stage is fed, for the record** (`DM_VATTR_VALS=6`): the prepass submits **8,340 indexed vertices** with attribute 0 at offset 0, stride 40, format 34, reading floats (`-0.301, 0.423, -0.044` at vertex 0), and binds `c5` at slot 2 as **2,688 bytes** -- 42 rows, enough for the `(w * 48) >> 4` row index its MSL computes as long as `w` stays under 56. The colour-pass program `50a275e9d32af1c7_b` binds 16 attributes over one stream of stride 8, with slot blocks 192 B at 11 and 12, 2,432 B at 1 and 43,456 B at 6.
 
 ### Traps this hunt already paid for (do not re-chase)
