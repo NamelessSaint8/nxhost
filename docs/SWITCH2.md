@@ -1018,6 +1018,16 @@ vattr 50a275e9d32af1c7_b target 2048x1152 chmask 0xffffffff: 16 attrs, count 0, 
 
 **Two readings of that, and the at-encode value does not decide between them.** The host reads the record on the CPU when it encodes, so "at encode 0" is what the record held *before* this submission's GPU work -- it cannot show what a cull wrote earlier in the same submission. What the post-completion read adds is that the value is still 0 after the frame finished: either the title's cull produced zero instances (and the real hardware would draw nothing either, which the attract loop visibly disproves), or the cull's write never reaches the record the draw reads. The second is now the leading reading, and the next measurement is whether any dispatch in the frame binds and writes the buffer containing those records.
 
+**A compute shader does bind the record read-write, and no write to it is recorded.** The probe remembers the first record address and reports any storage binding whose range covers it, with `sbw_hits` for a recorded GPU storage write:
+
+```
+watch 0x89a32053c0: bound by st 5 shader 3aa955bf42b91d65_b reg 2 rw addr 0x89a32053c0 size 1536
+watch 0x89a32053c0: bound by st 5 shader fe9a852085e96077_b reg 2 ro addr 0x89a32053c0 size 1536
+mdi record 0x89a32053c0: ... instanceCount 0 ... | sbw_hits 0        (all 24 samples)
+```
+
+So a compute pass is meant to fill these counts, it binds the 1,536-byte record block at register 2 as `rw`, and **`sbw_hits` never reports a write to it**. Two explanations remain and they are separable: the dispatch runs but writes nothing (its own indirect thread count is zero -- a chain), or the write happens without being noted (`sbw_note` skips a slot the shader's `sb_ro` marks read-only, and a write through a different binding or an image store would not be seen). The next probe prints, at that binding, the `sb_ro` bit and the dispatch's thread count.
+
 **What the vertex stage is fed, for the record** (`DM_VATTR_VALS=6`): the prepass submits **8,340 indexed vertices** with attribute 0 at offset 0, stride 40, format 34, reading floats (`-0.301, 0.423, -0.044` at vertex 0), and binds `c5` at slot 2 as **2,688 bytes** -- 42 rows, enough for the `(w * 48) >> 4` row index its MSL computes as long as `w` stays under 56. The colour-pass program `50a275e9d32af1c7_b` binds 16 attributes over one stream of stride 8, with slot blocks 192 B at 11 and 12, 2,432 B at 1 and 43,456 B at 6.
 
 ### Traps this hunt already paid for (do not re-chase)
