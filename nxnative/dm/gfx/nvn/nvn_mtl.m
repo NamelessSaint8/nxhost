@@ -10250,6 +10250,14 @@ static void vattr_vals(const p_draw *dw, const p_draw_idx *di) {
          (unsigned long long)(di ? di->mdi_cnt : dw ? dw->mdi_cnt : 0), di ? di->mdi_i : dw ? dw->mdi_i : 0,
          (uint64_t)(di ? di->mdi_cnt : dw->mdi_cnt) ? mdi_live(di ? di->mdi_cnt : dw->mdi_cnt, di ? di->mdi_i : dw->mdi_i) : -1,
          dw ? dw->first : 0);
+    {   // the textures this draw binds, with their NVN target: a program whose texture type defaulted to 2D is only wrong
+        // if the guest binds something else there (cube, array, 3D), and only the bind knows which.
+        for (int r = 0; r < 16; r++) {
+            uint64_t h = S.tex[0][r]; if (!h) continue;
+            int id = (int)(h >> 20); if (id <= 0 || id >= g_ntreg || !g_treg[id].ok) continue;
+            const tex_t *t = &g_treg[id].t;
+            MLOG("  tex slot %d id %d target %d %ux%u levels %u fmt %#x", r, id, t->d.target, t->d.width, t->d.height,
+                 t->d.levels, t->d.format); } }
     int isz = di ? (di->itype == 1 ? 2 : di->itype == 2 ? 4 : 0) : 0;
     const uint8_t *ib = NULL;
     if (di && isz) { void *m; uint64_t o; if (mtl_addr(di->ibuf, (uint64_t)n * isz, &m, &o)) { const uint8_t *c = [(__bridge id<MTLBuffer>)m contents]; if (c) ib = c + o; } }
