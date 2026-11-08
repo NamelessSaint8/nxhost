@@ -1000,6 +1000,7 @@ static void gp_report(int n, gp_lab *lab, uint64_t frame) {   // the frame's las
 // blitCommandEncoder (use blit_open/enc_b_copy_texture_buffer) and no addCompletedHandler (use g_commit_blocks, which runs in the
 // commit's feedback handler); and the copy has to be encoded after the pass's render encoder is closed.
 static id<MTLTexture> g_passshot_tex; static uint64_t g_passshot_pass;
+static uint64_t g_watch_lo, g_watch_hi;   // a range a probe asked about (the world pass's indirect record): any storage binding covering it reports
 static id<MTL4ComputeCommandEncoder> blit_open(void);   // the host's blit path: an MTL4 command buffer has no blitCommandEncoder
 static inline void enc_b_end(id e);
 static inline void enc_b_copy_texture_buffer(id e, id<MTLTexture> s, NSUInteger sl, NSUInteger lv, MTLOrigin o, MTLSize z,
@@ -7731,6 +7732,12 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             void *mb; uint64_t mo, gpu;
             if (u && u->addr && mtl_gpu_addr(u->addr, u->size ? u->size : 1, &mb, &mo, &gpu)) { slots[aid] = gpu; USE((__bridge id<MTLBuffer>)mb, b->rw ? MTLResourceUsageRead | MTLResourceUsageWrite : MTLResourceUsageRead); if (b->rw && b->kind == NVN_RB_SBUFP && !(reg < 32 && (sh->sb_ro >> reg & 1))) sbw_note(u->addr, sbw_len(u->size, mb, mo), SBW_GPU); }   // cb_extent.tsv: slots the shader never writes
             else { slots[aid] = dummy_buf_gpu(); USE(dummy_buf(), MTLResourceUsageRead); }
+            {   // a nameless watch: does any storage binding, of any stage, cover the range a probe is asking about?
+                static int reps; if (g_watch_lo && reps < 24 && u && u->addr &&
+                    u->addr < g_watch_hi && u->addr + (u->size ? u->size : 1) > g_watch_lo) { reps++;
+                    MLOG("watch %#llx: bound by st %d shader %s reg %d %s addr %#llx size %llu", (unsigned long long)g_watch_lo,
+                         nvn_stage, sh->key[0] ? sh->key : "?", reg, b->rw ? "rw" : "ro",
+                         (unsigned long long)u->addr, (unsigned long long)u->size); } }
             if (bl) PD("B %llu st%d sbufp reg%d %s addr=%#llx size=%llu %s", g_stat_pass, nvn_stage, reg, u && u->addr ? "real" : "dummy", u ? (unsigned long long)u->addr : 0ull, u ? (unsigned long long)u->size : 0ull, b->rw ? "rw" : "ro");
         } else if (b->kind == NVN_RB_SBUFU) {   // B: a storage buffer whose GPU address the game keeps in its own uniform buffer (Monster Hunter Rise's compute shaders: c3 + 0x38); read like a bindless handle
             uint64_t addr; ubo_read(nvn_stage, reg, b->off, 8, &addr);
@@ -10208,6 +10215,15 @@ static void vattr_vals(const p_draw *dw, const p_draw_idx *di) {
     if (n <= 0) return;
     NvProg *p = S.prog ? prog_get(S.prog) : nil; const char *k = p && p->sh[0] ? p->sh[0]->key : "-";
     if (!vdraw_key_ok(k)) return;
+    if (di && di->mdi_cnt) {   // a multi-draw reads its counts from the argument records: di->count is 0 and says nothing
+        uint64_t rec = di->ind + (uint64_t)di->mdi_i * 20;   // indexCount, instanceCount, firstIndex, baseVertex, baseInstance
+        uint32_t r[5] = {0}; void *m; uint64_t o;
+        if (mtl_addr(rec, sizeof r, &m, &o)) { const uint8_t *c = [(__bridge id<MTLBuffer>)m contents]; if (c) memcpy(r, c + o, sizeof r); }
+        if (!g_watch_lo) { g_watch_lo = rec; g_watch_hi = rec + sizeof r; }
+        static int nrep; if (nrep++ < 24)   // does anything write the record? a GPU storage-buffer write sets SBW_GPU on the page
+            MLOG("  mdi record %#llx: indexCount %u instanceCount %u firstIndex %u baseVertex %d baseInstance %u | sbw_hits %d",
+                 (unsigned long long)rec, r[0], r[1], r[2], (int)r[3], r[4], sbw_hits(rec, rec + sizeof r));
+    }
     { static char seen[64][24]; static int nseen;   // once per program: the inputs do not change per draw
       for (int i = 0; i < nseen; i++) if (!strcmp(seen[i], k)) return;
       if (nseen >= 64) return;
@@ -10218,13 +10234,6 @@ static void vattr_vals(const p_draw *dw, const p_draw_idx *di) {
          (unsigned long long)(di ? di->mdi_cnt : dw ? dw->mdi_cnt : 0), di ? di->mdi_i : dw ? dw->mdi_i : 0,
          (uint64_t)(di ? di->mdi_cnt : dw->mdi_cnt) ? mdi_live(di ? di->mdi_cnt : dw->mdi_cnt, di ? di->mdi_i : dw->mdi_i) : -1,
          dw ? dw->first : 0);
-    if (di && di->mdi_cnt) {   // a multi-draw reads its counts from the argument records: di->count is 0 and says nothing
-        uint64_t rec = di->ind + (uint64_t)di->mdi_i * 20;   // indexCount, instanceCount, firstIndex, baseVertex, baseInstance
-        uint32_t r[5] = {0}; void *m; uint64_t o;
-        if (mtl_addr(rec, sizeof r, &m, &o)) { const uint8_t *c = [(__bridge id<MTLBuffer>)m contents]; if (c) memcpy(r, c + o, sizeof r); }
-        MLOG("  mdi record %#llx: indexCount %u instanceCount %u firstIndex %u baseVertex %d baseInstance %u", (unsigned long long)rec,
-             r[0], r[1], r[2], (int)r[3], r[4]);
-    }
     int isz = di ? (di->itype == 1 ? 2 : di->itype == 2 ? 4 : 0) : 0;
     const uint8_t *ib = NULL;
     if (di && isz) { void *m; uint64_t o; if (mtl_addr(di->ibuf, (uint64_t)n * isz, &m, &o)) { const uint8_t *c = [(__bridge id<MTLBuffer>)m contents]; if (c) ib = c + o; } }
