@@ -6,5 +6,11 @@
 # entry, and both programs then really sample a 3D texture. The host's own bind check reports it
 # ("declares slot 0 as Metal type 2, texture ID is type 7 (NVN target 2 ...); bound as is"), and a 3D
 # texture read through a texture2d is an undefined read, not a view Metal can make.
-39b8dddb6ebad571	{"tex":{"0":"3d"}}
-d92d9b75e2cc7dad	{"tex":{"0":"3d"}}
+# STATUS 2026-11-07: these two rows are NOT yet taking effect. With them present the build clears the
+# "not in the answer table" note for both keys (10848 -> 10846), so the row does reach the job, but the
+# generated MSL still declares texture2d and the host still reports one mismatch for d92d9b75e2cc7dad_b.
+# Slot 1 is the number the translator itself prints ("texture handle A (constant buffer -1, slot 1)");
+# slot 0 was tried first and did not work either. Next: compare the job JSON dmsh_build writes with what
+# Program.cs Get("tex", slot) expects, and confirm dmsh_xlate reads that same job.
+39b8dddb6ebad571	{"tex":{"1":"3d"}}
+d92d9b75e2cc7dad	{"tex":{"1":"3d"}}

@@ -173,7 +173,7 @@
 38985d8f25ae680b	{"local":[8,8,1],"shared":0}
 38d1f0788efcb0c8	{"local":[32,1,1],"shared":0}
 38fc0d91dc3dc7eb	{"local":[16,16,1],"shared":0}
-39b8dddb6ebad571	{"tex":{"0":"3d"}}
+39b8dddb6ebad571	{"tex":{"1":"3d"}}
 3a3e2244a97ad05f	{"local":[64,1,1],"shared":49152}
 3aa955bf42b91d65	{"local":[32,1,1],"shared":0}
 3b051c17561330bb	{"local":[64,1,1],"shared":0}
@@ -614,7 +614,7 @@ d8a8ade8c2f1b73c	{"local":[8,8,1],"shared":0}
 d8b7e05cedae76ae	{"local":[32,1,1],"shared":0}
 d8c553ef32c63378	{"local":[32,1,1],"shared":0}
 d901a683786fec6c	{"local":[128,1,1],"shared":9984}
-d92d9b75e2cc7dad	{"tex":{"0":"3d"}}
+d92d9b75e2cc7dad	{"tex":{"1":"3d"}}
 da18ba7f8586ff32	{"local":[64,1,1],"shared":49152}
 dac413036f8b54b6	{"local":[32,1,1],"shared":0}
 dac79a9cd2e8d24e	{"local":[64,1,1],"shared":0}
