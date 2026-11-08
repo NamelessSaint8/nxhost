@@ -39,7 +39,7 @@ typedef struct { uint32_t magic, dec, idx, gen; } cv_sync;   // nn::gs::NativeSy
 enum { CV_VP8, CV_VP9, CV_H264, CV_AV1 };
 static const char *const k_cv_name[] = {"VP8", "VP9", "H.264", "AV1"};
 typedef struct {
-    uint32_t magic, id; pthread_mutex_t mu; vpx_codec_ctx_t vpx; int vpx_ok; void *event; uint64_t submits, pictures;
+    uint32_t magic, id; pthread_mutex_t mu; vpx_codec_ctx_t vpx; int vpx_ok; void *event; uint64_t submits, pictures, acqs, rels; unsigned nopics;
     int codec; uint16_t w, h; mavc *avc; uint8_t *csd; size_t csd_n;   // H.264: VideoToolbox and the parameter sets Initialize gave
     mav1 *av1;   // AV1: VideoToolbox, or dav1d where the chip has no AV1 decoder (hle_movie_av1.c)
     struct { cv_pool *pool; uint32_t pidx; int reg, filled; uint32_t gen, filled_gen; uint16_t w, h; int64_t ts; uint8_t eos; } buf[CV_BUFS];
@@ -96,6 +96,19 @@ static void pool_native_write(cv_pool *p, uint32_t i, const vpx_image_t *im) {
     md_rgba(im, tmp, p->w, p->h);
     for (uint32_t y = 0; y < p->h; y++) memcpy(dst + (size_t)y * stride, tmp + (size_t)y * p->w * 4, (size_t)p->w * 4);
     free(tmp);
+}
+// DM_CV_STATE=1: the client/decoder handshake, counted on all three sides. submit = packets the client gave, acq = output
+// buffers it took, rel = buffers it gave back for filling, pictures = pictures the host actually delivered into a buffer.
+// The first five events and then every sixtieth are printed, so a handshake that stops shows its last state instead of
+// only silence (decoder lock held)
+static void cv_state(cv_dec *d, const char *what, uint64_t got) {
+    if (!getenv("DM_CV_STATE")) return;
+    static unsigned tick;
+    unsigned n = tick++;
+    if (n >= 5 && n % 60) return;
+    LOG("[codec] state %s %u after %s +%llu: submits %llu acqs %llu rels %llu pictures %llu pend %u fifo %u held %d", k_cv_name[d->codec], d->id,
+        what, (unsigned long long)got, (unsigned long long)d->submits, (unsigned long long)d->acqs, (unsigned long long)d->rels,
+        (unsigned long long)d->pictures, d->pcount, d->fcount, d->nheld);
 }
 // Pictures and end of stream into the released buffers, in order (decoder lock held)
 static void drain(cv_dec *d) {
@@ -342,6 +355,10 @@ static Result cv_dec_submit(uint64_t *out, void *t, const void *data, uint64_t s
     if (eos) { if (got) d->held_eos[d->nheld - 1] = 1; else d->eos_pending = 1; }
     *out = ++d->submits;
     drain(d);
+    if (got) d->nopics = 0;
+    else if (++d->nopics == 30) LOG("[codec] %s decoder %u: 30 submits with no picture (submits %llu, pictures %llu, pend %u, fifo %u, held %d)", k_cv_name[d->codec], d->id,
+                                   (unsigned long long)d->submits, (unsigned long long)d->pictures, d->pcount, d->fcount, d->nheld);
+    cv_state(d, "submit", (uint64_t)got);
     pthread_mutex_unlock(&d->mu);
     return 0;
 }
@@ -351,6 +368,8 @@ static Result cv_dec_acq(uint32_t *idx, cv_sync *sync, void *t) {
     if (!d->fcount) { pthread_mutex_unlock(&d->mu); return CV_NONE; }
     uint32_t i = d->fifo[d->fhead]; d->fhead = (d->fhead + 1) % 8; d->fcount--;
     *idx = i; *sync = (cv_sync){CV_SYNC, d->id, i, d->buf[i].gen};
+    d->acqs++;
+    cv_state(d, "acq", 0);
     pthread_mutex_unlock(&d->mu);
     return 0;
 }
@@ -360,7 +379,9 @@ static void cv_dec_rel(void *t, uint32_t i, cv_sync sync) {
     d->buf[i].gen++; d->buf[i].filled = 0;
     if (d->pcount < CV_BUFS) { d->pend[(d->phead + d->pcount) % CV_BUFS] = i; d->pcount++; }
     if (d->fcount < 8) { d->fifo[(d->fhead + d->fcount) % 8] = i; d->fcount++; } else LOG("[RED] nn::codec: acquirable queue full at release %u", i);
+    d->rels++;
     drain(d);
+    cv_state(d, "rel", 0);
     pthread_mutex_unlock(&d->mu);
 }
 static Result cv_dec_props(uint16_t *w, uint16_t *h, uint16_t *cw, uint16_t *ch, int64_t *ts, bool *eos, void *t, uint32_t i) {

@@ -1114,18 +1114,17 @@ First real run: that line appears **once**, and `[RED] texture type mismatch` is
 
 **The sound was the app, not the host.** A Metal test binary opens no audio device; the noise stopped when the app hosting the session was restarted, and no `dmhost` was running at the time.
 
-### Driving into a Grand Prix stops on the first picture of a 2560x1440 VP9 movie
+### The Grand Prix movie's handshake is healthy, and "first picture" was never a count
 
-A driven run (`drive2.log`) got past the title, Cup Select (Mushroom Cup), "Start Grand Prix? OK" and the fade, and then froze. The sequence is in the codec log:
+`DM_CV_STATE=1` (`hle_codec_video.c`) now counts the three sides of the decoder handshake: packets the client submits, output buffers it acquires and releases, and pictures the host actually delivers — once at the first five events and then every sixtieth, so a handshake that stops prints its last state. Driven with the correct tokens (`L+R~0.3` to start, then bare `A` — not `key A`), the run reached the Grand Prix and the 2560x1440 VP9 movie **played**:
 
 ```
-frame 1778 (97.51 s)  [codec] VP9 decoder 1: 2560x1440, input format 3, output format 3 (libvpx on the host)
-                      [codec] VP9 decoder 1: first picture 2560x1440 into buffer 0
+[codec] state VP9 1 after rel +0: submits 822 acqs 820 rels 819 pictures 819 pend 0 fifo 1 held 3
 ```
 
-and then nothing: no `end of stream` for that decoder through frame 3172 (121 s), where the 640x360 menu preview before it had ended normally (`end of stream after 900 pictures`). `race-50.png` (99.0 s) and `race-60.png` (109.0 s) are **byte-identical** (`md5 1104f3b2…`, 286,974 B): the game keeps submitting draws on a frozen picture, with the `ムービー入力読込` (MovieInputRead) thread spinning.
+819 pictures, no `30 submits with no picture` line, no `[RED] nn::codec` decode error. The earlier reading — "one picture and never an end of stream" — was a **logging artefact**: `[codec] … first picture` is printed once by construction (`if (!d->pictures++)`) and later pictures are not logged at all, while `end of stream` had simply not been reached because the stream was still running. So the frozen `race-50/60.png` frames were **not** a decoder deadlock; the handshake is fine.
 
-In `hle_codec_video.c` a decoded picture is held until the client releases a buffer and asks for its properties, so one picture plus no end-of-stream means the handshake stopped after that first buffer: either the client stopped releasing buffers or the host stopped taking packets. The log cannot tell those apart yet — the next probe is a counter on both sides of that handshake, not another picture capture.
+**What that leaves is the presentation of the decoded picture, not its decode.** In the instrumented run the movie started at frame ~1717 (89.2 s) and the capture 3 s later was **0.0 % lit** while pictures kept arriving at ~60 a second: either the intro fades from black or the decoded picture never reaches the screen. The next probe is that path — the pool's native image handle and the texture made over it (`GetDecoderImagePoolNativeImageHandle` → `nvnNativeImage`) — with frames sampled across the movie rather than one after it.
 
 **Open alongside it: a quarter-size tile in the top-left of the frame.** In both a 2D map frame and a 3D attract frame, the top-left **512x288** block differs markedly from the rest of the top band (mean colour `(78,91,84)` vs `(107,118,91)`, and `(68,102,84)` vs `(107,120,112)`). 512x288 is exactly 2048x1152 divided by four, which is the signature of a pass drawing at quarter resolution into the target's corner — the same shape at two different scenes makes it a host artefact, not scene content.
 
