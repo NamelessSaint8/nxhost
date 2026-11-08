@@ -981,6 +981,25 @@ Every one disagrees. `pool_find` was checked and returned the correct pool with 
 
 **The world program's own target stays unreadable that way.** `50a275e9d32af1c7_b` prints its target serial on every pass (46661, 46650, 46639 in the sampled frames), but `texraw` answers "no host texture" for it and it was not among the dumped frame's targets, so neither dump path reaches it. Dumping it at pass end, from the texture the host itself holds, is the next instrument.
 
+### Dumped at pass end, the world pass ends empty
+
+`DM_VDRAW_PASSSHOT=<path with %d>` copies a pass's colour attachment into a shared buffer **on that pass's own command buffer**, after the render encoder closes, and writes the file when the submission completes -- so the file is this pass's output, not what the texture held before it. With `DM_VDRAW_SHOT_FRAME` (start frame), `DM_VDRAW_SHOT_MAX` (37 MB a dump) and `DM_VDRAW_SHOT_NODEPTH`.
+
+**Three MTL4 requirements, each learned from a run that read zeros.** The readback buffer must be added to the residency set (`res_add`/`res_commit`) or the GPU never writes it; an MTL4 command buffer has no `blitCommandEncoder` (use `blit_open` + `enc_b_copy_texture_buffer`) and no `addCompletedHandler` (use `g_commit_blocks`, which runs in the commit's feedback handler); and the copy must be encoded after the render encoder ends. The first two aborted the host outright, the third read zeros -- all twelve dumps of one frame, including a pass that provably had content.
+
+**What it shows, for the frame around pass 123300.** Every pass in this table writes the same 2048x1152 colour target (serial 65003 unless noted), in command order:
+
+| pass | vertex program | depth | measured at pass end |
+|---|---|---|---|
+| 123304 | `3ede841f23b77616_b` | yes | 5.9 % lit, luma 7 |
+| 123305 | `c4e5830692350b3f_b` | yes | **100 % lit, luma 108** |
+| 123306 | **`50a275e9d32af1c7_b`** | yes | **0.0 % lit, luma 0** |
+| 123307 | `a032c25f0e940a2f_b` | yes | 6.1 % lit, luma 7 |
+| 123338 | `7eb55d684ac7fa92_b` | no | 0.3 % lit (serial 34025) |
+| 123339 | `b52555f88038f0fe_b` | no | 7.8 % lit (serial 34025) |
+
+**The world colour pass leaves its target completely empty, and the pass immediately before it had filled that same target.** So the clears are not the story and neither are the uniforms: `50a275e9d32af1c7_b` runs with a full colour mask, a full-target viewport and scissor, correct uniforms, 8,340 vertices and 586 draws, and writes nothing. The next question is the one this instrument was built for -- what that program's vertex stage emits -- and it is now measurable one pass at a time instead of inferred.
+
 **What the vertex stage is fed, for the record** (`DM_VATTR_VALS=6`): the prepass submits **8,340 indexed vertices** with attribute 0 at offset 0, stride 40, format 34, reading floats (`-0.301, 0.423, -0.044` at vertex 0), and binds `c5` at slot 2 as **2,688 bytes** -- 42 rows, enough for the `(w * 48) >> 4` row index its MSL computes as long as `w` stays under 56. The colour-pass program `50a275e9d32af1c7_b` binds 16 attributes over one stream of stride 8, with slot blocks 192 B at 11 and 12, 2,432 B at 1 and 43,456 B at 6.
 
 ### Traps this hunt already paid for (do not re-chase)
