@@ -1,0 +1,88 @@
+{
+  "title": "0400C3F00006E000",
+  "game": "Mario Kart World",
+  "notes": "Native Mac host, shader chain e768d85cea2b. One entry per vertex/compute program the frame actually runs. 'object' is filled only where a picture A/B with DM_VDRAW_SKIP=<key prefix> proved what disappears; 'measured' is what the pass-end dump (DM_VDRAW_PASSSHOT at 2048x1152) showed. lit% is over a 9-pixel-stride sample of the whole target, decoded per Metal format by nxnative/dm/tools/pass_inventory.py; a value of 0 means the target was cleared and nothing was written.",
+  "schema": "same shape as Eglantine's tools/nx2/catalog/<title>.json: key, stage, object, group, how, notes, updated",
+  "programs": [
+    {
+      "key": "50a275e9d32af1c7_b",
+      "stage": "vertex",
+      "object": "the world itself: sky, ground and track",
+      "group": "World",
+      "how": "DM_VDRAW_SKIP=50a275e9d32af1c7_b takes the frame from 27.6 % lit (sky #006688 over ground #aa6644/#999944) to 2.1 % (white UI on black)",
+      "notes": "multi-draw-indirect: di->count is 0 by construction and the counts live in the argument records; 27,068 of 27,192 records carry instanceCount 0, which is the cull discarding entries, not a dead pass",
+      "updated": "2026-11-07T00:00:00Z"
+    },
+    {
+      "key": "35ac18662090d3d1_b",
+      "stage": "vertex",
+      "measured": "25.0 % lit, 357 coarse colours (fmt 92 RG11B10Float), 21 samples",
+      "notes": "the richest 2048x1152 colour target in the sampled frames",
+      "updated": "2026-11-07T00:00:00Z"
+    },
+    {
+      "key": "7eb55d684ac7fa92_b",
+      "stage": "vertex",
+      "measured": "7.1-7.9 % lit, 314 coarse colours, 20 samples",
+      "updated": "2026-11-07T00:00:00Z"
+    },
+    {
+      "key": "2e043846cdf189a5_b",
+      "stage": "vertex",
+      "measured": "6.9-8.3 % lit, 154 colours (fmt 92) and 0.3-0.4 % (fmt 70), 60 samples",
+      "updated": "2026-11-07T00:00:00Z"
+    },
+    {
+      "key": "9f7ba8701e00db47_b",
+      "stage": "vertex",
+      "measured": "6.9-7.9 % lit, 151 colours, 20 samples",
+      "updated": "2026-11-07T00:00:00Z"
+    },
+    {
+      "key": "5e19bc12fb2c2e23_b",
+      "stage": "vertex",
+      "measured": "5.1-6.0 % lit, 50 colours, 21 samples",
+      "updated": "2026-11-07T00:00:00Z"
+    },
+    {
+      "key": "a032c25f0e940a2f_b",
+      "stage": "vertex",
+      "measured": "5.1-6.0 % lit, 50 colours, 12 samples",
+      "updated": "2026-11-07T00:00:00Z"
+    },
+    {
+      "key": "42b50d8a5833e3c2_b",
+      "stage": "vertex",
+      "measured": "25.0 % lit but only 36 coarse colours (fmt 70 RGBA8), 21 samples",
+      "notes": "a broad dim field rather than an image -- candidate for a buffer read by a later pass, not a displayed stage",
+      "updated": "2026-11-07T00:00:00Z"
+    },
+    {
+      "key": "97c9b39cd1b2ef6b_b",
+      "stage": "vertex",
+      "measured": "12.7 % lit, 28 colours (fmt 30 RG8Unorm), 21 samples",
+      "updated": "2026-11-07T00:00:00Z"
+    },
+    {
+      "key": "255f2300cfb054aa_b",
+      "stage": "vertex",
+      "measured": "0.1-0.2 % lit, 24 colours (fmt 70), 20 samples",
+      "notes": "nearly empty -- possibly a pass that should carry an effect",
+      "updated": "2026-11-07T00:00:00Z"
+    },
+    {
+      "key": "a6430615519b0e2f_b",
+      "stage": "vertex",
+      "measured": "0.0 % lit, 0 colours, 21 of 21 samples",
+      "notes": "empty in every frame sampled; either culled every time or writing nothing when it should",
+      "updated": "2026-11-07T00:00:00Z"
+    },
+    {
+      "key": "8c4284bece28616f_b",
+      "stage": "vertex",
+      "measured": "0.0 % lit, 0 colours, 21 of 21 samples",
+      "notes": "empty in every frame sampled; one of the seven colour-pass programs, so it is expected to contribute something",
+      "updated": "2026-11-07T00:00:00Z"
+    }
+  ]
+}
