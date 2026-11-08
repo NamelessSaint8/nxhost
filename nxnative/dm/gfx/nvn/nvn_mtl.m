@@ -988,20 +988,88 @@ static void gp_report(int n, gp_lab *lab, uint64_t frame) {   // the frame's las
     MLOG("[gpuprof] frame %llu: render %.2f ms, compute / copy %.2f ms over %d encoders (%d render passes, attachments load %.1f MB store %.1f MB), first start to last end %.2f ms", (unsigned long long)frame, tot[0] / 1e3, tot[1] / 1e3, n, np, ld / 1024.0, st / 1024.0, span / 1e3);
     free(lab); atomic_store(&g_gp_busy, 0);
 }
+// DM_VDRAW_PASSSHOT=<path with %d>: at the end of every draw pass whose colour target is WxH (DM_VDRAW_SHOT_WH, default 2048x1152),
+// copy that attachment into a shared buffer *on the pass's own command buffer* and write it when the submission completes, so the
+// file holds this pass's output rather than whatever the texture held before it. Neither dump path reaches the world's target:
+// texraw answers "no host texture" for its serial and it is not in a texdump set -- so this reads the attachment the host encoded
+// into, which is the only place its content exists. DM_VDRAW_SHOT_FRAME=<n> starts the dumps at frame n, DM_VDRAW_SHOT_MAX caps
+// them (37 MB each), DM_VDRAW_SHOT_NODEPTH keeps only colour-only passes. Header "w h metalformat bytes_per_row", which
+// tools/pngstat.py reads.
+// Three things this probe needs and the obvious versions do not have: on MTL4 the readback buffer must be added to the residency
+// set (res_add/res_commit), or the GPU never writes it and every dump reads as zeros; an MTL4 command buffer has no
+// blitCommandEncoder (use blit_open/enc_b_copy_texture_buffer) and no addCompletedHandler (use g_commit_blocks, which runs in the
+// commit's feedback handler); and the copy has to be encoded after the pass's render encoder is closed.
+static id<MTLTexture> g_passshot_tex; static uint64_t g_passshot_pass;
+static id<MTL4ComputeCommandEncoder> blit_open(void);   // the host's blit path: an MTL4 command buffer has no blitCommandEncoder
+static inline void enc_b_end(id e);
+static inline void enc_b_copy_texture_buffer(id e, id<MTLTexture> s, NSUInteger sl, NSUInteger lv, MTLOrigin o, MTLSize z,
+                                             id<MTLBuffer> d, NSUInteger doff, NSUInteger row, NSUInteger img);
+static void vdraw_passshot_begin(MTL4RenderPassDescriptor *d) {
+    static int on = -1; if (on < 0) on = getenv("DM_VDRAW_PASSSHOT") != NULL;
+    if (!on) return;
+    static int nodepth = -1; if (nodepth < 0) nodepth = getenv("DM_VDRAW_SHOT_NODEPTH") != NULL;   // the colour-only passes: the one that composes the frame has no depth
+    if (nodepth && d.depthAttachment.texture) return;
+    g_passshot_tex = d.colorAttachments[0].texture; g_passshot_pass = g_stat_pass;
+}
+static void vdraw_passshot(id e) {
+    (void)e;
+    if (!g_passshot_tex) return;
+    id<MTLTexture> t = g_passshot_tex; uint64_t pass = g_passshot_pass; g_passshot_tex = nil;
+    static int left = -1; if (left < 0) { const char *s = getenv("DM_VDRAW_SHOT_MAX"); left = s ? atoi(s) : 4; }   // 37 MB a dump: cap it
+    if (left <= 0) return;
+    {   // DM_VDRAW_SHOT_FRAME=<n> dumps from frame n on, and DM_VDRAW_SHOT_MAX stops it: many passes share this size, and the
+        // frame is what tells the world's from theirs. The world's program first appears well after the attract sequence starts,
+        // so a lower bound is what is wanted, not an equality.
+        static long want_frame = -2;
+        if (want_frame == -2) { const char *s = getenv("DM_VDRAW_SHOT_FRAME"); want_frame = s ? atol(s) : -1; }
+        if (want_frame >= 0 && (long)atomic_load(&g_cur_frame) < want_frame) return;
+    }
+    static long want_w = -1, want_h = -1;
+    if (want_w < 0) { want_w = 2048; want_h = 1152; const char *s = getenv("DM_VDRAW_SHOT_WH");
+        if (s && sscanf(s, "%ldx%ld", &want_w, &want_h) != 2) { want_w = 2048; want_h = 1152; } }
+    NSUInteger w = t.width, h = t.height;
+    if ((long)w != want_w || (long)h != want_h) return;
+    if (t.storageMode == MTLStorageModeMemoryless || t.pixelFormat == MTLPixelFormatInvalid) {
+        MLOG("[passshot] pass %llu %lux%lu fmt %lu storage %lu: not readable", (unsigned long long)pass, (unsigned long)w,
+             (unsigned long)h, (unsigned long)t.pixelFormat, (unsigned long)t.storageMode);
+        return;
+    }
+    const char *pat = getenv("DM_VDRAW_PASSSHOT");
+    if (!pat) return;
+    char pbuf[1024]; snprintf(pbuf, sizeof pbuf, pat, (int)pass);
+    char *path = strdup(pbuf); if (!path) return;   // a completion block cannot capture a stack array
+    NSUInteger row = w * 16, sz = row * h;          // 16 bytes a texel, as texraw: a multiple of every uncompressed texel size
+    id<MTLBuffer> buf = [g_dev newBufferWithLength:sz options:MTLResourceStorageModeShared];
+    if (!buf) { MLOG("[passshot] cannot allocate %lu bytes", (unsigned long)sz); free(path); return; }
+    res_add(buf); res_commit();   // an MTL4 queue only reaches resources in its residency set
+    id<MTL4ComputeCommandEncoder> b = blit_open();
+    enc_b_copy_texture_buffer(b, t, 0, 0, MTLOriginMake(0, 0, 0), MTLSizeMake(w, h, 1), buf, 0, row, sz);
+    enc_b_end(b); g_blit = nil;
+    left--;
+    [g_commit_blocks addObject:^{   // runs once the submission completes: an MTL4 command buffer has no addCompletedHandler
+        FILE *f = fopen(path, "wb");
+        if (!f) { MLOG("[passshot] cannot write %s", path); free(path); return; }
+        fprintf(f, "%lu %lu %lu %lu\n", (unsigned long)w, (unsigned long)h, (unsigned long)t.pixelFormat, (unsigned long)row);
+        fwrite(buf.contents, 1, sz, f); fclose(f);
+        MLOG("[passshot] pass %llu %lux%lu fmt %lu storage %lu -> %s", (unsigned long long)pass, (unsigned long)w,
+             (unsigned long)h, (unsigned long)t.pixelFormat, (unsigned long)t.storageMode, path);
+        free(path); }];
+}
 static inline id<MTL4RenderCommandEncoder> enc_r_begin_pass(MTL4RenderPassDescriptor *d) {   // the draw passes (rp_begin_ex); see barrier_game
     id<MTL4RenderCommandEncoder> e = [g_cb renderCommandEncoderWithDescriptor:d];
     if (g_last_end_relaxed && !g_game_barrier && barrier_game() && !g_image_heap_n) g_bar_skip++;
     else { [e barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:resource_vis()]; g_bar_full++; }
     g_game_barrier = 0;
-    [e setArgumentTable:g_vt atStages:MTLRenderStageVertex]; [e setArgumentTable:g_ft atStages:MTLRenderStageFragment]; gp_begin(e, 'R', d); return e;
+    [e setArgumentTable:g_vt atStages:MTLRenderStageVertex]; [e setArgumentTable:g_ft atStages:MTLRenderStageFragment]; gp_begin(e, 'R', d); vdraw_passshot_begin(d); return e;
 }
 static inline void enc_r_end_pass(id e) {
-    if (!barrier_game() || g_image_heap_n) { m4_end(e); return; }
-    gp_end(e); [(id<MTL4CommandEncoder>)e barrierAfterStages:MTLStageVertex | MTLStageMesh | MTLStageFragment beforeQueueStages:MTLStageFragment | MTLStageDispatch | MTLStageBlit visibilityOptions:resource_vis()];
-    [e endEncoding]; g_last_end_relaxed = 1;
+    if (!barrier_game() || g_image_heap_n) m4_end(e);
+    else { gp_end(e); [(id<MTL4CommandEncoder>)e barrierAfterStages:MTLStageVertex | MTLStageMesh | MTLStageFragment beforeQueueStages:MTLStageFragment | MTLStageDispatch | MTLStageBlit visibilityOptions:resource_vis()];
+        [e endEncoding]; g_last_end_relaxed = 1; }
+    vdraw_passshot(e);   // after the encoder is closed: the copy must follow this pass's draws in the same command buffer
 }
-static inline id<MTL4RenderCommandEncoder> enc_r_begin(MTL4RenderPassDescriptor *d) { id<MTL4RenderCommandEncoder> e = [g_cb renderCommandEncoderWithDescriptor:d]; [e barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:resource_vis()]; [e setArgumentTable:g_vt atStages:MTLRenderStageVertex]; [e setArgumentTable:g_ft atStages:MTLRenderStageFragment]; gp_begin(e, 'R', d); return e; }
-static inline void enc_r_end(id e) { m4_end(e); }
+static inline id<MTL4RenderCommandEncoder> enc_r_begin(MTL4RenderPassDescriptor *d) { id<MTL4RenderCommandEncoder> e = [g_cb renderCommandEncoderWithDescriptor:d]; [e barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:resource_vis()]; [e setArgumentTable:g_vt atStages:MTLRenderStageVertex]; [e setArgumentTable:g_ft atStages:MTLRenderStageFragment]; gp_begin(e, 'R', d); vdraw_passshot_begin(d); return e; }
+static inline void enc_r_end(id e) { m4_end(e); vdraw_passshot(e); }
 static inline void enc_r_pso(id<MTL4RenderCommandEncoder> e, id<MTLRenderPipelineState> p) { [e setRenderPipelineState:p]; }
 static inline void enc_r_dss(id<MTL4RenderCommandEncoder> e, id<MTLDepthStencilState> s) { [e setDepthStencilState:s]; }
 static inline void enc_r_viewport(id<MTL4RenderCommandEncoder> e, MTLViewport v) { [e setViewport:v]; }

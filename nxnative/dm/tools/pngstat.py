@@ -67,6 +67,26 @@ def read_png(path):
     return w, h, nch, out
 
 
+def read_raw(path):
+    """The form texraw and DM_VDRAW_PASSSHOT write: a text header "w h format bytes_per_row" then the texels, 16 bytes
+    each (only the first four carry colour; a depth target's first four are its float). Returns the same shape as
+    read_png, with the row stride folded in so a padded row reads as width*4."""
+    data = open(path, 'rb').read()
+    nl = data.index(b'\n')
+    w, h, _fmt, bpr = (int(x) for x in data[:nl].split())
+    body = data[nl + 1:]
+    stride = w * 4
+    out = bytearray(stride * h)
+    for y in range(h):
+        src = y * bpr
+        out[y * stride:(y + 1) * stride] = body[src:src + stride]
+    return w, h, 4, out
+
+
+def read_image(path):
+    return read_png(path) if open(path, 'rb').read(8) == b'\x89PNG\r\n\x1a\n' else read_raw(path)
+
+
 def main():
     args = sys.argv[1:]
     if not args:
@@ -74,7 +94,7 @@ def main():
     path = args[0]
     gw, gh = (int(x) for x in (args[args.index('--grid') + 1].split('x') if '--grid' in args else ('32', '18')))
     thresh = int(args[args.index('--thresh') + 1]) if '--thresh' in args else 8
-    w, h, nch, px = read_png(path)
+    w, h, nch, px = read_image(path)
 
     def rgb(x, y):
         i = (y * w + x) * nch
