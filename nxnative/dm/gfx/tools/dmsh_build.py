@@ -1338,6 +1338,14 @@ misses = [key for key in keys if key not in cache_hits]
 chunks = [misses[i::NJ] for i in range(NJ)]
 def xl(ch):
     jp = os.path.join(w, f'job_{abs(hash(ch[0]))}.json'); json.dump([jobs[k] for k in ch], open(jp, 'w'))
+    # DM_JOB_DUMP=<dir>: keep a copy of the job document the translator receives. The job lives in the build's work
+    # directory, which goes away when the run ends, so without this the answer table's effect on one shader cannot be
+    # read after the fact (the build's summary only counts notes). Named by the first key in the chunk, since Python's
+    # hash() is randomised per process.
+    dd = os.environ.get('DM_JOB_DUMP')
+    if dd:
+        os.makedirs(dd, exist_ok=True)
+        shutil.copy(jp, os.path.join(dd, 'job_' + ch[0] + '.json'))
     return subprocess.run([XLATE, jp, w], capture_output=True, text=True)
 with cf.ThreadPoolExecutor(NJ) as ex: xr = list(ex.map(xl, [c for c in chunks if c]))
 xerr = {}

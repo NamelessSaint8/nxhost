@@ -2,18 +2,23 @@
 #
 # Each row is  key <TAB> {"tex":{"<slot>":"<type>"}}  (types: 2d 2darray cube cubearray 3d buffer 1d 1darray 2dms 2dmsarray).
 #
-# Why these two: the translator defaults a texture handle's dimension to 2D when the answer table has no
-# entry, and both programs then really sample a 3D texture. The host's own bind check reports it
-# ("declares slot 0 as Metal type 2, texture ID is type 7 (NVN target 2 ...); bound as is"), and a 3D
-# texture read through a texture2d is an undefined read, not a view Metal can make.
-# STATUS 2026-11-07: these rows are NOT live. What is established:
-#  - the row reaches the build: the "not in the answer table" note clears (10,848 -> 10,846);
-#  - translation really re-runs with it: a fresh DMSH_CAS and just these two keys gives
-#    "Metal cache: mac 0 reused, 6 compiled";
-#  - the type still does not change: the .metal declares texture2d, the note "texture handle A ...
-#    using 2D" still fires 470 times, and d92d9b75e2cc7dad_b still mismatches at bind time.
-# Slots 0, 1 and both together were tried. Program.cs reads _job["tex"][slot.ToString()] with the slot
-# derived from the handle byte offset, so the remaining suspect is the job the translator receives.
-# Next: add a job dump to dmsh_build (a source edit, so it bumps the chain) or capture the temp job file.
+# STATUS 2026-11-08: an answer-table "tex" row cannot change an Ampere texture's type. These two rows were
+# tried at slot 0, at slot 1 and at both, and are inert by construction; they are kept only as the record of
+# the test, and are safe to delete.
+#   - The job document carries the row. DM_JOB_DUMP=<dir> (dmsh_build.py xl()) copies the job the translator
+#     receives, and d92d9b75e2cc7dad's document reads "tex": {"0":"3d","1":"3d"} -- so Program.cs's
+#     _job["tex"][slot.ToString()] has the value it looks for. The writer and the reader agree.
+#   - The emitted type still does not change: the rebuilt chain 4af3b2a70fef's d92d9b75e2cc7dad_b.metal has
+#     3 texture2d and 0 texture3d, and the bind-time mismatch survives.
+#   - Why: the Ampere sample (InstEmitAmpereMem.cs ATex) takes its type from the instruction's own dimension
+#     field -- TexDim dim = ATexDim(context, x.Bits(61, 64)) -- and never calls QuerySamplerType. The answer
+#     table reaches a texture type only through the Maxwell TEX path (InstEmitTexture.cs:1140), bindless
+#     handles and TXQ. So for a Switch 2 shader the row is dead on arrival.
+# What the mismatch really is: the shader declares slot 0 as 2D because its instruction says 2D (dim 1), and
+# the game binds a 3D texture there (NVN target 2, Metal type 7). The shader is not asking for a 3D read.
+# The host's tex_fit bridges "wants 3D, holds 2D" and "wants 2D, holds cube" but has no "wants 2D, holds 3D"
+# case, so it falls through to tex_mis_note("bound as is"). The open question is the dimension field's
+# correctness against NAK's sm70_encode.rs, and whether the host should make a 2D view of the 3D texture.
+# See docs/SWITCH2.md, "The answer table's tex row never reaches an Ampere texture".
 39b8dddb6ebad571	{"tex":{"0":"3d","1":"3d"}}
 d92d9b75e2cc7dad	{"tex":{"0":"3d","1":"3d"}}

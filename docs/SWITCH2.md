@@ -1064,6 +1064,29 @@ Removing that program removes the world. So the world pass draws the visible sce
 
 **What the vertex stage is fed, for the record** (`DM_VATTR_VALS=6`): the prepass submits **8,340 indexed vertices** with attribute 0 at offset 0, stride 40, format 34, reading floats (`-0.301, 0.423, -0.044` at vertex 0), and binds `c5` at slot 2 as **2,688 bytes** -- 42 rows, enough for the `(w * 48) >> 4` row index its MSL computes as long as `w` stays under 56. The colour-pass program `50a275e9d32af1c7_b` binds 16 attributes over one stream of stride 8, with slot blocks 192 B at 11 and 12, 2,432 B at 1 and 43,456 B at 6.
 
+### The answer table's `tex` row never reaches an Ampere texture: the type is the instruction's own dimension field
+
+**The job document was right all along, and the row still cannot change the MSL.** The build writes each job to a temp work directory and hands the path straight to `dmsh_xlate`, so the document was gone by the time anything could read it. `DM_JOB_DUMP=<dir>` now keeps a copy (`dmsh_build.py` `xl()`), and the capture for the mismatching shader reads:
+
+```json
+{"key": "d92d9b75e2cc7dad", "stage": "ps", "tex": {"0": "3d", "1": "3d"}, "img": {}, "attr": {}, "fout": {},
+ "c1": "", "arch": "sm86", "debug": true, "reduced": true}
+```
+
+So `FACTS[key]` reaches the document under exactly the key `Get("tex", slot)` reads (`_job["tex"]` is a `JsonObject`, `t[slot.ToString()]` its value) — the writer and the reader agree. And the rebuilt MSL for `d92d9b75e2cc7dad_b` in the new chain `4af3b2a70fef` still declares `texture2d` (3 `texture2d`, 0 `texture3d`).
+
+**The reason is the instruction, not the table.** The Ampere texture sample takes its type from its own dimension field and never asks the table:
+
+```c
+// InstEmitAmpereMem.cs, ATex
+TexDim dim = ATexDim(context, x.Bits(61, 64));   // 0 _1d, 1 _2d, 2 _3d, 3 Cube, 4 Array1d, 5 Array2d, 7 ArrayCube
+SamplerType type = ConvertSamplerType(dim);
+```
+
+`QuerySamplerType` is reached only from the **Maxwell** `TEX` path (`InstEmitTexture.cs:1140`), from bindless handles (where the type is hardcoded 2D/3D by the query), and from `TXQ`. So an answer-table `tex` row is inert for every Ampere sample by construction — not a broken lookup, and not a cache hit. The two rows in `shader_facts_manual.tsv` should be dropped: they cannot take effect, and keeping them hides that.
+
+**What that leaves is the mismatch itself, and it points the other way from the earlier reading.** `d92d9b75e2cc7dad_b` declares slot 0 as 2D because the shader's own instruction says so; the game binds a 3D texture there (NVN target 2, Metal type 7, format 0x49). So the shader is *not* asking for a 3D read — the earlier "both programs really sample a 3D texture" was an inference from the bound descriptor, and the instruction contradicts it. The host's `tex_fit` already bridges "wants 3D, holds 2D" and "wants 2D, holds cube", but has no case for "wants 2D, holds 3D", so it falls through to `tex_mis_note(..., "bound as is")` and binds a 3D texture to a 2D sampler. The next question is whether the dimension field is being read correctly for these shaders (`x.Bits(61, 64)` against NAK's `sm70_encode.rs`), and whether the host should make a 2D view of the 3D texture — that is the shape the run's 20 mismatches take.
+
 ### Traps this hunt already paid for (do not re-chase)
 
 - **`Attribute offset 0x5C is not valid`** -- benign: no guest draw binds that offset, and it lies past every vertex stride. `tools/shader_notes.py` lists the keys behind any translator note without a retranslation.
