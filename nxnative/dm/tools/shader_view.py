@@ -9,6 +9,7 @@ about it, and the lines of MSL that matter.
 Usage:
   shader_view.py <chain-dir> <key> [--metal N] [--facts TSV] [--reflect]
   shader_view.py <chain-dir> --notes [PATTERN]      every program carrying a translator note
+  shader_view.py <chain-dir> --summary              how many programs carry each note, by stage
   shader_view.py <chain-dir> --list [PATTERN]       keys with stage and note count
 
   --metal N   also print the first N lines of <key>.metal (0 = all)
@@ -100,6 +101,23 @@ def main():
     facts = args[args.index('--facts') + 1] if '--facts' in args else None
     metal = int(args[args.index('--metal') + 1]) if '--metal' in args else 0
     reflect = '--reflect' in args
+    if key == '--summary':   # counts per note text and stage: which translator notes exist, and how many programs carry each
+        counts = {}
+        for k in load_chain(chain):
+            try:
+                j = json.load(open(os.path.join(chain, k + '.json')))
+            except Exception:
+                continue
+            if not isinstance(j, dict):
+                continue
+            st = j.get('stage', '?')
+            for n in (j.get('notes') or []):
+                counts[(st, n)] = counts.get((st, n), 0) + 1
+        total = len(load_chain(chain))
+        for (st, n), c in sorted(counts.items(), key=lambda kv: -kv[1]):
+            print('%5d  %-3s  %s' % (c, st, n))
+        print('%d programs in the chain' % total)
+        return
     if key == '--list' or key == '--notes':
         pattern = args[2] if len(args) > 2 and not args[2].startswith('--') else ''
         for k in load_chain(chain):
