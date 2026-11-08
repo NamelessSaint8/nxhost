@@ -1001,6 +1001,7 @@ static void gp_report(int n, gp_lab *lab, uint64_t frame) {   // the frame's las
 // commit's feedback handler); and the copy has to be encoded after the pass's render encoder is closed.
 static id<MTLTexture> g_passshot_tex; static uint64_t g_passshot_pass;
 static uint64_t g_watch_lo, g_watch_hi;   // a range a probe asked about (the world pass's indirect record): any storage binding covering it reports
+static char g_watch_key[24];              // the writable shader that binds that range: its dispatches report their thread counts
 static id<MTL4ComputeCommandEncoder> blit_open(void);   // the host's blit path: an MTL4 command buffer has no blitCommandEncoder
 static inline void enc_b_end(id e);
 static inline void enc_b_copy_texture_buffer(id e, id<MTLTexture> s, NSUInteger sl, NSUInteger lv, MTLOrigin o, MTLSize z,
@@ -7735,9 +7736,11 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             {   // a nameless watch: does any storage binding, of any stage, cover the range a probe is asking about?
                 static int reps; if (g_watch_lo && reps < 24 && u && u->addr &&
                     u->addr < g_watch_hi && u->addr + (u->size ? u->size : 1) > g_watch_lo) { reps++;
-                    MLOG("watch %#llx: bound by st %d shader %s reg %d %s addr %#llx size %llu", (unsigned long long)g_watch_lo,
+                    int ro = reg < 32 ? (int)((sh->sb_ro >> reg) & 1) : -1;
+                    if (b->rw && !ro && !g_watch_key[0] && sh->key[0]) strlcpy(g_watch_key, sh->key, sizeof g_watch_key);
+                    MLOG("watch %#llx: bound by st %d shader %s reg %d %s addr %#llx size %llu sb_ro %d", (unsigned long long)g_watch_lo,
                          nvn_stage, sh->key[0] ? sh->key : "?", reg, b->rw ? "rw" : "ro",
-                         (unsigned long long)u->addr, (unsigned long long)u->size); } }
+                         (unsigned long long)u->addr, (unsigned long long)u->size, ro); } }
             if (bl) PD("B %llu st%d sbufp reg%d %s addr=%#llx size=%llu %s", g_stat_pass, nvn_stage, reg, u && u->addr ? "real" : "dummy", u ? (unsigned long long)u->addr : 0ull, u ? (unsigned long long)u->size : 0ull, b->rw ? "rw" : "ro");
         } else if (b->kind == NVN_RB_SBUFU) {   // B: a storage buffer whose GPU address the game keeps in its own uniform buffer (Monster Hunter Rise's compute shaders: c3 + 0x38); read like a bindless handle
             uint64_t addr; ubo_read(nvn_stage, reg, b->off, 8, &addr);
@@ -10710,6 +10713,27 @@ static void dispatch(const p_dispatch *dp) {
     if (dp->ind) { static int once; if (!once++) MLOG("indirect dispatch: first time (the GPU reads the threadgroup counts from %#llx)", (unsigned long long)dp->ind); }
     NvShader *cs = prog_get(S.cprog)->sh[5];
     if (!cs) { RED_ONCE(28, "the dispatched program has no compute shader (or it is not mapped)"); return; }
+    {   // the shader that binds the watched range: what does it actually launch, and what do the indirect counts say?
+        static int reps; if (g_watch_key[0] && reps < 24 && cs->key[0] && !strcmp(cs->key, g_watch_key)) { reps++;
+            uint32_t a[3] = {0}; vm_size_t g = 0;
+            if (dp->ind) vm_read_overwrite(mach_task_self(), (vm_address_t)dp->ind, sizeof a, (vm_address_t)a, &g);
+            uint32_t w0[5] = {0}; if (g_watch_lo) memcpy(w0, (const void *)(uintptr_t)g_watch_lo, sizeof w0);   // the record as this dispatch starts
+            MLOG("watch dispatch %s: %s groups %u %u %u threads %u %u %u (ind %#llx reads %u %u %u); record before %u %u %u %d %u",
+                 cs->key, dp->ind ? "indirect" : "direct", dp->x, dp->y, dp->z, cs->rf.tg[0], cs->rf.tg[1], cs->rf.tg[2],
+                 (unsigned long long)dp->ind, a[0], a[1], a[2], w0[0], w0[1], w0[2], (int)w0[3], w0[4]);
+            {   // and after it: a nonzero change here is the kernel filling the record; no change says it writes elsewhere
+                uint64_t rec = g_watch_lo, ind = dp->ind; uint32_t *pa = calloc(3, sizeof *pa);
+                uint32_t *pw = calloc(5, sizeof *pw);   // a block cannot capture an array: w0 goes on the heap
+                if (pw) memcpy(pw, w0, 5 * sizeof *pw);
+                if (g_watch_lo && pw) [g_commit_blocks addObject:^{ uint32_t after[5] = {0}; vm_size_t h = 0;
+                    memcpy(after, (const void *)(uintptr_t)rec, sizeof after);
+                    MLOG("watch dispatch %s: record after %u %u %u %d %u%s", cs->key, after[0], after[1], after[2], (int)after[3], after[4],
+                         memcmp(after, pw, sizeof after) ? "  (changed)" : "  (unchanged)");
+                    if (pa && ind && vm_read_overwrite(mach_task_self(), (vm_address_t)ind, 12, (vm_address_t)pa, &h) == KERN_SUCCESS)
+                        MLOG("watch dispatch %s: indirect counts after the GPU read %u %u %u", cs->key, pa[0], pa[1], pa[2]);
+                    free(pa); free(pw); }];
+                else { free(pa); free(pw); }
+            } } }
     const void *k = (__bridge const void *)cs;
     id<MTLComputePipelineState> ps = hm_get_id(&g_cps, &k);
     if (!ps) {
