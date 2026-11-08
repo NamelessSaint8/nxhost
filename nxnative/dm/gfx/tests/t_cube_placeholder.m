@@ -3,9 +3,10 @@
 // zero cube without diagnosing the binding itself as a rendering error.
 // The same for a 3D input holding a 2D texture or 2D array (Batman: Arkham Knight's
 // volume slots): the zero 3D texture.
-// The reverse case — a 2D input holding a 3D texture — cannot be bridged: Metal refuses any view
-// whose source is a 3D texture (source texture textureType (MTLTextureType3D) not compatible with
-// texture view textureType (MTLTextureType2D)), so tex_fit returns nil and the slot binds as is.
+// The reverse case — a 2D input holding a 3D texture — cannot be bridged either way: Metal refuses
+// any view whose source is a 3D texture (source texture textureType (MTLTextureType3D) not
+// compatible with texture view textureType (MTLTextureType2D)), so tex_fit binds the zero 2D
+// texture, a defined read, as it does for the cases above.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -55,22 +56,34 @@ static void run_case(id<MTLTexture> descriptor, MTLTextureType want, id<MTLTextu
     }
 }
 // A 2D input holding a 3D texture cannot be bridged: Metal refuses a view whose source is a 3D
-// texture, so tex_fit returns nil (the caller reports "bound as is" and binds the volume). Assert
-// the refusal so a future Metal change that starts allowing it is noticed here, not in a game.
-static void run_case_2d(id<MTLTexture> descriptor) {
-    uint64_t rid = 1;   // non-zero: tex_fit must leave it untouched when it refuses
+// texture, so tex_fit binds the zero 2D texture. Assert the fallback and read it, so the slot is
+// proved to be a defined zero rather than an undefined sample of a mismatched volume.
+static void run_case_2d(id<MTLTexture> descriptor, id<MTLComputePipelineState> pipeline) {
+    unsigned before = errors(); uint64_t rid = 0;
     os_unfair_lock_lock(&g_rmu);
     id<MTLTexture> fitted = tex_fit(272, descriptor, MTLTextureType2D, &rid);
     os_unfair_lock_unlock(&g_rmu);
-    CHECK(!fitted, "a 3D descriptor in a 2D slot has no view: tex_fit returns nil");
-    CHECK(rid == 1, "no view means no resource ID, so the caller binds the volume as is");
+    CHECK(fitted && fitted.textureType == MTLTextureType2D, "a 3D descriptor in a 2D slot reads the zero 2D texture");
+    CHECK(rid == fitted.gpuResourceID._impl && rid != 0, "binding uses the zero 2D texture's own resource ID");
+    CHECK(errors() == before, "the zero fallback does not report a rendering error");
+    if (!fitted) return;
+    id<MTLBuffer> output = [g_dev newBufferWithLength:16 options:MTLResourceStorageModeShared];
+    memset(output.contents, 0xcd, 16);
+    id<MTLCommandBuffer> cb = [g_q commandBuffer]; id<MTLComputeCommandEncoder> encoder = [cb computeCommandEncoder];
+    [encoder setComputePipelineState:pipeline]; [encoder setTexture:fitted atIndex:0]; [encoder setBuffer:output offset:0 atIndex:1];
+    [encoder dispatchThreadgroups:MTLSizeMake(1,1,1) threadsPerThreadgroup:MTLSizeMake(1,1,1)];
+    [encoder endEncoding]; [cb commit]; [cb waitUntilCompleted];
+    CHECK(cb.status == MTLCommandBufferStatusCompleted && !cb.error, "GPU accepts the zero 2D texture as a texture2d");
+    const float *value = output.contents;
+    CHECK(value[0] == 0 && value[1] == 0 && value[2] == 0 && value[3] == 0, "the zero 2D texture reads zero");
 }
 int main(void) { @autoreleasepool {
     mtl_init(); NSError *error = nil;
     NSString *source = @"#include <metal_stdlib>\nusing namespace metal;\n"
         "kernel void cube(texturecube<float> a [[texture(0)]], texturecube<float> b [[texture(1)]], constant uint& select [[buffer(0)]], device float4* out [[buffer(1)]]) { constexpr sampler s(coord::normalized, filter::nearest); if (select) out[0] = b.sample(s,float3(0,0,1),level(0)); else out[0] = a.sample(s,float3(0,0,1),level(0)); }\n"
         "kernel void cubes(texturecube<float> a [[texture(0)]], texturecube_array<float> b [[texture(1)]], constant uint& select [[buffer(0)]], device float4* out [[buffer(1)]]) { constexpr sampler s(coord::normalized, filter::nearest); if (select) out[0] = b.sample(s,float3(0,0,1),0,level(0)); else out[0] = a.sample(s,float3(0,0,1),level(0)); }\n"
-        "kernel void volume(texture3d<float> a [[texture(0)]], texture3d<float> b [[texture(1)]], constant uint& select [[buffer(0)]], device float4* out [[buffer(1)]]) { constexpr sampler s(coord::normalized, filter::nearest); if (select) out[0] = b.sample(s,float3(0.5),level(0)); else out[0] = a.sample(s,float3(0.5),level(0)); }\n";
+        "kernel void volume(texture3d<float> a [[texture(0)]], texture3d<float> b [[texture(1)]], constant uint& select [[buffer(0)]], device float4* out [[buffer(1)]]) { constexpr sampler s(coord::normalized, filter::nearest); if (select) out[0] = b.sample(s,float3(0.5),level(0)); else out[0] = a.sample(s,float3(0.5),level(0)); }\n"
+        "kernel void flat(texture2d<float> a [[texture(0)]], device float4* out [[buffer(1)]]) { constexpr sampler s(coord::normalized, filter::nearest); out[0] = a.sample(s,float2(0.5),level(0)); }\n";
     id<MTLLibrary> library = [g_dev newLibraryWithSource:source options:nil error:&error];
     if (!library) { fprintf(stderr, "%s\n", error.localizedDescription.UTF8String); return 2; }
     id<MTLTexture> primary = texture(MTLTextureTypeCube, 1);
@@ -91,11 +104,13 @@ int main(void) { @autoreleasepool {
     if (!pipeline) { fprintf(stderr, "%s\n", error.localizedDescription.UTF8String); return 2; }
     const NSUInteger layer_counts[] = {0, 1, 5};
     for (int i = 0; i < 3; i++) run_case(texture(layer_counts[i] ? MTLTextureType2DArray : MTLTextureType2D, layer_counts[i] ?: 1), MTLTextureType3D, volume, pipeline);
-    // 2D slot holding a 3D texture: no view bridges it (see the note above), so tex_fit refuses and the
-    // caller binds the volume as is. A 3D texture's slice argument is the array index (always 0 here);
-    // the depth plane is the region's z.
+    // 2D slot holding a 3D texture: no view bridges it (see the note above), so tex_fit binds the zero 2D
+    // texture. A 3D texture's slice argument is the array index (always 0 here); the depth plane is the
+    // region's z, and the volume's own colour must not reach the slot.
     id<MTLTexture> volume3 = volume_texture(3);
     [volume3 replaceRegion:MTLRegionMake3D(0,0,0,1,1,1) mipmapLevel:0 slice:0 withBytes:blue bytesPerRow:4 bytesPerImage:4];
-    run_case_2d(volume3);
+    id<MTLComputePipelineState> flat = [g_dev newComputePipelineStateWithFunction:[library newFunctionWithName:@"flat"] error:&error];
+    if (!flat) { fprintf(stderr, "%s\n", error.localizedDescription.UTF8String); return 2; }
+    run_case_2d(volume3, flat);
     printf("cube and 3D placeholders: %d checks, %d failed\n", checks, failed); return failed != 0;
 } }
