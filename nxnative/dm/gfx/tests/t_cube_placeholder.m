@@ -3,6 +3,9 @@
 // zero cube without diagnosing the binding itself as a rendering error.
 // The same for a 3D input holding a 2D texture or 2D array (Batman: Arkham Knight's
 // volume slots): the zero 3D texture.
+// The reverse case — a 2D input holding a 3D texture — cannot be bridged: Metal refuses any view
+// whose source is a 3D texture (source texture textureType (MTLTextureType3D) not compatible with
+// texture view textureType (MTLTextureType2D)), so tex_fit returns nil and the slot binds as is.
 #include "../nvn/nvn_mtl.m"
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
@@ -17,6 +20,13 @@ static unsigned errors(void) {
 static id<MTLTexture> texture(MTLTextureType type, NSUInteger layers) {
     MTLTextureDescriptor *d = [MTLTextureDescriptor new];
     d.textureType = type; d.width = d.height = d.depth = 1; d.arrayLength = layers;
+    d.pixelFormat = MTLPixelFormatRGBA8Unorm; d.storageMode = MTLStorageModeShared; d.usage = MTLTextureUsageShaderRead;
+    return [g_dev newTextureWithDescriptor:d];
+}
+// A 3D texture of N depth planes: the descriptor a 2D slot cannot be given a view of.
+static id<MTLTexture> volume_texture(NSUInteger depth) {
+    MTLTextureDescriptor *d = [MTLTextureDescriptor new];
+    d.textureType = MTLTextureType3D; d.width = d.height = 1; d.depth = depth; d.arrayLength = 1;
     d.pixelFormat = MTLPixelFormatRGBA8Unorm; d.storageMode = MTLStorageModeShared; d.usage = MTLTextureUsageShaderRead;
     return [g_dev newTextureWithDescriptor:d];
 }
@@ -44,6 +54,17 @@ static void run_case(id<MTLTexture> descriptor, MTLTextureType want, id<MTLTextu
               select ? "selected fallback reads zero" : "unused incompatible descriptor leaves the real texture's blue output intact");
     }
 }
+// A 2D input holding a 3D texture cannot be bridged: Metal refuses a view whose source is a 3D
+// texture, so tex_fit returns nil (the caller reports "bound as is" and binds the volume). Assert
+// the refusal so a future Metal change that starts allowing it is noticed here, not in a game.
+static void run_case_2d(id<MTLTexture> descriptor) {
+    uint64_t rid = 1;   // non-zero: tex_fit must leave it untouched when it refuses
+    os_unfair_lock_lock(&g_rmu);
+    id<MTLTexture> fitted = tex_fit(272, descriptor, MTLTextureType2D, &rid);
+    os_unfair_lock_unlock(&g_rmu);
+    CHECK(!fitted, "a 3D descriptor in a 2D slot has no view: tex_fit returns nil");
+    CHECK(rid == 1, "no view means no resource ID, so the caller binds the volume as is");
+}
 int main(void) { @autoreleasepool {
     mtl_init(); NSError *error = nil;
     NSString *source = @"#include <metal_stdlib>\nusing namespace metal;\n"
@@ -70,5 +91,11 @@ int main(void) { @autoreleasepool {
     if (!pipeline) { fprintf(stderr, "%s\n", error.localizedDescription.UTF8String); return 2; }
     const NSUInteger layer_counts[] = {0, 1, 5};
     for (int i = 0; i < 3; i++) run_case(texture(layer_counts[i] ? MTLTextureType2DArray : MTLTextureType2D, layer_counts[i] ?: 1), MTLTextureType3D, volume, pipeline);
+    // 2D slot holding a 3D texture: no view bridges it (see the note above), so tex_fit refuses and the
+    // caller binds the volume as is. A 3D texture's slice argument is the array index (always 0 here);
+    // the depth plane is the region's z.
+    id<MTLTexture> volume3 = volume_texture(3);
+    [volume3 replaceRegion:MTLRegionMake3D(0,0,0,1,1,1) mipmapLevel:0 slice:0 withBytes:blue bytesPerRow:4 bytesPerImage:4];
+    run_case_2d(volume3);
     printf("cube and 3D placeholders: %d checks, %d failed\n", checks, failed); return failed != 0;
 } }
