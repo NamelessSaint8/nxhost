@@ -10267,9 +10267,12 @@ static void vattr_vals(const p_draw *dw, const p_draw_idx *di) {
 static void draw_(const p_draw *dw, const p_draw_idx *di) {
     // Diagnostic DM_VDRAW_SKIP=<shader key prefix>: drop the draws of one vertex program and let the rest of the frame run, so
     // "does this pass matter to the picture" is answered by two screenshots instead of by reasoning about the pass graph.
-    { static const char *skip; static int init;
-      if (!init) { init = 1; skip = getenv("DM_VDRAW_SKIP"); }
-      if (skip && *skip && g_vs_key[0] && !strncmp(g_vs_key, skip, strlen(skip))) return; }
+    { static char list[256]; static int init;
+      if (!init) { init = 1; const char *e = getenv("DM_VDRAW_SKIP"); if (e) snprintf(list, sizeof list, "%s", e); }
+      if (list[0] && g_vs_key[0]) {   // a comma list of key prefixes: skip the draws of any program that matches
+          for (char *t = list; *t; ) { while (*t == ',' || *t == ' ') t++;
+              if (!*t) break; char *e = t; while (*e && *e != ',') e++; size_t n = (size_t)(e - t);
+              if (n && !strncmp(g_vs_key, t, n)) return; t = e; } } }
     vdraw_log((int)g_stat_pass);
     vattr_vals(dw, di);
     // Diagnostic DM_VATTR_LOG=1: the guest's own vertex attribute table for this draw -- offset, stream and format per attribute, beside the vertex shader's key.

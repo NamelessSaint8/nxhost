@@ -74,15 +74,21 @@
       "key": "a6430615519b0e2f_b",
       "stage": "vertex",
       "measured": "0.0 % lit, 0 colours, 21 of 21 samples",
-      "notes": "empty in every frame sampled; either culled every time or writing nothing when it should",
-      "updated": "2026-11-07T00:00:00Z"
+      "notes": "draws at 640x360, not at 2048x1152, so a 2048x1152-only passshot can miss it; run-relative pass numbers make it look the same as a full-size pass in a dump listing",
+      "updated": "2026-11-07T00:00:00Z",
+      "object": "a 640x360 texture (ser 31384, fmt 56) that the frame later samples",
+      "group": "Offscreen buffer",
+      "how": "DM_VDRAW_SKIP=a6430615519b0e2f_b turns the whole window solid #ff00ff -- one colour, 100 % lit -- because the host paints magenta for an all-zero ASTC block, so this pass is load-bearing and its output is sampled later"
     },
     {
       "key": "8c4284bece28616f_b",
       "stage": "vertex",
       "measured": "0.0 % lit, 0 colours, 21 of 21 samples",
-      "notes": "empty in every frame sampled; one of the seven colour-pass programs, so it is expected to contribute something",
-      "updated": "2026-11-07T00:00:00Z"
+      "notes": "one of the seven colour-pass programs; skipping it changes nothing at this moment, which points at a scene variant the attract loop was not showing",
+      "updated": "2026-11-07T00:00:00Z",
+      "object": "not visible in the attract scene sampled",
+      "group": "Unknown",
+      "how": "DM_VDRAW_SKIP=8c4284bece28616f_b leaves the frame unchanged (27.6 % lit, sky over ground, 1,626 colours), so it is neither drawing the scene nor feeding anything this frame displays"
     }
   ]
 }
