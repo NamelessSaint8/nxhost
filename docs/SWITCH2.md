@@ -1000,6 +1000,20 @@ Every one disagrees. `pool_find` was checked and returned the correct pool with 
 
 **The world colour pass leaves its target completely empty, and the pass immediately before it had filled that same target.** So the clears are not the story and neither are the uniforms: `50a275e9d32af1c7_b` runs with a full colour mask, a full-target viewport and scissor, correct uniforms, 8,340 vertices and 586 draws, and writes nothing. The next question is the one this instrument was built for -- what that program's vertex stage emits -- and it is now measurable one pass at a time instead of inferred.
 
+### The world pass draws 18 indices across zero instances
+
+**Its draws are multi-draw-indirect, so `di->count` is 0 by construction and says nothing.** `DM_VATTR_VALS` now prints the argument record the draw reads (indexCount, instanceCount, firstIndex, baseVertex, baseInstance), and for `50a275e9d32af1c7_b` at the world pass:
+
+```
+vattr 50a275e9d32af1c7_b target 2048x1152 chmask 0xffffffff: 16 attrs, count 0, indexed,
+       mdi_cnt 0x85d32059c0 i 0 live 1, first 0
+  mdi record 0x85d32053c0: indexCount 18 instanceCount 0 firstIndex 0 baseVertex 0 baseInstance 0
+```
+
+**`indexCount 18` with `instanceCount 0` rasterises nothing.** That is the empty target: not a clear, not a transform, not a mask -- the pass asks the GPU for zero instances of eighteen indices, and the GPU duly draws nothing. It also explains why every other reading came out correct: the state *is* correct, and the vertex shader is never asked to run for an instance that does not exist.
+
+**Why the count is zero is the next question, and the asymmetry points at it.** An index count of 18 is static data the guest would write once; an instance count is the kind of number a GPU-driven cull updates every frame. So the two live candidates are (a) the title's own cull really did produce zero instances, and (b) the count is written by a dispatch whose result the draw never sees -- an ordering or aliasing fault on the host side. `DM_NVN_INDLOG` prints each indirect draw's arguments **at encode and again as the GPU left them**, which separates those two directly: if the pair is `18 0` both times, the guest never wrote a live count; if it changes, the write lands somewhere the draw does not read.
+
 **What the vertex stage is fed, for the record** (`DM_VATTR_VALS=6`): the prepass submits **8,340 indexed vertices** with attribute 0 at offset 0, stride 40, format 34, reading floats (`-0.301, 0.423, -0.044` at vertex 0), and binds `c5` at slot 2 as **2,688 bytes** -- 42 rows, enough for the `(w * 48) >> 4` row index its MSL computes as long as `w` stays under 56. The colour-pass program `50a275e9d32af1c7_b` binds 16 attributes over one stream of stride 8, with slot blocks 192 B at 11 and 12, 2,432 B at 1 and 43,456 B at 6.
 
 ### Traps this hunt already paid for (do not re-chase)
