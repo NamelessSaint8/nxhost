@@ -1000,7 +1000,7 @@ static void gp_report(int n, gp_lab *lab, uint64_t frame) {   // the frame's las
 // blitCommandEncoder (use blit_open/enc_b_copy_texture_buffer) and no addCompletedHandler (use g_commit_blocks, which runs in the
 // commit's feedback handler); and the copy has to be encoded after the pass's render encoder is closed.
 static id<MTLTexture> g_passshot_tex; static uint64_t g_passshot_pass;
-static uint64_t g_watch_lo, g_watch_hi;   // a range a probe asked about (the world pass's indirect record): any storage binding covering it reports
+static uint64_t g_watch_lo, g_watch_hi; static size_t g_watch_len;   // a range a probe asked about (the world pass's indirect record): any storage binding covering it reports
 static char g_watch_key[24];              // the writable shader that binds that range: its dispatches report their thread counts
 static id<MTL4ComputeCommandEncoder> blit_open(void);   // the host's blit path: an MTL4 command buffer has no blitCommandEncoder
 static inline void enc_b_end(id e);
@@ -7738,6 +7738,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
                     u->addr < g_watch_hi && u->addr + (u->size ? u->size : 1) > g_watch_lo) { reps++;
                     int ro = reg < 32 ? (int)((sh->sb_ro >> reg) & 1) : -1;
                     if (b->rw && !ro && !g_watch_key[0] && sh->key[0]) strlcpy(g_watch_key, sh->key, sizeof g_watch_key);
+                    if (u->size) g_watch_len = (size_t)u->size;
                     MLOG("watch %#llx: bound by st %d shader %s reg %d %s addr %#llx size %llu sb_ro %d", (unsigned long long)g_watch_lo,
                          nvn_stage, sh->key[0] ? sh->key : "?", reg, b->rw ? "rw" : "ro",
                          (unsigned long long)u->addr, (unsigned long long)u->size, ro); } }
@@ -10222,7 +10223,7 @@ static void vattr_vals(const p_draw *dw, const p_draw_idx *di) {
         uint64_t rec = di->ind + (uint64_t)di->mdi_i * 20;   // indexCount, instanceCount, firstIndex, baseVertex, baseInstance
         uint32_t r[5] = {0}; void *m; uint64_t o;
         if (mtl_addr(rec, sizeof r, &m, &o)) { const uint8_t *c = [(__bridge id<MTLBuffer>)m contents]; if (c) memcpy(r, c + o, sizeof r); }
-        if (!g_watch_lo) { g_watch_lo = rec; g_watch_hi = rec + sizeof r; }
+        if (!g_watch_lo) { g_watch_lo = rec; g_watch_hi = rec + sizeof r; }   // the block's size arrives with its binding
         static int nrep; if (nrep++ < 24)   // does anything write the record? a GPU storage-buffer write sets SBW_GPU on the page
             MLOG("  mdi record %#llx: indexCount %u instanceCount %u firstIndex %u baseVertex %d baseInstance %u | sbw_hits %d",
                  (unsigned long long)rec, r[0], r[1], r[2], (int)r[3], r[4], sbw_hits(rec, rec + sizeof r));
@@ -10721,18 +10722,21 @@ static void dispatch(const p_dispatch *dp) {
             MLOG("watch dispatch %s: %s groups %u %u %u threads %u %u %u (ind %#llx reads %u %u %u); record before %u %u %u %d %u",
                  cs->key, dp->ind ? "indirect" : "direct", dp->x, dp->y, dp->z, cs->rf.tg[0], cs->rf.tg[1], cs->rf.tg[2],
                  (unsigned long long)dp->ind, a[0], a[1], a[2], w0[0], w0[1], w0[2], (int)w0[3], w0[4]);
-            {   // and after it: a nonzero change here is the kernel filling the record; no change says it writes elsewhere
-                uint64_t rec = g_watch_lo, ind = dp->ind; uint32_t *pa = calloc(3, sizeof *pa);
-                uint32_t *pw = calloc(5, sizeof *pw);   // a block cannot capture an array: w0 goes on the heap
-                if (pw) memcpy(pw, w0, 5 * sizeof *pw);
-                if (g_watch_lo && pw) [g_commit_blocks addObject:^{ uint32_t after[5] = {0}; vm_size_t h = 0;
-                    memcpy(after, (const void *)(uintptr_t)rec, sizeof after);
-                    MLOG("watch dispatch %s: record after %u %u %u %d %u%s", cs->key, after[0], after[1], after[2], (int)after[3], after[4],
-                         memcmp(after, pw, sizeof after) ? "  (changed)" : "  (unchanged)");
+            {   // and after it: which words of the whole binding changed? A hit here says the kernel writes elsewhere in the block
+                size_t wl = g_watch_len ? g_watch_len : 20; if (wl > 4096) wl = 4096;
+                uint8_t *before = malloc(wl);   // blocks cannot capture arrays: the snapshots go on the heap
+                uint32_t *pa = calloc(3, sizeof *pa);
+                uint64_t rec = g_watch_lo, ind = dp->ind;
+                if (before) memcpy(before, (const void *)(uintptr_t)rec, wl);
+                if (before) [g_commit_blocks addObject:^{ vm_size_t h = 0; uint8_t *after = malloc(wl); int nchg = 0; char offs[320]; size_t o = 0;
+                    if (after) { memcpy(after, (const void *)(uintptr_t)rec, wl);
+                        for (size_t i = 0; i + 3 < wl; i += 4) { uint32_t x, y; memcpy(&x, before + i, 4); memcpy(&y, after + i, 4);
+                            if (x != y) { nchg++; if (nchg <= 6) o += (size_t)snprintf(offs + o, sizeof offs - o, " +%zu %u->%u", i, x, y); } } }
+                    MLOG("watch dispatch %s: block %zu bytes across the dispatch: %d words changed%s", cs->key, wl, nchg, offs);
                     if (pa && ind && vm_read_overwrite(mach_task_self(), (vm_address_t)ind, 12, (vm_address_t)pa, &h) == KERN_SUCCESS)
                         MLOG("watch dispatch %s: indirect counts after the GPU read %u %u %u", cs->key, pa[0], pa[1], pa[2]);
-                    free(pa); free(pw); }];
-                else { free(pa); free(pw); }
+                    (void)h; free(after); free(pa); free(before); }];
+                else { free(pa); free(before); }
             } } }
     const void *k = (__bridge const void *)cs;
     id<MTLComputePipelineState> ps = hm_get_id(&g_cps, &k);
