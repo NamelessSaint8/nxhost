@@ -1002,6 +1002,7 @@ static void gp_report(int n, gp_lab *lab, uint64_t frame) {   // the frame's las
 static id<MTLTexture> g_passshot_tex; static uint64_t g_passshot_pass;
 static uint64_t g_watch_lo, g_watch_hi; static size_t g_watch_len;   // a range a probe asked about (the world pass's indirect record): any storage binding covering it reports
 static char g_watch_key[24];              // the writable shader that binds that range: its dispatches report their thread counts
+static char g_vs_key[24];                 // the vertex program's key, copied when it is BOUND: a draw-time lookup through prog_get can name a shader that has since been released, and strcmp on that pointer faults (CRASH sig=10 in vfmt.log)
 static id<MTL4ComputeCommandEncoder> blit_open(void);   // the host's blit path: an MTL4 command buffer has no blitCommandEncoder
 static inline void enc_b_end(id e);
 static inline void enc_b_copy_texture_buffer(id e, id<MTLTexture> s, NSUInteger sl, NSUInteger lv, MTLOrigin o, MTLSize z,
@@ -7538,6 +7539,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
     static uint64_t bl_pass[6]; static int bl_all = -1; if (bl_all < 0) bl_all = getenv("DM_NVN_PASSDUMP_ALL") != NULL;   // Record on every new encode (otherwise only the first time per pass per stage)
     int bl = passdump() && (bl_all || g_kd_force || bl_pass[nvn_stage] != g_stat_pass);
     if (bl) { bl_pass[nvn_stage] = g_stat_pass; PD("K %llu st%d key=%s nb=%d", g_stat_pass, nvn_stage, sh->key[0] ? sh->key : sh->builtin ? sh->builtin : "?", sh->rf.nb); }
+    if (nvn_stage == 0) strlcpy(g_vs_key, sh->key[0] ? sh->key : sh->builtin ? sh->builtin : "?", sizeof g_vs_key);   // the draw-time probes read this instead of looking the shader up again
     uint32_t bmask = 0; float bk[DMSH_BORDER_SAMPLERS][4];   // the border colour block (see nvn_border.h): the twins that correct, their factors
     os_unfair_lock_lock(&g_rmu);   // The texture / sampler registration tables may be being grown or rewritten by the game thread
     for (int i = 0; i < sh->rf.nb; i++) {
@@ -10172,7 +10174,7 @@ static void vdraw_log(int pass) {
     static int last = -1;
     if (!on) return;
     NvProg *vpp = S.prog ? prog_get(S.prog) : nil;              // the vertex program this pass's first draw uses: eleven
-    const char *vkey = vpp && vpp->sh[0] ? vpp->sh[0]->key : "-";   // different full-mask passes a frame, so a size alone names none
+    const char *vkey = g_vs_key[0] ? g_vs_key : "-";   // the key copied at bind time: the program may name a released shader (see g_vs_key)
     if (R.rt.depth && R.rt.color[0]) vdraw_draw_watch(vkey);
     vdraw_every_pass(pass, vkey);
     if (!R.rt.depth || !R.rt.color[0] || pass == last) return;
@@ -10217,7 +10219,7 @@ static void vdraw_log(int pass) {
 static void vattr_vals(const p_draw *dw, const p_draw_idx *di) {
     static int n = -1; if (n < 0) { const char *e = getenv("DM_VATTR_VALS"); n = e ? atoi(e) : 0; if (n > 16) n = 16; }
     if (n <= 0) return;
-    NvProg *p = S.prog ? prog_get(S.prog) : nil; const char *k = p && p->sh[0] ? p->sh[0]->key : "-";
+    const char *k = g_vs_key[0] ? g_vs_key : "-";
     if (!vdraw_key_ok(k)) return;
     if (di && di->mdi_cnt) {   // a multi-draw reads its counts from the argument records: di->count is 0 and says nothing
         uint64_t rec = di->ind + (uint64_t)di->mdi_i * 20;   // indexCount, instanceCount, firstIndex, baseVertex, baseInstance
@@ -10267,8 +10269,7 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
     // "does this pass matter to the picture" is answered by two screenshots instead of by reasoning about the pass graph.
     { static const char *skip; static int init;
       if (!init) { init = 1; skip = getenv("DM_VDRAW_SKIP"); }
-      if (skip && *skip) { NvProg *pp = S.prog ? prog_get(S.prog) : nil;
-          if (pp && pp->sh[0] && pp->sh[0]->key[0] && !strncmp(pp->sh[0]->key, skip, strlen(skip))) return; } }
+      if (skip && *skip && g_vs_key[0] && !strncmp(g_vs_key, skip, strlen(skip))) return; }
     vdraw_log((int)g_stat_pass);
     vattr_vals(dw, di);
     // Diagnostic DM_VATTR_LOG=1: the guest's own vertex attribute table for this draw -- offset, stream and format per attribute, beside the vertex shader's key.
@@ -10276,7 +10277,7 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
     // AttributeMap returns 0 there), and whether the guest declares that offset is only visible in the per-draw state.
     { static int on = -1; if (on < 0) { const char *e = getenv("DM_VATTR_LOG"); on = e && atoi(e); }
       if (on > 0 && S.prog) {
-          NvProg *vp = prog_get(S.prog); const char *k = vp && vp->sh[0] ? vp->sh[0]->key : "-";
+          const char *k = g_vs_key[0] ? g_vs_key : "-";
           static char seen[400][24]; static int nseen;   // one entry per logged program; the cap below must not exceed it
           int nlive = 0; for (int a = 0; a < 16; a++) nlive += S.attr[a].fmt != 0;
           unsigned str0 = 0; for (int st = 0; st < 16; st++) if (S.stream[st].stride > str0) str0 = S.stream[st].stride;
