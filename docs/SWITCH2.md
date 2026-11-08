@@ -964,7 +964,22 @@ Every one disagrees. `pool_find` was checked and returned the correct pool with 
 
 **The world pass's own target is still empty, and is not even a host texture.** Reading the serial the pass line prints (`target 2048x1152 fmt 63 ser N`) with `texraw` answers `[texraw] ser=N: no host texture`; reading its depth serial (`fmt 260` = Depth32FloatS8) gives 37 MB of zeros at the documented `y*bpr + x*4` layout. A greedy `sed` over the pass line takes the *depth* serial, which is how the first attempt at this measured the depth target and reported "all zeros" for the colour -- pick the first `ser` field explicitly.
 
-**So the frame's picture does not come from the pass the log calls the world.** A `vdraw` line is printed only for passes that have both depth and colour, so a pass with no depth attachment is invisible to it -- and the target that holds the scene is exactly such a target, unnamed by any line. Naming which pass writes it is the next probe: log the colour target for *every* pass, not only the depth-bearing ones, then follow that target's consumer.
+**So the frame's picture does not come from the pass the log calls the world.** A `vdraw` line is printed only for passes that have both depth and colour, so a pass with no depth attachment is invisible to it -- and the target that holds the scene is exactly such a target, unnamed by any line.
+
+**`DM_VDRAW_ALLPASS=1` named it.** With that switch (and `DM_VDRAW_LOG=1`) the host prints one `vdraw2:` line per pass that has any colour target, with each attachment's size, format and serial -- 23,106 lines in a 36 s run. Joined to a `texdump` of the same frame (201 targets, 8 of them 2048x1152):
+
+| serial | fmt | depth | pass | vertex program | measured |
+|---|---|---|---|---|---|
+| 34025 | 63 | **no** | 27105 | `4cb2f674ba19f335_b` | **37.6 % lit, the scene** |
+| 34527 | 13 | no | 27056 | `afcc9dc69e53accb_b` | 100 % lit but **a flat `#808000` fill** |
+| 44715 | 63 | yes | 16590 | `1ee7ea5a03bdd780_b` | 41.7 % lit |
+| 44722 | 63 | yes | 16591 | `1ee7ea5a03bdd780_b` | 39.0 % lit |
+
+**The scene is `4cb2f674ba19f335_b` at 2048x1152 with no depth attachment** -- a pass the old line could never print -- and its grid is unmistakably a picture: bright sky along the top right (`d5d3c6`, `eaeae1`, `9dc3cb`), darker ground tones across the left and middle (`61655f`, `4a574d`, `232d29`). So the composite that reaches the window is not the world pass, and the world pass is not where the picture is made either.
+
+**A target that measures 100 % lit can be a flat fill.** Serial 34527 is a uniform `#808000` across all 2048x1152, so read "lit" beside the colour spread and the grid, never instead of them; a single percentage would have called that the picture.
+
+**The world program's own target stays unreadable that way.** `50a275e9d32af1c7_b` prints its target serial on every pass (46661, 46650, 46639 in the sampled frames), but `texraw` answers "no host texture" for it and it was not among the dumped frame's targets, so neither dump path reaches it. Dumping it at pass end, from the texture the host itself holds, is the next instrument.
 
 **What the vertex stage is fed, for the record** (`DM_VATTR_VALS=6`): the prepass submits **8,340 indexed vertices** with attribute 0 at offset 0, stride 40, format 34, reading floats (`-0.301, 0.423, -0.044` at vertex 0), and binds `c5` at slot 2 as **2,688 bytes** -- 42 rows, enough for the `(w * 48) >> 4` row index its MSL computes as long as `w` stays under 56. The colour-pass program `50a275e9d32af1c7_b` binds 16 attributes over one stream of stride 8, with slot blocks 192 B at 11 and 12, 2,432 B at 1 and 43,456 B at 6.
 
