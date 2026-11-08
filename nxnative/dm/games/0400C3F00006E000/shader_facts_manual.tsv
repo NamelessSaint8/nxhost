@@ -1,0 +1,10 @@
+# Hand-written translation query answers, merged over the generated shader_facts.tsv by shader_split.py.
+#
+# Each row is  key <TAB> {"tex":{"<slot>":"<type>"}}  (types: 2d 2darray cube cubearray 3d buffer 1d 1darray 2dms 2dmsarray).
+#
+# Why these two: the translator defaults a texture handle's dimension to 2D when the answer table has no
+# entry, and both programs then really sample a 3D texture. The host's own bind check reports it
+# ("declares slot 0 as Metal type 2, texture ID is type 7 (NVN target 2 ...); bound as is"), and a 3D
+# texture read through a texture2d is an undefined read, not a view Metal can make.
+39b8dddb6ebad571	{"tex":{"0":"3d"}}
+d92d9b75e2cc7dad	{"tex":{"0":"3d"}}
