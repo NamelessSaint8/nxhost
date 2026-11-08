@@ -1028,6 +1028,19 @@ mdi record 0x89a32053c0: ... instanceCount 0 ... | sbw_hits 0        (all 24 sam
 
 So a compute pass is meant to fill these counts, it binds the 1,536-byte record block at register 2 as `rw`, and **`sbw_hits` never reports a write to it**. Two explanations remain and they are separable: the dispatch runs but writes nothing (its own indirect thread count is zero -- a chain), or the write happens without being noted (`sbw_note` skips a slot the shader's `sb_ro` marks read-only, and a write through a different binding or an image store would not be seen). The next probe prints, at that binding, the `sb_ro` bit and the dispatch's thread count.
 
+**Both of those are now closed, and the record does not change at all.** The bind report gained `sb_ro`, and the watched shader's dispatches print their counts and the record before and after the GPU runs them:
+
+```
+watch 0x8472e053c0: bound by st 5 shader 3aa955bf42b91d65_b reg 2 rw ... sb_ro 0
+watch 0x8472e053c0: bound by st 5 shader fe9a852085e96077_b reg 2 ro ... sb_ro 1
+watch dispatch 3aa955bf42b91d65_b: direct groups 3 1 1 threads 32 1 1 ...; record before 18 0 0 0 0
+watch dispatch 3aa955bf42b91d65_b: record after 18 0 0 0 0  (unchanged)     (24 of 24)
+```
+
+`sb_ro 0` means the host does treat the slot as writable, so "the write was not noted because the shader marks it read-only" is wrong. `3 groups of 32` means the cull launches, so "the dispatch launches nothing" is wrong. And the record is **byte-identical before and after**, so this kernel -- the one that binds the record read-write -- does not write the record at all: it stores to its own output list (`cp_s3._m0[_588]` and `_m0[_592]` in its MSL, plus a counter at `cp_s1._m0[0]`).
+
+**What that leaves.** The record's `indexCount` is right and its `instanceCount` is 0, the one dispatch that binds the block does not touch it, and nothing else reports a write to its page. So either the record is filled by a shader the watch never saw write (a different binding, an image store, or a pass that runs before the watch was armed), or nothing fills it at all and the title expects these counts to arrive some other way. The next probe widens the comparison from the 20-byte record to the whole 1,536-byte block across that dispatch, which distinguishes "this kernel writes elsewhere in the block" from "this kernel writes nothing here".
+
 **What the vertex stage is fed, for the record** (`DM_VATTR_VALS=6`): the prepass submits **8,340 indexed vertices** with attribute 0 at offset 0, stride 40, format 34, reading floats (`-0.301, 0.423, -0.044` at vertex 0), and binds `c5` at slot 2 as **2,688 bytes** -- 42 rows, enough for the `(w * 48) >> 4` row index its MSL computes as long as `w` stays under 56. The colour-pass program `50a275e9d32af1c7_b` binds 16 attributes over one stream of stride 8, with slot blocks 192 B at 11 and 12, 2,432 B at 1 and 43,456 B at 6.
 
 ### Traps this hunt already paid for (do not re-chase)
