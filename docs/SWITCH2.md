@@ -958,7 +958,7 @@ Every one disagrees. `pool_find` was checked and returned the correct pool with 
 
 ### The screen has a sky; the pass called "the world" still writes an empty, unregistered target
 
-**A clean run -- every probe off -- shows a scene.** 2026-11-07, `DM_WINDOW=1`, no `DM_VDRAW_*`, no `DM_VATTR_VALS`: `nxnative/dm/tools/pngstat.py` measures `shots/clean1.png` at **27.6 % lit pixels over 1,647 coarse colours**, with the coarse histogram topped by `#006688`, `#005588` and `#004477` (sky) over `#aa6644`, `#999944` and `#aa9955` (ground and karts). So the sky and the coloured particles are not an artefact of instrumentation: the same frame appears when nothing is switched on.
+**A clean run -- every probe off -- is lit, but the 27.6 % frame is a 2D loading map, not sky over ground.** 2026-11-07, `DM_WINDOW=1`, no `DM_VDRAW_*`, no `DM_VATTR_VALS`: `nxnative/dm/tools/pngstat.py` measures `shots/clean1.png` at **27.6 % lit pixels over 1,647 coarse colours**, histogram-topped by `#006688`, `#005588`, `#004477` above `#aa6644`, `#999944`, `#aa9955`. That was read as sky over ground; scanning the frame in 128-row bands shows **no horizon at all** -- every band mixes blue (23-79 %) with tan (6-61 %), the bottom band alone reaching 79 % blue -- which is an illustrated map's ocean and islands, not a sky line. The driven runs settle it: `drive-1..3.png` carry the same 27.6 % / 1,600-colour histogram and are the World Map loading screen (logo and loading wheel), while the title/attract frames are the darker `#ffffff`-topped ones. So the frame is *lit* (the conclusion that matters), but it is a loading screen: it cannot be evidence about the 3D sky, and it precedes the shader work entirely.
 
 **Two things the same runs measure.** The content occupies only the **top-left 53 %** of the 3840x2160 window -- 2048/3840 and 1152/2160 -- so the present path is placing the 2048x1152 image 1:1 instead of scaling it; the rest of the window is black, which is why a single eyeball can read "black screen" from a frame that has a picture in it. And a `texdump` frame contains a 2048x1152 colour target at **94.1 % lit with no black grid cell**, whose serial appears in **no** `vdraw` line at all.
 
@@ -1114,8 +1114,25 @@ First real run: that line appears **once**, and `[RED] texture type mismatch` is
 
 **The sound was the app, not the host.** A Metal test binary opens no audio device; the noise stopped when the app hosting the session was restarted, and no `dmhost` was running at the time.
 
+### Driving into a Grand Prix stops on the first picture of a 2560x1440 VP9 movie
+
+A driven run (`drive2.log`) got past the title, Cup Select (Mushroom Cup), "Start Grand Prix? OK" and the fade, and then froze. The sequence is in the codec log:
+
+```
+frame 1778 (97.51 s)  [codec] VP9 decoder 1: 2560x1440, input format 3, output format 3 (libvpx on the host)
+                      [codec] VP9 decoder 1: first picture 2560x1440 into buffer 0
+```
+
+and then nothing: no `end of stream` for that decoder through frame 3172 (121 s), where the 640x360 menu preview before it had ended normally (`end of stream after 900 pictures`). `race-50.png` (99.0 s) and `race-60.png` (109.0 s) are **byte-identical** (`md5 1104f3b2…`, 286,974 B): the game keeps submitting draws on a frozen picture, with the `ムービー入力読込` (MovieInputRead) thread spinning.
+
+In `hle_codec_video.c` a decoded picture is held until the client releases a buffer and asks for its properties, so one picture plus no end-of-stream means the handshake stopped after that first buffer: either the client stopped releasing buffers or the host stopped taking packets. The log cannot tell those apart yet — the next probe is a counter on both sides of that handshake, not another picture capture.
+
+**Open alongside it: a quarter-size tile in the top-left of the frame.** In both a 2D map frame and a 3D attract frame, the top-left **512x288** block differs markedly from the rest of the top band (mean colour `(78,91,84)` vs `(107,118,91)`, and `(68,102,84)` vs `(107,120,112)`). 512x288 is exactly 2048x1152 divided by four, which is the signature of a pass drawing at quarter resolution into the target's corner — the same shape at two different scenes makes it a host artefact, not scene content.
+
 ### Traps this hunt already paid for (do not re-chase)
 
+- **`DM_CTL` takes bare button names** (`A`, `L+R`, `A~0.5`), not `key A`: `dm_ctl_exec` has no command prefix, so every `key A` line logged `[RED] DM_KEYS unknown key name: key A` and pressed mask 0. MKW's title also asks for **`L+R`**, not `A`. A scripted run that "did nothing" may be pressing nothing.
+- **A rebuild after a same-minute `git checkout` restore can be skipped**: the restored file's mtime can be older than the object `make` compares it with, so the binary silently keeps the old build. `touch` the file before `make`, then `grep -ac <the new log string> dmhost` and check the timestamp before trusting a run.
 - **`Attribute offset 0x5C is not valid`** -- benign: no guest draw binds that offset, and it lies past every vertex stride. `tools/shader_notes.py` lists the keys behind any translator note without a retranslation.
 - **`N` in `nvn_fmt_mtl.c`** is a *texture* verdict; `vfmt()` is the vertex table and covers both leftovers (`0x22` -> `Float3`, `0x69` -> `Int1010102Normalized`, now CPU-unpacked).
 - **Metal has no usable sparse placement here**: `MTLHeapTypeSparse` places nothing, `MTLHeapTypePlacement` places densely. The 8K arrays stay dense; their footprint is understood, not fixable by API.
