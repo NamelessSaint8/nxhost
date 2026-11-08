@@ -1,15 +1,15 @@
 {
   "title": "0400C3F00006E000",
   "game": "Mario Kart World",
-  "notes": "Native Mac host, shader chain e768d85cea2b. One entry per vertex/compute program the frame actually runs. 'object' is filled only where a picture A/B with DM_VDRAW_SKIP=<key prefix> proved what disappears; 'measured' is what the pass-end dump (DM_VDRAW_PASSSHOT at 2048x1152) showed. lit% is over a 9-pixel-stride sample of the whole target, decoded per Metal format by nxnative/dm/tools/pass_inventory.py; a value of 0 means the target was cleared and nothing was written.",
+  "notes": "Native Mac host, shader chain e768d85cea2b. Each chain <key>.json carries pc_paired: the game's own shader name, read with nxnative/dm/tools/shader_view.py -- that names a program without needing a picture A/B, and the A/B then says what it does. 'object' is filled only where a skip test proved what disappears; 'measured' is what the pass-end dump showed.",
   "schema": "same shape as Eglantine's tools/nx2/catalog/<title>.json: key, stage, object, group, how, notes, updated",
   "programs": [
     {
       "key": "50a275e9d32af1c7_b",
       "stage": "vertex",
-      "object": "the world itself: sky, ground and track",
+      "object": "DriveRefreshUber.Procedural",
       "group": "World",
-      "how": "DM_VDRAW_SKIP=50a275e9d32af1c7_b takes the frame from 27.6 % lit (sky #006688 over ground #aa6644/#999944) to 2.1 % (white UI on black)",
+      "how": "DM_VDRAW_SKIP=50a275e9d32af1c7_b takes the frame from 27.6 % lit (sky #006688 over ground #aa6644/#999944) to 2.1 % (white UI on black); named by the chain reflection's pc_paired",
       "notes": "multi-draw-indirect: di->count is 0 by construction and the counts live in the argument records; 27,068 of 27,192 records carry instanceCount 0, which is the cull discarding entries, not a dead pass",
       "updated": "2026-11-07T00:00:00Z"
     },
@@ -18,50 +18,62 @@
       "stage": "vertex",
       "measured": "25.0 % lit, 357 coarse colours (fmt 92 RG11B10Float), 21 samples",
       "notes": "the richest 2048x1152 colour target in the sampled frames",
-      "updated": "2026-11-07T00:00:00Z"
+      "updated": "2026-11-07T00:00:00Z",
+      "object": "DrivePassShaderDefault",
+      "group": "Track",
+      "how": "named by the chain reflection's pc_paired"
     },
     {
       "key": "7eb55d684ac7fa92_b",
       "stage": "vertex",
       "measured": "7.1-7.9 % lit, 314 coarse colours, 20 samples",
-      "updated": "2026-11-07T00:00:00Z"
+      "updated": "2026-11-07T00:00:00Z",
+      "notes": ""
     },
     {
       "key": "2e043846cdf189a5_b",
       "stage": "vertex",
       "measured": "6.9-8.3 % lit, 154 colours (fmt 92) and 0.3-0.4 % (fmt 70), 60 samples",
-      "updated": "2026-11-07T00:00:00Z"
+      "updated": "2026-11-07T00:00:00Z",
+      "notes": ""
     },
     {
       "key": "9f7ba8701e00db47_b",
       "stage": "vertex",
       "measured": "6.9-7.9 % lit, 151 colours, 20 samples",
-      "updated": "2026-11-07T00:00:00Z"
+      "updated": "2026-11-07T00:00:00Z",
+      "notes": ""
     },
     {
       "key": "5e19bc12fb2c2e23_b",
       "stage": "vertex",
       "measured": "5.1-6.0 % lit, 50 colours, 21 samples",
-      "updated": "2026-11-07T00:00:00Z"
+      "updated": "2026-11-07T00:00:00Z",
+      "notes": ""
     },
     {
       "key": "a032c25f0e940a2f_b",
       "stage": "vertex",
       "measured": "5.1-6.0 % lit, 50 colours, 12 samples",
-      "updated": "2026-11-07T00:00:00Z"
+      "updated": "2026-11-07T00:00:00Z",
+      "notes": ""
     },
     {
       "key": "42b50d8a5833e3c2_b",
       "stage": "vertex",
       "measured": "25.0 % lit but only 36 coarse colours (fmt 70 RGBA8), 21 samples",
       "notes": "a broad dim field rather than an image -- candidate for a buffer read by a later pass, not a displayed stage",
-      "updated": "2026-11-07T00:00:00Z"
+      "updated": "2026-11-07T00:00:00Z",
+      "object": "DrivePassShaderDefault",
+      "group": "Track",
+      "how": "named by the chain reflection's pc_paired"
     },
     {
       "key": "97c9b39cd1b2ef6b_b",
       "stage": "vertex",
       "measured": "12.7 % lit, 28 colours (fmt 30 RG8Unorm), 21 samples",
-      "updated": "2026-11-07T00:00:00Z"
+      "updated": "2026-11-07T00:00:00Z",
+      "notes": ""
     },
     {
       "key": "255f2300cfb054aa_b",
@@ -76,19 +88,19 @@
       "measured": "0.0 % lit, 0 colours, 21 of 21 samples",
       "notes": "draws at 640x360, not at 2048x1152, so a 2048x1152-only passshot can miss it; run-relative pass numbers make it look the same as a full-size pass in a dump listing",
       "updated": "2026-11-07T00:00:00Z",
-      "object": "a 640x360 texture (ser 31384, fmt 56) that the frame later samples",
-      "group": "Offscreen buffer",
-      "how": "DM_VDRAW_SKIP=a6430615519b0e2f_b turns the whole window solid #ff00ff -- one colour, 100 % lit -- because the host paints magenta for an all-zero ASTC block, so this pass is load-bearing and its output is sampled later"
+      "object": "agl_common (Nintendo AGL library shader)",
+      "group": "AGL / library",
+      "how": "DM_VDRAW_SKIP=a6430615519b0e2f_b turns the whole window solid #ff00ff -- one colour, 100 % lit -- because the host paints magenta for an all-zero ASTC block, so this pass is load-bearing and its output is sampled later; named by the chain reflection's pc_paired"
     },
     {
       "key": "8c4284bece28616f_b",
       "stage": "vertex",
       "measured": "0.0 % lit, 0 colours, 21 of 21 samples",
-      "notes": "one of the seven colour-pass programs; skipping it changes nothing at this moment, which points at a scene variant the attract loop was not showing",
+      "notes": "the kart/vehicle shader: skipping it left the attract frame unchanged (27.6 % lit), which means the sampled moment had no vehicle on screen -- not that the program is dead",
       "updated": "2026-11-07T00:00:00Z",
-      "object": "not visible in the attract scene sampled",
-      "group": "Unknown",
-      "how": "DM_VDRAW_SKIP=8c4284bece28616f_b leaves the frame unchanged (27.6 % lit, sky over ground, 1,626 colours), so it is neither drawing the scene nor feeding anything this frame displays"
+      "object": "DriveRefreshUber.Driver_Vehicle",
+      "group": "Karts",
+      "how": "DM_VDRAW_SKIP=8c4284bece28616f_b leaves the frame unchanged (27.6 % lit, sky over ground, 1,626 colours), so it is neither drawing the scene nor feeding anything this frame displays; named by the chain reflection's pc_paired"
     }
   ]
 }
