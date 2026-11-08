@@ -10069,6 +10069,25 @@ static void vdraw_draw_watch(const char *vkey) {
                  R.rt.color[0]->d.width, R.rt.color[0]->d.height, S.chmask, k, (unsigned long long)u->addr,
                  (unsigned long long)u->size, (unsigned long long)(u->size / 16), h); }
         if (--cap == 0) { MLOG("vdraw: DM_VDRAW_DRAWS cap reached, later bindings not shown"); return; } } }
+// DM_VDRAW_ALLPASS=1 (with DM_VDRAW_LOG=1): one line for every pass with a colour target, depth or not. The pass line below is
+// printed only when a pass has BOTH attachments, so the pass that writes the frame's picture -- a 2048x1152 target measured as
+// the scene, with sky in one corner and ground tones in the other -- is invisible to it whenever that pass has no depth
+// attachment. "vdraw2:" is a separate prefix so the existing parsers keep matching their own line. n is the attachment count.
+// The switch is its own variable rather than "DM_VDRAW_LOG >= 2" because, testing the caller's derived local, clang folded the
+// branch away and the format string never reached the binary -- which reads exactly like "the probe printed nothing".
+static void vdraw_every_pass(int pass, const char *vkey) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("DM_VDRAW_ALLPASS"); on = e && atoi(e); }
+    static int last_any = -1;
+    if (!on || !R.rt.color[0] || pass == last_any) return;
+    last_any = pass;
+    char t[640]; size_t o = 0;
+    int nc = (int)R.rt.n; if (nc > 8) nc = 8;
+    for (int i = 0; i < nc; i++) { const tex_t *ct = R.rt.color[i]; if (!ct) continue;
+        o += (size_t)snprintf(t + o, sizeof t - o, " %d:%ux%u fmt %u ser %llu", i, ct->d.width, ct->d.height, ct->d.format,
+                              (unsigned long long)ct->serial); }
+    MLOG("vdraw2: pass %d vs %s depth %s n%u targets%s chmask %#x", pass, vkey, R.rt.depth ? "yes" : "no", R.rt.n, t, S.chmask);
+}
 static void vdraw_log(int pass) {
     static int on = -1; if (on < 0) { const char *e = getenv("DM_VDRAW_LOG"); on = e && atoi(e); }
     static int last = -1;
@@ -10076,6 +10095,7 @@ static void vdraw_log(int pass) {
     NvProg *vpp = S.prog ? prog_get(S.prog) : nil;              // the vertex program this pass's first draw uses: eleven
     const char *vkey = vpp && vpp->sh[0] ? vpp->sh[0]->key : "-";   // different full-mask passes a frame, so a size alone names none
     if (R.rt.depth && R.rt.color[0]) vdraw_draw_watch(vkey);
+    vdraw_every_pass(pass, vkey);
     if (!R.rt.depth || !R.rt.color[0] || pass == last) return;
     last = pass;
     MLOG("vdraw: pass %d vs %s target %ux%u fmt %u ser %llu | depth %ux%u fmt %u ser %llu | ds dt%d dw%d df%d st%d | chmask %#x | vp %.0f,%.0f %.0fx%.0f | sc %s %d,%d %dx%d",
