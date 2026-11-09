@@ -47,6 +47,10 @@ DM_MSL_DIR=$W/shader/metal_cache DM_MEM_CAP_GB=48 DM_ROMFS="…/dump/romfs" DM_S
 with `$W` this title's work tree (`.gamedump/OcarinaOfTime/` here) and `patched/` written by `dm/tools/patch_nso.py` for all four modules. The dump's
 `main` is ZBIC-compressed (NSO flag bit 7), so the tooling needs the optional `zbic` package.
 
+The shader build needs `TMPDIR` set to the work tree: `dmsh_build.py` puts its intermediate MSL under the system temp, and at this title's 56,339
+programs that is several GB in `/var/folders` (measured: about 5.8 GB of a run in progress, and 19 GB left behind by two runs that were stopped). With
+`TMPDIR=$W/tmp/dmsh` it stays on the external volume, and the build's content-addressed cache makes a restart cheap.
+
 ## Shaders
 
 Census (`nvn2_shader_census.py`, after the dictionary fix):
