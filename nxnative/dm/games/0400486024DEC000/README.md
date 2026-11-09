@@ -2,13 +2,17 @@
 
 A Switch 2 title, dumped loose as `exefs/` (`main` 29.9 MB, `sdk` 7.8 MB, `subsdk0` 533 KB, `rtld`) and `romfs/` (25 GB) from update **1.1.1**
 (`Product.100`/`Product.111` tables, `RegionLangMask.txt` `111`). Nintendo EPD's engine (Nin_Ounce: sead / agl / gsys, Phive), SDK **22.2.8** (the `sdk`
-names its spec `Ounce`), NVN2 with Ampere shaders. **The host boots it to `nnMain` and its first NVN2 frame setup**; the shader map and the pipeline
-build are the next gate.
+names its spec `Ounce`), NVN2 with Ampere shaders. **The host boots it to `nnMain` and its first NVN2 frame setup**; the next gate is the Switch 2
+audio device manager (`auddmg:u`), not shaders — the 2,376 libraries the boot asks for now load (2,324 built, 52 refused task/mesh).
 
 Reference: `NX2navi-0.5.0` beside the dump is a static recompilation of this game (v1.1.1) to Windows x86-64 with a Vulkan renderer. It is read for
 **what the game asks of the SDK** — its architecture notes enumerate the services it had to serve (`fs`, `hid`, the audio renderer, `nn::codec`
 movies, applet/account, the three-core scheduler) and the NVN2 commands it replays. Its additions are all rights reserved and its code is not copied
 here; only the facts about the title are used.
+
+**Target order (2026-11-09): Android first, Metal/Mac second.** The Mac host is the only one executing this title today, so it stays the instrument
+for finding walls; the Android side then needs the Vulkan shader bundle built from the same package, an `android.tsv` for this profile, and a memory
+answer on the tablet (15.2 GB usable against the 12 GiB layout the title sizes itself from and the 6.22 GB heap it asks for).
 
 ## What it needs
 
@@ -33,9 +37,19 @@ The 2026-11-09 run reaches `nnMain` and the first NVN2 setup. Two steps stopped 
    `nvnDeviceGetInteger` answered API **231.40** (SDK 22, Switch 2), a 2560x1440 swap chain of 3 textures at interval 1 was created, the address
    regions were allocated, and CPU-written textures (serials 27–44) uploaded through the Metal layer.
 
-With the split in place (56,339 programs) and the full translation build still running, the next run goes further: 5,698 SVCs, then **2,376 shader
-libraries** requested, then the game's own `nn::diag abort` (Result `0xa99`, call site `sdk+0x1f61ac`). That abort is expected while those libraries do
-not exist — it is the wall the build removes — and it says nothing yet about the title's own code or the host's NVN2 path.
+3. **The 2,376 libraries it asks for are not the wall** (measured 2026-11-09, correcting the first reading). A targeted build of exactly the requested
+   keys produced **2,324 of 2,376**; the 52 misses are all `Ampere 927 … task/mesh`. Booting on that cache gave **0 load failures** and the game aborted
+   at the same `Result 0xa99` / `sdk+0x1f61ac`. The abort was never the missing libraries.
+4. **`auddmg:u` is the wall.** Immediately before the abort the log says
+   `[RED] sf: the game connects to service auddmg:u itself, which the host does not serve` — the Switch 2 audio device manager, a service the SDK does
+   not proxy through its own registration. Its connect returned `ResultNotRegistered` and the title aborted. Serving the session and the HIPC close moves
+   the failure one step later: `auddmg:u` command 0 (`OpenVirtualDeviceManager`) returns an **object/handle**, this host's generic session answers objects
+   and handles with zeros, and the client dereferences null (`SIGSEGV at sdk+0x2ace08`, then inside the abort path at `sdk+0x2abf00`).
+
+The reference port's `auddmg:u` shows what the manager answers afterwards: command 0 opens the manager, then `0` lists virtual output devices, `100`
+returns the default output device's name, `300` checks a stream format, `401` returns a 0x228-byte properties block (a game this size sizes its mix from
+it), `500` hands out a state-change event, and `700`/`800` attach and detach streams. So the next step on this title is a real service, not another
+shader.
 
 The modules rewrite as they are: `main` 48,889 plain sites, 861 conditional, 1,264 `tpidr` and 66 spin waits; `sdk` with 2 registered cuts, 5
 observation gates and 57 SVC sites; `subsdk0` and `rtld`. The SDK's `AddressRegionManager node area 1 GB → 62 MB` patch matches; the
@@ -85,9 +99,10 @@ split and built in the background rather than inline in a probe.
 
 ## Open
 
-- The shader map and the first full translation/pipeline build: 122,083 stage programs is a long build, and the 845 task/mesh programs stay refused
-  until this host has a task/mesh pipeline.
-- How far past the first frame the title gets: nothing after the shader map has run yet.
+- **`auddmg:u`**: the session is served and a HIPC close is accepted, but command 0's returned object is not. This host's generic session answers with
+  zeros and no handles, and the client dereferences that null. The manager's commands and its 0x228-byte properties block are described in the reference
+  port's note; implementing them is the next step on this title.
+- The full translation build (the rest of the 56,339 programs) and the 845 task/mesh programs, which stay refused until this host has a task/mesh pipeline.
 - The 38 unimplemented Ampere instructions (`243`, `f8c`, `3a9`).
 - Memory: the 6.22 GB heap is the measured number; the game's `System/HeapSize` table is still unread, and the 12 GiB console layout the title plans
   from is not modelled.

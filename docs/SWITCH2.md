@@ -180,9 +180,12 @@ them compute. 122,083 stage programs is about ten times Mario Kart World's 11,60
 1, allocates its address regions and uploads CPU-written textures. The dump's `main` is ZBIC-compressed, so the tooling needs the optional `zbic`
 package; its `sdk` is `nnSdk-Generic_22_2_8`, newer than Mario Kart World's SDK 21.4.0 and Donkey Kong Bananza's 20.5.19.
 
-The split then finished (56,339 unique programs, 39,776 variation pairs) and the full translation build started. Against the partial cache the run made
-5,698 SVCs, asked for **2,376 shader libraries** and stopped on its own `nn::diag abort` (Result `0xa99`, call site `sdk+0x1f61ac`) — expected while
-those libraries do not exist, and the wall the build removes.
+The split then finished (56,339 unique programs, 39,776 variation pairs). **Correction, 2026-11-09: the 2,376 libraries were not the wall.** A targeted
+build of exactly the requested keys produced **2,324 of 2,376** (all 52 misses are `Ampere 927` task/mesh); booting on that cache gave **0 load
+failures** and the same `nn::diag abort` (Result `0xa99`, `sdk+0x1f61ac`). The line immediately before it is `[RED] sf: the game connects to service
+auddmg:u itself, which the host does not serve` — the Switch 2 audio device manager, which the SDK does not register. Serving the session and its HIPC
+close moves the failure one step on: `auddmg:u` command 0 returns an object, the host's generic session answers objects and handles with zeros, and the
+client dereferences null (`SIGSEGV at sdk+0x2ace08`). The manager's command set is recorded in the profile note; the title still has not drawn a frame.
 
 The census is `devtools/nvn2_shader_census.py "/Volumes/Data/Switch/Zelda Ocarina of Time/dump" --json .gamedump/OcarinaOfTime/census.json` (8m37s on
 this Mac), and `dm/tools/tests/test_zs_dict.py` covers the dictionary path with a synthetic pack.
