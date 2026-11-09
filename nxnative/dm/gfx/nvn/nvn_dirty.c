@@ -35,6 +35,7 @@ typedef struct { uintptr_t base, end, mem; _Atomic uint8_t *state; _Atomic uint6
 static _Atomic(range_t *) g_blk[NBLK];
 static inline range_t *rg(int i) { return &atomic_load_explicit(&g_blk[i >> BLK_SHIFT], memory_order_acquire)[i & (BLK - 1)]; }
 static _Atomic int g_nr;
+static _Atomic uint64_t g_lookup_epoch=1;   // registrations / retirements invalidate per-thread lookup hints, including overlapping reused slots
 static uintptr_t g_pg, g_shift;
 static _Atomic uint64_t g_now = 1;
 static _Atomic uint64_t g_faults, g_preps, g_released;
@@ -70,8 +71,18 @@ static int busy_wait(range_t *r, uintptr_t p) {
 static int live_at(int i) { return atomic_load_explicit(&rg(i)->live, memory_order_acquire); }
 // The registered range that holds all of [a, a+len) (used for a texture's tracking / protection / dirty check)
 static range_t *find_span(uintptr_t a, size_t len) {
+    static _Thread_local struct { range_t *range; uint64_t epoch; uintptr_t lo,hi,a; size_t len; int exact; } hint;
+    uint64_t epoch=atomic_load_explicit(&g_lookup_epoch,memory_order_acquire);
+    if(hint.range && hint.epoch==epoch && atomic_load_explicit(&hint.range->live,memory_order_acquire) &&
+       (hint.exact ? a==hint.a && len==hint.len : a>=hint.lo && a+len<=hint.hi))return hint.range;
+    // An earlier range that overlaps only part of this query must still win a later smaller query.
+    // Cache a broad interval only where no earlier live range can match; otherwise cache this exact query.
+    uintptr_t lo=0,hi=UINTPTR_MAX;int exact=0;
     int n = atomic_load(&g_nr);
-    for (int i = 0; i < n; i++) { range_t *r = rg(i); if (live_at(i) && a >= r->base && a + len <= r->end) return r; }
+    for (int i = 0; i < n; i++) { range_t *r = rg(i);if(!live_at(i))continue;
+        if(a>=r->base && a+len<=r->end){hint.range=r;hint.epoch=epoch;hint.lo=lo>r->base?lo:r->base;hint.hi=hi<r->end?hi:r->end;hint.a=a;hint.len=len;hint.exact=exact;return r;}
+        if(r->end<=a){if(r->end>lo)lo=r->end;}else if(r->base>=a+len){if(r->base<hi)hi=r->base;}else exact=1;
+    }
     return NULL;
 }
 static void stamp_page(range_t *r, uintptr_t p) {
@@ -234,6 +245,7 @@ void nvn_dirty_add_range(const void *mem, size_t size) {
     r->base = base; r->end = end; r->mem = (uintptr_t)mem; r->state = state; r->gen = gen; atomic_store(&r->nmp, 0); atomic_store(&r->prep, 0); atomic_store(&r->last, 0);
     if (slot == n) atomic_store(&g_nr, n + 1);
     atomic_store_explicit(&r->live, 1, memory_order_release);
+    atomic_fetch_add_explicit(&g_lookup_epoch,1,memory_order_release);
     pthread_mutex_unlock(&g_slot_mu);
 }
 // Pool destruction: first restore still-protected pages to writable (the pool memory may be reused for something else once returned to the game), then mark invalid
@@ -241,7 +253,7 @@ void nvn_dirty_remove_range(const void *mem) {
     pthread_mutex_lock(&g_slot_mu);
     range_t *r = NULL; int n = atomic_load(&g_nr);
     for (int i = 0; i < n && !r; i++) if (live_at(i) && rg(i)->mem == (uintptr_t)mem) r = rg(i);   // Match by the pool's exact start: an adjacent pool sharing a page may have the same rounded base
-    if (r) { prep_write((void *)r->base, r->end - r->base); atomic_store_explicit(&r->live, 0, memory_order_release); atomic_fetch_sub(&g_live, 1); }
+    if (r) { prep_write((void *)r->base, r->end - r->base); atomic_store_explicit(&r->live, 0, memory_order_release); atomic_fetch_sub(&g_live, 1); atomic_fetch_add_explicit(&g_lookup_epoch,1,memory_order_release); }
     pthread_mutex_unlock(&g_slot_mu);
 }
 int nvn_dirty_tracked(const void *addr, size_t len) {
