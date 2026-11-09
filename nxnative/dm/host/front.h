@@ -8,6 +8,14 @@ static inline void front_hud_env(void) {
     setenv("MTL_HUD_ENABLED", "1", 0);
     // Spatial scaling has no temporal exposure: showing that HUD metric makes the MetalFX rows flicker.
     setenv("MTL_HUD_HIDE_METALFX_METRICS", "1", 0);
+    // Presentation metrics do not require optional encoder timing, insights or logging; choose their scope explicitly.
+    // The default HUD configuration made MKW's race fall from ~40 FPS to single digits on macOS 27;
+    // these explicit defaults preserve its frame rate. Developers can still override each switch.
+    setenv("MTL_HUD_ENCODER_TIMING_ENABLED", "0", 0);
+    setenv("MTL_HUD_INSIGHTS_ENABLED", "0", 0);
+    setenv("MTL_HUD_LOG_ENABLED", "0", 0);
+    setenv("MTL_HUD_LOG_SHADER_ENABLED", "0", 0);
+    setenv("MTL_HUD_ELEMENTS", "device,layersize,memory,fps,gputime,frameinterval,frameintervalgraph", 0);
 }
 // Run the guest: with a window the guest runs on its own thread and the main thread belongs to the system UI; without a window it runs directly on the current thread.
 void front_run(void (*guest)(void));
