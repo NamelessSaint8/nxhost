@@ -1,5 +1,5 @@
-# Mario Kart World (Switch 2, loose dump of update 917504). Shader split only: no build has been packed or run from this profile, so it claims no
-# version hashes and has no android.tsv.
+# Mario Kart World (Switch 2, loose dump of update 917504). Direct Mac host runs reach a rendered race; no packaged build or registered
+# version hashes, and no android.tsv. Remaining colour and performance issues are recorded in README.md.
 # Nintendo EPD's engine (Nin_Ounce: sead / agl / gsys, Phive), NVN2 (Ampere shaders); modules main + sdk + subsdk0 + subsdk1.
 # Shaders: Shader/*.Nin_Ounce_NVN2.bfsha.zs (BNSH), one .sarc.zs holding agl sharcb packs, and the effect set's esetb. See docs/SWITCH2.md.
 
@@ -24,6 +24,12 @@ mem_reserve	0x640000000
 mem_alias	0x400000000
 mem_stack	0x10000000
 app_pool	0x260000000
+
+# ---- Rendering ----
+# NVN2 wraps render-target clears in timestamp-report conditions. Evaluating those conditions preserves the completed race scene instead of clearing it again.
+render_cond	on
+# Packed vertex formats otherwise convert entire bound mesh pools; the race CPU sample is dominated by that repeated conversion.
+vconv_range	on
 
 # ---- Shader split (shader_split.py) ----
 shader_groups	/Shader/=shader /Effect/=effect /Layout/=layout /Model/=model /System/=system
