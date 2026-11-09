@@ -99,9 +99,16 @@ split and built in the background rather than inline in a probe.
 
 ## Open
 
-- **`auddmg:u`**: the session is served and a HIPC close is accepted, but command 0's returned object is not. This host's generic session answers with
-  zeros and no handles, and the client dereferences that null. The manager's commands and its 0x228-byte properties block are described in the reference
-  port's note; implementing them is the next step on this title.
+- **`auddmg:u`**: the session, the HIPC close and the manager object work. Command 0 now returns a move handle (`0x20000`), and the client sends its
+  manager requests on it (the host adopts the handle and answers). What is not solved is the manager's **answer buffer**: the descriptor resolves to
+  `0x16d991120` — a host stack address, outside the guest address space — so the guard refuses to write the device count and name into it. That is the
+  pointer-buffer translation this host does not model (`QueryPointerBufferSize` answers 0). The manager's commands and its 0x228-byte properties block are
+  described in the reference port's note.
+- **A second abort follows, and it is not audio.** Past auddmg the run logs `WindowCrop 0,0 2048x1152`, an unimplemented
+  `nvnCommandBufferSetComputeWorkloadPriority`, and then `nn::diag abort` with **Result 0** and an empty message at `sdk+0xb8fe8`
+  (`bt: sdk+0xba138 sdk+0x7bd670 sdk+0x777f30 main+0x21f0c80`). In the same window the renderer says
+  `[RED] program has no vertex shader (or it is not mapped)`, so a draw with one of the 52 missing task/mesh programs is the leading candidate rather
+  than an auddmg failure.
 - The full translation build (the rest of the 56,339 programs) and the 845 task/mesh programs, which stay refused until this host has a task/mesh pipeline.
 - The 38 unimplemented Ampere instructions (`243`, `f8c`, `3a9`).
 - Memory: the 6.22 GB heap is the measured number; the game's `System/HeapSize` table is still unread, and the 12 GiB console layout the title plans
