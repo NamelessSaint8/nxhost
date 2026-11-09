@@ -1,7 +1,8 @@
 // vkprobe: the Vulkan facts an NVN -> Vulkan backend for nxnative depends on, measured on the device.
 // 1. Identity, features, limits and extensions that matter for Switch titles.
 // 2. BC1-BC7 / ASTC format support (Switch packaged textures are mostly BCn and ASTC).
-// 3. A real zero-copy test: import ordinary mmap'ed memory with VK_EXT_external_memory_host, write it from the CPU, copy it on the
+// 3. Sparse image residency / aliasing features, sparse queue families and per-format tile geometry (native texture compression alone is not enough).
+// 4. A real zero-copy test: import ordinary mmap'ed memory with VK_EXT_external_memory_host, write it from the CPU, copy it on the
 //    GPU into a second imported buffer and check the CPU sees the result. nxnative's Metal backend relies on this (newBufferWithBytesNoCopy).
 // Build: aarch64-linux-android29-clang -O1 vkprobe.c -o vkprobe -lvulkan
 #define _GNU_SOURCE
@@ -22,6 +23,7 @@ VKF(vkCreateDevice); VKF(vkGetDeviceProcAddr); VKF(vkEnumerateInstanceVersion);
 VKF(vkGetDeviceQueue); VKF(vkCreateBuffer); VKF(vkAllocateMemory); VKF(vkBindBufferMemory); VKF(vkGetBufferMemoryRequirements); VKF(vkCreateCommandPool);
 VKF(vkAllocateCommandBuffers); VKF(vkBeginCommandBuffer); VKF(vkEndCommandBuffer); VKF(vkCmdCopyBuffer); VKF(vkQueueSubmit); VKF(vkQueueWaitIdle);
 VKF(vkCmdPipelineBarrier); VKF(vkGetBufferDeviceAddress);
+VKF(vkGetPhysicalDeviceSparseImageFormatProperties);
 static PFN_vkGetMemoryHostPointerPropertiesEXT pGetHostPtrProps;
 
 static int has_ext(VkExtensionProperties *e, uint32_t n, const char *name) { for (uint32_t i = 0; i < n; i++) if (!strcmp(e[i].extensionName, name)) return 1; return 0; }
@@ -43,6 +45,7 @@ int main(void) {
     if (r) { printf("vkCreateInstance failed: %d\n", r); return 1; }
     IGET(vkEnumeratePhysicalDevices); IGET(vkGetPhysicalDeviceProperties2); IGET(vkGetPhysicalDeviceFeatures2); IGET(vkEnumerateDeviceExtensionProperties);
     IGET(vkGetPhysicalDeviceFormatProperties); IGET(vkGetPhysicalDeviceMemoryProperties); IGET(vkGetPhysicalDeviceQueueFamilyProperties); IGET(vkCreateDevice); IGET(vkGetDeviceProcAddr);
+    IGET(vkGetPhysicalDeviceSparseImageFormatProperties);
     uint32_t npd = 1; VkPhysicalDevice pd; vkEnumeratePhysicalDevices(inst, &npd, &pd);
     if (!npd) { printf("no physical device\n"); return 1; }
 
@@ -82,6 +85,32 @@ int main(void) {
            YN(f12.timelineSemaphore), YN(f12.scalarBlockLayout), YN(f12.shaderFloat16), YN(f12.shaderInt8), YN(f12.storageBuffer8BitAccess), YN(f12.drawIndirectCount), YN(f12.samplerFilterMinmax));
     if (P->apiVersion >= VK_API_VERSION_1_3)
         printf("1.3: dynamicRendering %s  synchronization2 %s  maintenance4 %s  inlineUniformBlock %s\n", YN(f13.dynamicRendering), YN(f13.synchronization2), YN(f13.maintenance4), YN(f13.inlineUniformBlock));
+
+    // A driver can sample native compressed textures without supporting partially resident images of those formats.
+    printf("== sparse residency\nsparseBinding %s  sparseResidencyImage2D %s  sparseResidencyAliased %s  residencyNonResidentStrict %s  address space %llu MiB\n",
+           YN(F->sparseBinding), YN(F->sparseResidencyImage2D), YN(F->sparseResidencyAliased), YN(P->sparseProperties.residencyNonResidentStrict),
+           (unsigned long long)(L->sparseAddressSpaceSize >> 20));
+    uint32_t sparse_qn = 0; vkGetPhysicalDeviceQueueFamilyProperties(pd, &sparse_qn, NULL);
+    VkQueueFamilyProperties *sparse_queues = calloc(sparse_qn, sizeof *sparse_queues);
+    if (!sparse_queues && sparse_qn) { printf("queue-property allocation failed\n"); return 1; }
+    vkGetPhysicalDeviceQueueFamilyProperties(pd, &sparse_qn, sparse_queues);
+    for (uint32_t i = 0; i < sparse_qn; i++) printf("queue %u: count %u flags %#x sparse-binding %s\n", i, sparse_queues[i].queueCount,
+                                                 sparse_queues[i].queueFlags, YN(sparse_queues[i].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT));
+    free(sparse_queues);
+    static const struct { VkFormat f; const char *name; int writable; } SPARSE_FMT[] = {
+        {VK_FORMAT_R8_UNORM, "R8", 1}, {VK_FORMAT_R16_UNORM, "R16", 1}, {VK_FORMAT_R16G16_UNORM, "RG16", 1},
+        {VK_FORMAT_BC6H_UFLOAT_BLOCK, "BC6H", 0}, {VK_FORMAT_ASTC_4x4_UNORM_BLOCK, "ASTC4x4", 0}, {VK_FORMAT_ASTC_8x8_SRGB_BLOCK, "ASTC8x8s", 0}};
+    for (unsigned i = 0; i < sizeof SPARSE_FMT / sizeof *SPARSE_FMT; i++) for (int writable = 0; writable <= SPARSE_FMT[i].writable; writable++) {
+        VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        if (writable) usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+        uint32_t count = 0; vkGetPhysicalDeviceSparseImageFormatProperties(pd, SPARSE_FMT[i].f, VK_IMAGE_TYPE_2D, VK_SAMPLE_COUNT_1_BIT, usage, VK_IMAGE_TILING_OPTIMAL, &count, NULL);
+        VkSparseImageFormatProperties *sp = calloc(count, sizeof *sp);
+        if (!sp && count) { printf("sparse-property allocation failed\n"); return 1; }
+        if (count) vkGetPhysicalDeviceSparseImageFormatProperties(pd, SPARSE_FMT[i].f, VK_IMAGE_TYPE_2D, VK_SAMPLE_COUNT_1_BIT, usage, VK_IMAGE_TILING_OPTIMAL, &count, sp);
+        printf("%-11s %s usage %#x: %u sparse image properties\n", SPARSE_FMT[i].name, writable ? "writable" : "sampled ", usage, count);
+        for (uint32_t j = 0; j < count; j++) printf("  aspect %#x tile %ux%ux%u flags %#x\n", sp[j].aspectMask, sp[j].imageGranularity.width, sp[j].imageGranularity.height, sp[j].imageGranularity.depth, sp[j].flags);
+        free(sp);
+    }
 
     // ---- extensions
     uint32_t ne = 0; vkEnumerateDeviceExtensionProperties(pd, NULL, &ne, NULL);
