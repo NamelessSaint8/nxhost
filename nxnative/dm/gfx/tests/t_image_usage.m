@@ -75,8 +75,48 @@ static void image_case(int explicit_image) { @autoreleasepool {
     read_level(tex_mtl(&alias), 1, pixels); same = 1; for (int i = 0; i < 16; i++) same &= pixels[i] == (i == 5 ? 0x3400 : 0x3a00);
     CHECK(same, "sampled alias sees the image write and untouched pixels");
 } }
+static void image_dimension_case(void) { @autoreleasepool {
+    tex_t texture = {.magic=MAGIC('T','E','X',0), .serial=99600};
+    texture.d = (nvn_texdesc){.target=NVN_TEXTURE_TARGET_2D_ARRAY, .format=NVN_FORMAT_RGBA8, .flags=NVN_TEXTURE_FLAGS_IMAGE,
+                            .width=8, .height=8, .depth=3, .levels=3, .samples=1};
+    MTLTextureDescriptor *desc = tex_desc(&texture, 0); desc.storageMode = MTLStorageModeShared;
+    id<MTLTexture> base = [g_dev newTextureWithDescriptor:desc];
+    CHECK(base != nil, "array image created"); res_add(base); serial_put(texture.serial, base);
+    uint8_t zero[256] = {0};
+    for (unsigned layer=0; layer<3; layer++) for (unsigned level=0; level<3; level++) {
+        NSUInteger n=8>>level;
+        [base replaceRegion:MTLRegionMake2D(0,0,n,n) mipmapLevel:level slice:layer withBytes:zero bytesPerRow:n*4 bytesPerImage:n*n*4];
+    }
+    view_t view = {.set_levels=1, .base_level=1, .nlevels=1, .set_layers=1, .min_layer=1, .nlayers=2};
+    mtl_reg_image(603, &texture, &view);
+    nvn_rbind binding = {.kind=NVN_RB_IMG, .rw=1, .dtt=MTLTextureType2D, .dpf=NVN_DPF_FLOAT};
+    uint64_t rid; int real;
+    os_unfair_lock_lock(&g_rmu);
+    id<MTLTexture> image = img_binding(603, &binding, &rid, &real);
+    CHECK(real && image.textureType==MTLTextureType2D && (image.usage & MTLTextureUsageShaderWrite), "non-array image instruction receives a writable 2D view");
+    CHECK(image.width==4 && image.parentRelativeLevel==1 && image.parentRelativeSlice==1, "image dimension view preserves descriptor mip and first layer");
+    uint64_t again; CHECK(img_binding(603, &binding, &again, &real)==image && again==rid, "image dimension view is reused");
+    os_unfair_lock_unlock(&g_rmu);
+    NSError *error = nil;
+    id<MTLLibrary> lib = [g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\nkernel void put(texture2d<float, access::write> t [[texture(0)]]) { t.write(float4(0.25,0.5,0.75,1),uint2(1,1)); }\n" options:nil error:&error];
+    id<MTLComputePipelineState> pipeline = [g_dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"put"] error:&error];
+    CHECK(pipeline != nil, "dimension-sensitive image writer compiled");
+    id<MTLCommandBuffer> command=q_cb(); id<MTLComputeCommandEncoder> encoder=[command computeCommandEncoder];
+    [encoder setComputePipelineState:pipeline]; [encoder setTexture:image atIndex:0];
+    [encoder dispatchThreads:MTLSizeMake(1,1,1) threadsPerThreadgroup:MTLSizeMake(1,1,1)]; [encoder endEncoding]; queue3_commit(command); [command waitUntilCompleted];
+    CHECK(command.status==MTLCommandBufferStatusCompleted, "2D image write into array completes");
+    for (unsigned layer=0; layer<3; layer++) for (unsigned level=0; level<3; level++) {
+        NSUInteger n=8>>level; uint8_t pixels[256]={0}; int same=1;
+        [base getBytes:pixels bytesPerRow:n*4 bytesPerImage:n*n*4 fromRegion:MTLRegionMake2D(0,0,n,n) mipmapLevel:level slice:layer];
+        for (NSUInteger i=0; i<n*n*4; i++) {
+            int expected=layer==1 && level==1 && i/4==5 ? (int[4]){64,128,191,255}[i%4] : 0;
+            same &= abs((int)pixels[i]-expected)<=1;
+        }
+        CHECK(same, "2D image writes only the descriptor's first layer and mip");
+    }
+} }
 int main(void) { @autoreleasepool {
-    mtl_init(); image_case(0); image_case(1);
+    mtl_init(); image_case(0); image_case(1); image_dimension_case();
     printf("explicit image usage: %d checks, %d failed\n", checks, failed);
     return failed != 0;
 } }

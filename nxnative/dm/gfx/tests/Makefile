@@ -53,6 +53,8 @@ t_nvn: t_nvn.c ../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c $(G
 	clang $(CFLAGS) -fobjc-arc -o $@ t_nvn.c ../../host/crash.c ../../host/hle_bigstack.c $(GFX) $(FW)
 t_dirty_slots: t_dirty_slots.c ../nvn/nvn_dirty.c ../../host/crash.c ../nvn/nvn_dirty.h $(GAME_H)
 	clang $(CFLAGS) -o $@ t_dirty_slots.c ../../host/crash.c ../nvn/nvn_dirty.c
+t_dirty_lookup: t_dirty_lookup.c ../nvn/nvn_dirty.c ../../host/crash.c ../nvn/nvn_dirty.h $(GAME_H)
+	clang $(CFLAGS) -o $@ t_dirty_lookup.c ../../host/crash.c ../nvn/nvn_dirty.c
 t_dirty_race: t_dirty_race.c ../nvn/nvn_dirty.c ../../host/crash.c ../nvn/nvn_dirty.h $(GAME_H)
 	clang $(CFLAGS) -o $@ t_dirty_race.c ../../host/crash.c
 t_dirty_retire_race: t_dirty_retire_race.c ../nvn/nvn_dirty.c ../../host/crash.c ../nvn/nvn_dirty.h $(GAME_H)
@@ -385,6 +387,40 @@ check_t_unwritten_store: RUN_ENV = MTL_DEBUG_LAYER=1
 t_upgrade_alias: t_upgrade_alias.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_upgrade_alias.m $(MTL_T_SRC) $(FW)
 check_t_upgrade_alias: RUN_ENV = MTL_DEBUG_LAYER=1
+t_residency_commit: t_residency_commit.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_residency_commit.m $(MTL_T_SRC) $(FW)
+SPARSE_VALIDATION_ENV = MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1 MTL_SHADER_VALIDATION_REPORT_TO_STDERR=1 MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING=1 MTL_SHADER_VALIDATION_ABORT_ON_FAULT=1
+check_t_residency_commit: RUN_ENV = $(SPARSE_VALIDATION_ENV)
+t_vconv_packed: t_vconv_packed.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_vconv_packed.m $(MTL_T_SRC) $(FW)
+t_sparse_image: t_sparse_image.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_sparse_image.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+.PHONY: check_t_sparse_image
+check_t_sparse_image: t_sparse_image
+	DM_NVN_ENC_THREAD=0 $(SPARSE_VALIDATION_ENV) ./t_sparse_image
+	DM_NVN_ENC_THREAD=1 $(SPARSE_VALIDATION_ENV) ./t_sparse_image
+t_sparse_async: t_sparse_async.m t_sparse_upload.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_sparse_async.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+.PHONY: check_t_sparse_async
+check_t_sparse_async: t_sparse_async
+	DM_NVN_ENC_THREAD=0 $(SPARSE_VALIDATION_ENV) ./t_sparse_async
+	DM_NVN_ENC_THREAD=1 $(SPARSE_VALIDATION_ENV) ./t_sparse_async
+	DM_NVN_ENC_THREAD=0 $(SPARSE_VALIDATION_ENV) ./t_sparse_async lost
+	DM_NVN_ENC_THREAD=1 $(SPARSE_VALIDATION_ENV) ./t_sparse_async lost
+t_storage_alias: t_storage_alias.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_storage_alias.m $(MTL_T_SRC) $(FW)
+check_t_storage_alias: RUN_ENV = MTL_DEBUG_LAYER=1
+t_sparse_upload: t_sparse_upload.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_sparse_upload.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+.PHONY: check_t_sparse_upload
+check_t_sparse_upload: t_sparse_upload
+	DM_NVN_ENC_THREAD=0 $(SPARSE_VALIDATION_ENV) ./t_sparse_upload
+	DM_NVN_ENC_THREAD=1 $(SPARSE_VALIDATION_ENV) ./t_sparse_upload
+	DM_NVN_ENC_THREAD=0 $(SPARSE_VALIDATION_ENV) ./t_sparse_upload copy
+	DM_NVN_ENC_THREAD=1 $(SPARSE_VALIDATION_ENV) ./t_sparse_upload copy
+	DM_NVN_ENC_THREAD=0 $(SPARSE_VALIDATION_ENV) ./t_sparse_upload gpu-copy
+	DM_NVN_ENC_THREAD=1 $(SPARSE_VALIDATION_ENV) ./t_sparse_upload gpu-copy
+	$(SPARSE_VALIDATION_ENV) ./t_sparse_upload upgrade
 t_image_alias: t_image_alias.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_image_alias.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_image_alias

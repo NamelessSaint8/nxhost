@@ -246,7 +246,7 @@ __attribute__((weak)) void vk_pool_set_flags(const void *mem, int flags) { (void
 __attribute__((weak)) void dm_perf_replay_thread(void) {}   // Android (perf_android.c): the replay thread's CPU placement   // Android's Vulkan host (gfx_vk_core.c): copied pools by their flags
 NVN(nvnMemoryPoolInitialize, NVNboolean, NVNmemoryPool *p, const NVNmemoryPoolBuilder *b) {
     const pool_builder_t *s = (const pool_builder_t *)b; pool_t *o = (pool_t *)p;
-    o->magic = MAGIC('P', 'O', 'O', 'L'); o->flags = s->flags; o->mem = s->mem; o->size = s->size; o->vp = NULL; o->vmode = 0;
+    o->magic = MAGIC('P', 'O', 'O', 'L'); o->flags = s->flags; o->mem = s->mem; o->size = s->size; o->vp = NULL; o->vmode = 0; o->generation = (uint32_t)nvn_new_serial();
     if (!o->mem && (o->flags & 0x200)) { uint8_t *vr = vpool_reserve(o); if (vr) o->mem = vr; }   // a virtual pool's own address range until its first mapping decides (see MapVirtual)
     else if (o->mem) { replay_lock(); mtl_pool_add(o->mem, o->size); vk_pool_set_flags(o->mem, o->flags); replay_unlock(); nvn_dirty_add_range(o->mem, o->size); }
     if (!o->mem && !(o->flags & 0x200)) LOG("[RED] MemoryPoolInitialize: non-virtual pool has no storage flags=%#x size=%#llx", o->flags, o->size);
@@ -2262,7 +2262,7 @@ _Static_assert(sizeof(map_req) == 0x28, "NVNmappingRequest");
 // tail from a 4 MB physical pool and later the higher mips from other pages of it, after writing their texels there on the CPU: aliased, the texture had no storage (created before any
 // mapping) and the later mappings were refused (`[RED] MapVirtual: non-contiguous mapping`). A pool larger than the application pool is sparse from the start
 enum { NVRUN = 1024, VPT_LEAF = 512 };   // a page-table leaf covers 2 MB
-typedef struct { const uint8_t *phys; uint64_t gen; } vpte;
+typedef struct { const uint8_t *phys; uint64_t gen; uint32_t physical_generation; } vpte;
 struct vpool { const pool_t *pool; uint8_t *base; uint64_t len, size, top; int nrun; struct { uint64_t lo, hi; } run[NVRUN]; vpte **pt; };   // len: reserved; size: the pool's; top: highest mapped end so far (logged per 128 MB)
 static struct vpool **g_vp; static int g_nvp, g_cvp;   // the pools with a range of their own, under g_vp_mu
 static pthread_mutex_t g_vp_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -2316,13 +2316,13 @@ static void vrun_set(struct vpool *v, uint64_t lo, uint64_t hi, int mapped) {
 }
 // Page table of a sparse pool (see above). Caller holds g_vp_mu
 static const vpte *vpt_get(const struct vpool *v, uint64_t o) { const vpte *l = v->pt[o >> 21]; return l ? &l[(o >> 12) & (VPT_LEAF - 1)] : NULL; }
-static void vpt_set(struct vpool *v, uint64_t voff, uint64_t size, const uint8_t *phys) {
+static void vpt_set(struct vpool *v, uint64_t voff, uint64_t size, const uint8_t *phys, uint32_t physical_generation) {
     uint64_t gen = atomic_fetch_add(&g_vp_gen, 1) + 1;
     for (uint64_t o = 0; o < size; o += 0x1000) {
         vpte **l = &v->pt[(voff + o) >> 21];
         if (!*l && !phys) continue;   // never mapped: stays unmapped
         if (!*l && !(*l = calloc(VPT_LEAF, sizeof **l))) die("sparse pool page table allocation failed");
-        (*l)[((voff + o) >> 12) & (VPT_LEAF - 1)] = (vpte){phys ? phys + o : NULL, gen};
+        (*l)[((voff + o) >> 12) & (VPT_LEAF - 1)] = (vpte){phys ? phys + o : NULL, gen, physical_generation};
     }
 }
 static int vpool_map(struct vpool *v, const map_req *r) {   // caller holds g_vp_mu; → 0 on failure
@@ -2331,7 +2331,7 @@ static int vpool_map(struct vpool *v, const map_req *r) {   // caller holds g_vp
     if (((uint64_t)r->voff | r->size | (uint64_t)r->poff) & 0xFFF) { LOG("[RED] virtual pool %p: request %#llx+%#llx (physical offset %#llx) is not 4 KB aligned", (const void *)v->pool, (unsigned long long)r->voff, (unsigned long long)r->size, (unsigned long long)r->poff); return 0; }
     const pool_t *ph = (const pool_t *)r->phys;
     if (ph && (!ph->mem || r->poff < 0 || (uint64_t)r->poff + r->size > ph->size)) { LOG("[RED] virtual pool %p: physical pool %p (%#llx bytes, storage %p) cannot supply %#llx+%#llx", (const void *)v->pool, (const void *)ph, (unsigned long long)ph->size, (void *)ph->mem, (unsigned long long)r->poff, (unsigned long long)r->size); return 0; }
-    vpt_set(v, (uint64_t)r->voff, r->size, ph ? ph->mem + r->poff : NULL);
+    vpt_set(v, (uint64_t)r->voff, r->size, ph ? ph->mem + r->poff : NULL, ph ? ph->generation : 0);
     vm_address_t to = (vm_address_t)(v->base + r->voff);
     // Not aliased (see above): only textures read through the page table see it; the GPU cannot address it directly
     if ((uint64_t)r->voff + r->size > v->len || ((uintptr_t)to | r->size | (uint64_t)r->voff) & (pg - 1) || (ph && (((uintptr_t)ph->mem + (uintptr_t)r->poff) & (pg - 1)))) {
@@ -2354,6 +2354,9 @@ static int vpool_map(struct vpool *v, const map_req *r) {   // caller holds g_vp
     if (end > v->top) v->top = end;
     return 1;
 }
+#ifndef NVN_MTL_SPARSE_MAPPING_DEFINED
+extern void mtl_sparse_mapping_changed(void) __attribute__((weak));
+#endif
 NVN(nvnMemoryPoolMapVirtual, NVNboolean, NVNmemoryPool *p, int n, const NVNmappingRequest *rq) {
     pool_t *o = (pool_t *)p; const map_req *r = (const map_req *)rq;
     replay_lock(); pthread_mutex_lock(&g_vp_mu);
@@ -2363,7 +2366,10 @@ NVN(nvnMemoryPoolMapVirtual, NVNboolean, NVNmemoryPool *p, int n, const NVNmappi
     }
     struct vpool *v = o->vmode == 2 ? vpool_of(o) : NULL; int ok = 1;
     for (int i = 0; v && i < n && ok; i++) ok = vpool_map(v, &r[i]);
-    pthread_mutex_unlock(&g_vp_mu); replay_unlock();
+    pthread_mutex_unlock(&g_vp_mu);
+    void (*mapping_hook)(void)=mtl_sparse_mapping_changed;
+    if (v && n && mapping_hook) mapping_hook();
+    replay_unlock();
     if (v) return (NVNboolean)ok;
     for (int i = 0; i < n; i++) {
         const pool_t *ph = (const pool_t *)r[i].phys;
@@ -2846,10 +2852,30 @@ static int vpt_walk(const void *pool, uint64_t a, uint64_t n, uint64_t gen, int 
 static int run_written(const uint8_t *p, uint64_t n, uint64_t stamp) { return nvn_dirty_since(p, n, stamp); }
 static int run_protect(const uint8_t *p, uint64_t n, uint64_t unused) { (void)unused; nvn_dirty_protect(p, n); return 0; }
 int nvn_sparse_since(const void *pool, uint64_t a, uint64_t n, uint64_t gen, uint64_t stamp) { return vpt_walk(pool, a, n, gen, run_written, stamp); }
+static int run_mapping_only(const uint8_t *p,uint64_t n,uint64_t unused){(void)p;(void)n;(void)unused;return 0;}
+int nvn_sparse_mapping_since(const void *pool,uint64_t a,uint64_t n,uint64_t gen){return vpt_walk(pool,a,n,gen,run_mapping_only,0);}
+// Complete physical identity of a 64 KB tile, including pool incarnations: remapping an old page preserves its GPU-written contents; reusing its address in a new pool does not.
+int nvn_sparse_tile_identity(const void *pool,uint64_t a,uint64_t out[32]) {
+    pthread_mutex_lock(&g_vp_mu);struct vpool *v=vpool_at(pool,a);int ok=v!=NULL;
+    uint64_t off=v ? a-(uint64_t)(uintptr_t)v->base : 0;
+    for(unsigned i=0;i<16 && ok;i++){const vpte *e=off+i*4096<v->size?vpt_get(v,off+i*4096):NULL;
+        if(!e || !e->phys){ok=0;break;}out[2*i]=(uint64_t)(uintptr_t)e->phys;out[2*i+1]=e->physical_generation;}
+    pthread_mutex_unlock(&g_vp_mu);return ok;
+}
 int nvn_sparse_mapped(const void *pool, uint64_t a, uint64_t n) {   // every page of [a, a+n) has memory behind it
     pthread_mutex_lock(&g_vp_mu); struct vpool *v = vpool_at(pool, a); int ok = v != NULL;
     for (uint64_t o = v ? (a - (uint64_t)(uintptr_t)v->base) & ~0xFFFull : 0, end = v ? a - (uint64_t)(uintptr_t)v->base + n : 0; ok && o < end; o += 0x1000) { const vpte *e = o < v->size ? vpt_get(v, o) : NULL; ok = e && e->phys; }
     pthread_mutex_unlock(&g_vp_mu); return ok;
+}
+uint64_t nvn_sparse_mapped_bytes(const void *pool, uint64_t a, uint64_t n) {
+    pthread_mutex_lock(&g_vp_mu); struct vpool *v = vpool_at(pool, a); uint64_t mapped = 0;
+    for (uint64_t p = 0, o = v ? a - (uint64_t)(uintptr_t)v->base : 0; v && p < n;) {
+        uint64_t at = o + p, k = 0x1000 - (at & 0xfff);if(k>n-p)k=n-p;
+        const vpte *e = at < v->size ? vpt_get(v, at) : NULL;
+        if (e && e->phys) mapped += k;
+        p += k;
+    }
+    pthread_mutex_unlock(&g_vp_mu); return mapped;
 }
 void nvn_sparse_protect(const void *pool, uint64_t a, uint64_t n) { vpt_walk(pool, a, n, ~0ull, run_protect, 0); }
 NVN(nvnCommandBufferDrawElementsIndirect, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNindexType it, NVNbufferAddress ib, NVNbufferAddress ind) {
@@ -2936,11 +2962,31 @@ static int write_region_bl(const tex_t *t, unsigned level, unsigned layer, const
     size_t wb = (size_t)((r->width + bw - 1) / bw) * (size_t)bpb, hb = (size_t)((r->height + bh - 1) / bh);
     if (x0 + wb > row_bytes || y0 + hb > rows) return -1;
     uint32_t lb = nvn_tex_level_gobs(&t->d, level) * 64; if (lb < row_bytes) lb = row_bytes;   // the row as laid out (padded in a sparse texture's tiled levels)
-    for (size_t y = 0; y < hb; y++)
+    int sparse=nvn_sparse_pool(t->pool);
+    if(sparse)pthread_mutex_lock(&g_vp_mu);
+    struct vpool *vp=sparse?vpool_at(t->pool,(uint64_t)(uintptr_t)t->mem):NULL;
+    if(sparse&&!vp){pthread_mutex_unlock(&g_vp_mu);return -1;}
+    static int timing=-1;if(timing<0){const char *e=getenv("DM_NVN_SPARSE_COPY_TIMING");timing=e && atoi(e);}
+    uint64_t started=timing&&sparse?now_ns():0,prepares=0;
+    uintptr_t prepared[64]={0}, page_size=(uintptr_t)getpagesize();
+    static const uint16_t x1[4]={0,32,256,288},x2[4]={0,64,256,320};
+    const uint16_t *xoff=nvn_gob_switch2?x2:x1;uint64_t block=512ull<<th<<td;
+    for (size_t y = 0; y < hb; y++) {
+        // The slice/row terms are constant for all of this row's 16-byte pieces; only the GOB column and x lanes change.
+        uint64_t row_off=base+nvn_bl_offset(0,y0+(uint32_t)y,0,lb,rows,th,td);
         for (size_t x = 0; x < wb;) {   // 16-byte runs are contiguous within a GOB
             uint32_t bx = x0 + (uint32_t)x; size_t n = 16 - bx % 16; if (n > wb - x) n = wb - x;
-            memcpy(t->mem + base + nvn_bl_offset(bx, y0 + (uint32_t)y, 0, lb, rows, th, td), src + y * row + x, n); x += n;
+            uint64_t off=row_off+(uint64_t)(bx>>6)*block+xoff[(bx>>4)&3]+(bx&15);
+            if(vp){uint64_t at=(uint64_t)(uintptr_t)t->mem-(uint64_t)(uintptr_t)vp->base+off;const vpte *p=at<vp->size?vpt_get(vp,at):NULL;
+                if(p&&p->phys){uint8_t *dst=(uint8_t *)p->phys+(at&0xfff);uintptr_t page=(uintptr_t)dst&~(page_size-1),slot=(page/page_size)%64;
+                    if(prepared[slot]!=page){dm_guest_write_prepare(dst,n);prepared[slot]=page;if(timing)prepares++;}
+                    if(n==16)memcpy(dst,src+y*row+x,16);else memcpy(dst,src+y*row+x,n);}}
+            else {if(n==16)memcpy(t->mem+off,src+y*row+x,16);else memcpy(t->mem+off,src+y*row+x,n);}
+            x += n;
         }
+    }
+    if(sparse)pthread_mutex_unlock(&g_vp_mu);
+    if(started && now_ns()-started>=3000000ull)LOG("[nvn] sparse storage write ser=%llu: %.1f MB, %llu page preparations, %.2f ms",(unsigned long long)t->serial,wb*hb/1048576.0,(unsigned long long)prepares,(now_ns()-started)/1e6);
     return 0;
 }
 static void write_texels(const tex_t *t, const view_t *v, const NVNcopyRegion *r, const uint8_t *src, size_t row, size_t img) {
@@ -2989,7 +3035,9 @@ NVN(nvnTextureWriteTexelsStrided, void, const NVNtexture *t, const NVNtextureVie
 static int mirror_prepare(const tex_t *t, unsigned level, unsigned layer) {   // unprotect (and mark written) the storage of one level of one layer
     uint64_t lo = nvn_tex_level_offset(&t->d, level), hi = level + 1 < t->d.levels ? nvn_tex_level_offset(&t->d, level + 1) : t->L.layer_size;
     if (hi <= lo || hi > t->L.layer_size || (uint64_t)layer * t->L.layer_size + hi > t->L.size) return -1;
-    dm_guest_write_prepare(t->mem + (uint64_t)layer * t->L.layer_size + lo, hi - lo);
+    uint8_t *p=t->mem+(uint64_t)layer*t->L.layer_size+lo;
+    if(nvn_sparse_pool(t->pool))return 0;   // write_region_bl prepares only physical pages actually written, preserving unchanged tiles' dirty stamps
+    dm_guest_write_prepare(p, hi - lo);
     return 0;
 }
 int nvn_tex_mirror_b2t(const tex_t *t, unsigned level, unsigned layer0, const NVNcopyRegion *r, const uint8_t *src, size_t row, size_t img) {
@@ -3013,7 +3061,16 @@ int nvn_tex_mirror_t2t(const tex_t *s, unsigned sl, unsigned ss, const NVNcopyRe
     int nz = sr->depth ? sr->depth : 1, ok = 1;
     for (int z = 0; z < nz && ok; z++) {
         unsigned layer = ds + (unsigned)(dr->zoffset + z);
-        ok = !nvn_deswizzle(&s->d, sl, ss + (unsigned)(sr->zoffset + z), s->mem, lin, lp) && !mirror_prepare(d, dl, layer) && !write_region_bl(d, dl, layer, dr, lin + y0 * lp + x0, lp, bw, bh, bpb);
+        uint8_t *part=NULL;const void *source=s->mem;nvn_texdesc local=s->d;unsigned source_level=sl,source_layer=ss+(unsigned)(sr->zoffset+z);
+        if(nvn_sparse_pool(s->pool)){
+            uint64_t lo=nvn_tex_level_offset(&s->d,sl),hi=sl+1<s->d.levels?nvn_tex_level_offset(&s->d,sl+1):s->L.layer_size;
+            if(!(part=malloc(hi-lo))){ok=0;break;}
+            nvn_sparse_copy(s->pool,part,(uint64_t)(uintptr_t)s->mem+(uint64_t)source_layer*s->L.layer_size+lo,hi-lo);
+            unsigned th,td;nvn_tex_level_tiles(&s->d,sl,&th,&td);local.width=lw;local.height=lh;local.target=NVN_TEXTURE_TARGET_2D;local.depth=local.levels=1;local.pkg_block_h=(int)(th|(td<<4))+1;
+            source=part;source_level=source_layer=0;
+        }
+        ok = !nvn_deswizzle(&local, source_level, source_layer, source, lin, lp) && !mirror_prepare(d, dl, layer) && !write_region_bl(d, dl, layer, dr, lin + y0 * lp + x0, lp, bw, bh, bpb);
+        free(part);
     }
     free(lin);
     return ok ? 0 : -1;

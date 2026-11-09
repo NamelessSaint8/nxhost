@@ -115,9 +115,7 @@ static void rec_exec(const rec_t *r) {
     case RO_COMMIT: case RO_COMMIT_REAL: {
         if (r->op == RO_COMMIT) ubc_wait(a[2]);   // the uniform shadows this command buffer reads
         id<MTL4CommandBuffer> buffers[] = {r->op == RO_COMMIT ? g_rx_cb : rec_id(a[1])}; MTL4CommitOptions *o = rec_id(a[0]);
-        pthread_mutex_lock(&g_res_mu);
-        if (o) [g_q4 commit:buffers count:1 options:o]; else [g_q4 commit:buffers count:1];
-        pthread_mutex_unlock(&g_res_mu);
+        queue4_commit(buffers[0], o);
         if (r->op == RO_COMMIT) g_rx_cb = nil;
         break; }
     case RO_SIGNAL: [g_q4 signalEvent:rec_id(a[0]) value:a[1]]; break;
@@ -323,13 +321,11 @@ static id rec_table(id t) { if (!rec_on() || !t) return t; DmRecTable *s = [DmRe
 static void rec_commit(id cb, MTL4CommitOptions *o) {
     if ([cb isKindOfClass:[DmRecCB class]]) { rec_t *r = rec_put(RO_COMMIT, 1); r->a[0] = rec_obj(o); r->a[2] = ubc_head(); return; }
     ubc_wait(ubc_head());
-    id<MTL4CommandBuffer> buffers[] = {cb};
-    if (o) [g_q4 commit:buffers count:1 options:o]; else [g_q4 commit:buffers count:1];
+    queue4_commit(cb, o);
 }
 // An upload batch: its place in the queue is after what is recorded so far (it reads no uniform shadow)
 static void rec_commit_upload(id cb, MTL4CommitOptions *o) {
     if (rec_on() && g_rb_started) { rec_t *r = rec_put(RO_COMMIT_REAL, 2); r->a[0] = rec_obj(o); r->a[1] = rec_obj(cb); return; }
-    id<MTL4CommandBuffer> buffers[] = {cb};
-    if (o) [g_q4 commit:buffers count:1 options:o]; else [g_q4 commit:buffers count:1];
+    queue4_commit(cb, o);
 }
 static void rec_signal(id ev, uint64_t v) { if (rec_on() && g_rb_started) { rec_t *r = rec_put(RO_SIGNAL, 1); r->a[0] = rec_obj(ev); r->a[1] = v; } else [g_q4 signalEvent:ev value:v]; }

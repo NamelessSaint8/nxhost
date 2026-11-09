@@ -40,7 +40,7 @@ static void run_case(int format) {
     uint8_t *map = (uint8_t *)h_nvnMemoryPoolMap((const NVNmemoryPool *)&pool) + 65536; int bad = 0;
     static const uint8_t want[] = {51,102,153,255}; for(int i=0;i<160*90;i++) bad += memcmp(map+i*4,want,4) != 0;
     EXPECT("GPU image writes -> CPU pool map, 14400 literal pixels", 0, bad);
-    h_nvnTextureFinalize(&tex); mtl_pool_del(mem); free(mem);
+    h_nvnTextureFinalize(&tex); mtl_alias_drop_pool(&pool); mtl_pool_del(mem); free(mem);
 }
 static void render_target_stride_case(void) {
     void *mem = NULL; if (posix_memalign(&mem, getpagesize(), 65536)) abort(); memset(mem, 0, 65536);
@@ -66,7 +66,7 @@ static void render_target_stride_case(void) {
         for (int x=64;x<128;x++) padding += ((uint8_t *)mem)[y*128+x]!=0;
     }
     EXPECT("linear target clear uses padded rows", 0, bad); EXPECT("linear target leaves row padding alone", 0, padding);
-    h_nvnTextureFinalize(&tex); mtl_pool_del(mem); free(mem);
+    h_nvnTextureFinalize(&tex); mtl_alias_drop_pool(&pool); mtl_pool_del(mem); free(mem);
 }
 static void scaled_copy_case(void) {
     void *mem = NULL; if (posix_memalign(&mem, getpagesize(), 262144)) abort(); memset(mem, 0, 262144);
@@ -92,7 +92,7 @@ static void scaled_copy_case(void) {
     static const uint8_t want[]={255,0,0,255}; int bad=0; for(int i=0;i<160*90;i++)bad+=memcmp(map+i*4,want,4)!=0;
     EXPECT("scaled render copy -> CPU pool map, 14400 literal red pixels",0,bad);
     EXPECT("scaled destination keeps pool backing",1,tex_mtl((const tex_t *)&dst).buffer!=nil);
-    h_nvnTextureFinalize(&dst); mtl_tex_release(&src); mtl_pool_del(mem); free(mem);
+    h_nvnTextureFinalize(&dst); mtl_tex_release(&src); mtl_alias_drop_pool(&pool); mtl_pool_del(mem); free(mem);
 }
 int main(void) { @autoreleasepool { mtl_init(); run_case(NVN_FORMAT_RGBA8); run_case(NVN_FORMAT_RGBA8_SRGB);
     render_target_stride_case();
