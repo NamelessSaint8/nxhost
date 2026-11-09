@@ -14,6 +14,9 @@
 #include <sys/sysctl.h>
 #include <fcntl.h>
 #include <TargetConditionals.h>
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
 #if TARGET_OS_IPHONE
 #include <os/proc.h>   // os_proc_available_memory: for the memory readout line
 #endif
@@ -5515,7 +5518,25 @@ static int vconv_wanted(const nvn_refl *rf, int v, const pso_key *k, int on) {  
 }
 // nv elements from src (stride bytes apart) into d, four 32-bit values each. The 8 / 16-bit integer and the half formats (Age of Calamity's soldiers: Short2, Half2) have loops
 // of their own with the format decoded once; vconv_elem decodes it for every element
+static void vconv_packed_signed(int normalized,const uint8_t *p,uint32_t stride,uint64_t nv,float *d) {
+#if defined(__ARM_NEON)
+    for(;nv>=4;nv-=4,p+=(uint64_t)stride*4,d+=16) {
+        uint32_t words[4];for(unsigned i=0;i<4;i++)memcpy(words+i,p+(size_t)i*stride,4);
+        uint32x4_t raw=vld1q_u32(words);
+        float32x4_t x=vcvtq_f32_s32(vshrq_n_s32(vreinterpretq_s32_u32(vshlq_n_u32(raw,22)),22));
+        float32x4_t y=vcvtq_f32_s32(vshrq_n_s32(vreinterpretq_s32_u32(vshlq_n_u32(raw,12)),22));
+        float32x4_t z=vcvtq_f32_s32(vshrq_n_s32(vreinterpretq_s32_u32(vshlq_n_u32(raw,2)),22));
+        if(normalized){float32x4_t scale=vdupq_n_f32(511),floor=vdupq_n_f32(-1);x=vmaxq_f32(vdivq_f32(x,scale),floor);y=vmaxq_f32(vdivq_f32(y,scale),floor);z=vmaxq_f32(vdivq_f32(z,scale),floor);}
+        float32x4x4_t values={.val={x,y,z,vdupq_n_f32(1)}};vst4q_f32(d,values);
+    }
+#endif
+    for(uint64_t i=0;i<nv;i++,p+=stride,d+=4){uint32_t word;memcpy(&word,p,4);
+        for(unsigned c=0;c<3;c++){int q=(int)(((word>>(10*c))&1023)^512)-512;d[c]=normalized?fmaxf((float)q/511.0f,-1.0f):(float)q;}d[3]=1;
+    }
+}
 static void vconv_fill(int f, uint64_t src, uint32_t stride, uint64_t nv, float *d) {
+    // Packed signed normals dominate large mesh draws. Decode four vertices together, preserving the scalar conversion's exact float bits and default w.
+    if(f==0x69 || f==0x6a){vconv_packed_signed(f==0x69,(const uint8_t *)(uintptr_t)src,stride,nv,d);return;}
     const uint8_t *p = (const uint8_t *)(uintptr_t)src; uint32_t *u = (uint32_t *)d; int ib, is, in = vconv_int(f, &ib, &is);
     if (in) {   // as vconv_elem: the register's 32-bit value, the missing components (0, 0, 0, 1)
         for (uint64_t i = 0; i < nv; i++, p += stride, u += 4) {
