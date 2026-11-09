@@ -2229,7 +2229,7 @@ def zs_dicts(romfs):
     a SARC (itself plain zstd) of *.zsdic files, each a zstd dictionary (magic 0xEC30A437, then its ID). → {ID: dictionary}; {} without that file (Mario's .zs are plain zstd)"""
     p = os.path.join(romfs, 'Pack/ZsDic.pack.zs')
     if not os.path.exists(p): return {}
-    d = zstd_mod().decompress(open(p, 'rb').read())
+    with open(p, 'rb') as f: d = zstd_mod().decompress(f.read())
     return {struct.unpack_from('<I', m, 4)[0]: m for _, m in sarc_members(d, '/Pack/ZsDic.pack.zs') if m[:4] == bytes.fromhex('37a430ec')}
 
 def zs_dict_id(d):

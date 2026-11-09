@@ -7,6 +7,8 @@
 # .ptcl, .sarc) plus main, read through shader_split's scan_blob, so every BNSH in a file is found, SARC members and all. --any reads every file of the
 # folder instead, which is slow on a 20 GB RomFS. Files named after shaders alone are not enough: Mario Kart World keeps 198 of its 1,018 compute
 # programs, and 3,938 graphics ones, in Effect/static.Nin_Ounce_NVN2.esetb.byml.zs.
+# A RomFS whose .zs frames name a zstd dictionary (Tears of the Kingdom's reader, and Ocarina of Time's) is opened with the pack's dictionaries, exactly as
+# shader_split's own scan does: Pack/ZsDic.pack.zs holds them and every frame names one, so without that table such a dump reads as no shader at all.
 # Ampere instructions are 16 bytes and their opcode is the low 12 bits of the low word
 # (AmpereOp.Opcode); a graphics code area holds the 0x80-byte SPH in front of them, a compute one does not. Both facts are the engine's: see
 # dm/gfx/tools/dmsh_ampere.py and dm/third_party/ryujinx/.../Decoders/AmpereOp.cs.
@@ -36,6 +38,16 @@ def candidates(folder, any_file):
             if any_file or n == 'main' or any(c in n for c in CARRIERS): yield p
 
 
+def zs_dicts(folder):
+    """{ID: dictionary} of the RomFS's Pack/ZsDic.pack.zs, put where shader_split's frame reader looks (S.ZDICTS); {} for a game without such a pack, as
+    Mario Kart World has none. Ocarina of Time's every .zs names one, so a dump of it reads as no shader at all until this table is loaded"""
+    romfs = Path(folder)
+    if (romfs / 'romfs').is_dir(): romfs = romfs / 'romfs'
+    d = S.zs_dicts(str(romfs))
+    S.ZDICTS.update(d)
+    return d
+
+
 def load_candidate(p, folder):
     """(label, bytes) of one candidate, a zstd frame decompressed first (compression.zstd, 3.14+, or its backport); None when it holds no shader. A
     candidate is read when it holds a BNSH or opens as one of the containers the reader descends into: Lib/agl's resource packs are SARCs of agl BAHS
@@ -43,7 +55,10 @@ def load_candidate(p, folder):
     try: raw = p.read_bytes()
     except OSError as e: print(f'[skip] {p}: {e}', file=sys.stderr); return None
     if raw[:4] == ZSTD_MAGIC:
-        try: raw = S.zstd_mod().decompress(raw)   # the module's own call (shader_split 415): a frame whose size it cannot learn is refused, not guessed
+        did = S.zs_dict_id(raw)
+        if did and did not in S.ZDICTS:
+            print(f'[skip] {p}: a zstd frame names dictionary {did}, which Pack/ZsDic.pack.zs does not have', file=sys.stderr); return None
+        try: raw = S.unzs_dict(raw, did, str(p)) if did else S.zstd_mod().decompress(raw)   # a frame whose size it cannot learn is refused, not guessed
         except Exception as e: print(f'[skip] {p}: zstd: {e}', file=sys.stderr); return None
     if b'BNSH' in raw or raw[:4] in (b'SARC', b'BAHS', b'NDSR', b'MSHD', b'Yaz0'):
         return str(p.relative_to(folder)), raw
@@ -54,6 +69,8 @@ def programs(folder, any_file, jobs=8):
     """(found programs, files read, [(label, reason) of archives the reader refused]) — one entry per stage of every variation. The files are read and
     decompressed in a pool (a dump keeps most of its 5,000-odd archives zstd frames, and that is the whole cost); the engine's reader runs in this one"""
     out, n, bad, seen = [], 0, [], 0
+    dicts = zs_dicts(folder)
+    if dicts: print(f'zstd dictionaries: {len(dicts)} (ids {", ".join(str(i) for i in sorted(dicts))})', file=sys.stderr, flush=True)
     paths = list(candidates(folder, any_file))
     print(f'reading {len(paths):,} candidate files', file=sys.stderr, flush=True)
     with cf.ThreadPoolExecutor(max_workers=jobs) as ex:
