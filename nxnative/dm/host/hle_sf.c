@@ -12,12 +12,17 @@
 // then {"SFCI", version, command, token} and the arguments. The response is the same with {u32 objects, 3 × u32} and {"SFCO", version, result, token}
 #include "hle.h"
 #include <pthread.h>
+#include <sys/mman.h>   // mincore: is a guest buffer's page actually mapped
 
 #define SF_H0 0xd0000u   // session handles: outside the kernel handle table (0x1000 + slot, 4096 slots, hle_thread.c)
 #define SF_MAX 64
 static struct { char name[16]; int used, domain, anon; uint32_t handle; unsigned seen; } g_sf[SF_MAX];
 static pthread_mutex_t g_sf_mu = PTHREAD_MUTEX_INITIALIZER;
-static const char *const sf_served[] = {"olsc:u", "chat:u", "auddmg:u"};
+static const char *const sf_served[] = {"olsc:u", "chat:u", "auddmg:u", "audsmx:u"};
+// Services whose command 0 opens an object (a manager or a user session the guest then sends on): the reply must carry a handle, not zeros.
+static int sf_opens_object(const char *n) { return !strncmp(n, "auddmg:u", 8) || !strncmp(n, "audsmx:u", 8); }
+#define SF_OBJ_H0 0x20000u    // object handles: outside the kernel table (0x1000+slot) and the host's session handles (0xd0000+slot)
+static char g_obj_name[0x1000][10];   // handle - SF_OBJ_H0 → the service whose command 0 returned it, so an adopted session keeps its identity
 
 static int sf_slot(uint32_t h) {
     unsigned i = h - SF_H0;
@@ -31,7 +36,10 @@ static int sf_adopt(uint32_t h) {
     pthread_mutex_lock(&g_sf_mu);
     unsigned i = 0; while (i < SF_MAX && g_sf[i].used) i++;
     if (i == SF_MAX) { pthread_mutex_unlock(&g_sf_mu); return -1; }
-    snprintf(g_sf[i].name, sizeof g_sf[i].name, "svc:%#x", h); g_sf[i].used = 1; g_sf[i].domain = 0; g_sf[i].anon = 1; g_sf[i].handle = h;
+    if (h >= SF_OBJ_H0 && h < SF_OBJ_H0 + 0x1000 && g_obj_name[h - SF_OBJ_H0][0])
+        snprintf(g_sf[i].name, sizeof g_sf[i].name, "%.8s-mgr", g_obj_name[h - SF_OBJ_H0]);   // an object a service handed out keeps its origin
+    else snprintf(g_sf[i].name, sizeof g_sf[i].name, "svc:%#x", h);
+    g_sf[i].used = 1; g_sf[i].domain = 0; g_sf[i].anon = 1; g_sf[i].handle = h;
     g_sf[i].seen = 0;
     pthread_mutex_unlock(&g_sf_mu);
     return (int)i;
@@ -91,7 +99,8 @@ static Result sf_send(uint32_t h, uint32_t *m, uint64_t size) {
             mod ? mod->name : "?", mod ? (unsigned long long)((uintptr_t)__builtin_return_address(0) - (uintptr_t)mod->base) : 0, m[0], m[1]);
     }
     uint8_t *base = (uint8_t *)m;
-    unsigned type = m[0] & 0xffff, nx = m[0] >> 16 & 15, nabw = (m[0] >> 20 & 15) + (m[0] >> 24 & 15) + (m[0] >> 28 & 15), ndw = m[1] & 0x3ff;
+    unsigned type = m[0] & 0xffff, nx = m[0] >> 16 & 15, na = m[0] >> 20 & 15, nb = m[0] >> 24 & 15;
+    unsigned nabw = na + nb + (m[0] >> 28 & 15), ndw = m[1] & 0x3ff;
     uint32_t *p = m + 2;
     if (m[1] >> 31) { uint32_t sh = *p++; p += (sh & 1 ? 2 : 0) + (sh >> 1 & 15) + (sh >> 5 & 15); }   // special header: process ID, copy and move handles
     p += nx * 2 + nabw * 3;
@@ -112,15 +121,54 @@ static Result sf_send(uint32_t h, uint32_t *m, uint64_t size) {
     if (type != 4 && type != 6) { LOG("[RED] sf: %s: HIPC message type %u not served", g_sf[i].name, type); return 0xe401u; }
     if (dtype == 2) { memset(base, 0, 16); return RES_OK; }   // a domain object closed: nothing to answer
     if (magic != 0x49434653) { LOG("[RED] sf: %s: request without SFCI (%#x)", g_sf[i].name, magic); return 0xe401u; }
+    // auddmg:u's manager object answers into the caller's B descriptor buffer (the reference port's out_buffer). Capture it before the reply zeroes the
+    // message, whose descriptors are part of it. B follows X (2 words) and A (3 words) descriptors, 3 words each: {size, addr low, addr high bits}.
+    uint64_t baddr = 0, bsize = 0;
+    if (g_sf[i].anon && g_sf[i].handle >= 0x20000u && g_sf[i].handle < 0x21000u && nb) {
+        const uint32_t *d = (const uint32_t *)(base + 8 + (nx * 2 + na * 3) * 4);
+        baddr = (uint64_t)d[1] | ((uint64_t)((d[2] >> 28) & 0xf) << 32) | ((uint64_t)((d[2] >> 2) & 0x3fffff) << 36);
+        bsize = (uint64_t)d[0] | ((uint64_t)((d[2] >> 24) & 0xf) << 32);
+    }
     unsigned key = (obj & 0xff) << 16 | (cmd & 0xffff);   // log each object / command once
     pthread_mutex_lock(&g_sf_mu); int first = g_sf[i].seen != key; g_sf[i].seen = key; pthread_mutex_unlock(&g_sf_mu);
     if (first || trace) LOG("sf: %s object %u command %u (%u data words in): success, zeroed output", g_sf[i].name, obj, cmd, ndw);
     // The response: no special header and no descriptors, so the data words start at +8 and the CMIF part at +0x10; everything after the headers up to the buffer's end reads as zero
     size_t end = size < 0x1000 ? size : 0x1000;
     memset(base, 0, end);
+    // auddmg:u command 0 is OpenVirtualDeviceManager and hands the client an object: a move handle the guest then sends its manager requests on. A reply with
+    // no handle leaves the client's object null and it dereferences it (SIGSEGV at sdk+0x2abf00, inside its abort path). The handle is outside the kernel
+    // handle table and the host's session handles, and sf_adopt serves it generically once the client sends on it.
+    if (!g_sf[i].anon && sf_opens_object(g_sf[i].name) && cmd == 0) {   // the service session opens the object; the object's own command 0 is its first request
+        uint32_t handle = SF_OBJ_H0 + (uint32_t)i;
+        memcpy(g_obj_name[i], g_sf[i].name, 8);
+        m[1] = 0x80000000u | (uint32_t)((end - 8) / 4 < 0x3ff ? (end - 8) / 4 : 0x3ff);   // a special header follows
+        uint32_t *sp = (uint32_t *)(base + 8);
+        sp[0] = 1u << 5;   // one move handle, no process id
+        sp[1] = handle;
+        uint32_t *oh = (uint32_t *)(base + 0x10); oh[0] = 0x4f434653; oh[1] = ver; oh[2] = RES_OK; oh[3] = 0;
+        LOG("sf: %.8s command 0: object as handle %#x", g_sf[i].name, handle);
+        return RES_OK;
+    }
     m[1] = (uint32_t)((end - 8) / 4 < 0x3ff ? (end - 8) / 4 : 0x3ff);
     size_t out = 0x10 + (dom ? 16 : 0);
     uint32_t *o = (uint32_t *)(base + out); o[0] = 0x4f434653; o[1] = ver; o[2] = RES_OK; o[3] = 0;   // "SFCO"; a domain's out-object count before it stays 0
+    // auddmg:u's manager: answer into the caller's buffer. Command 0 lists virtual output devices (a count, then 0x100 bytes of name each); the rest are
+    // not implemented yet and leave the zeroed reply, which is what the title is expected to trip over next.
+    if (bsize && baddr && !strncmp(g_sf[i].name, "auddmg:u", 8)) {
+        // The buffer can lie outside the reserved block (the SDK's own address space is mapped separately from it), so ask the kernel whether its pages exist
+        // rather than whether the address is in the block.
+        unsigned char vec = 0;
+        int mapped = mincore((void *)(uintptr_t)(baddr & ~(uint64_t)0xfff), 0x1000, &vec) == 0;
+        LOG("sf: auddmg:u manager command %u: answer buffer %#llx+%#llx%s", cmd, (unsigned long long)baddr, (unsigned long long)bsize,
+            mapped ? "" : " (its first page is not mapped)");
+        if (mapped && cmd == 0 && bsize >= 0x100) {
+            static const char name[] = "AudioVirtualOutput0";
+            size_t n = bsize < 0x200 ? (size_t)bsize : 0x200;
+            uint8_t *dst = (uint8_t *)(uintptr_t)baddr;
+            memset(dst, 0, n); memcpy(dst, name, sizeof name - 1);
+            o[4] = 1;   // one virtual output device
+        }
+    }
     // Probe: nn::chat::detail::InitializeUserService dereferences the object this call returns, so a zeroed reply leaves it null
     // (SIGSEGV at sdk+0x6bc400, addr 0). Answer with an object id instead, and count it in the domain header when the session is one.
     if (!strncmp(g_sf[i].name, "chat:u", 8) && cmd == 0) {
