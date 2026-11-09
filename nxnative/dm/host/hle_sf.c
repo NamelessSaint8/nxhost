@@ -12,7 +12,7 @@
 // then {"SFCI", version, command, token} and the arguments. The response is the same with {u32 objects, 3 × u32} and {"SFCO", version, result, token}
 #include "hle.h"
 #include <pthread.h>
-#include <sys/mman.h>   // mincore: is a guest buffer's page actually mapped
+int dm_guest_as_contains(uintptr_t a);   // hle_svc.c: the address lies in the reserved guest address block
 
 #define SF_H0 0xd0000u   // session handles: outside the kernel handle table (0x1000 + slot, 4096 slots, hle_thread.c)
 #define SF_MAX 64
@@ -123,9 +123,9 @@ static Result sf_send(uint32_t h, uint32_t *m, uint64_t size) {
     if (magic != 0x49434653) { LOG("[RED] sf: %s: request without SFCI (%#x)", g_sf[i].name, magic); return 0xe401u; }
     // auddmg:u's manager object answers into the caller's B descriptor buffer (the reference port's out_buffer). Capture it before the reply zeroes the
     // message, whose descriptors are part of it. B follows X (2 words) and A (3 words) descriptors, 3 words each: {size, addr low, addr high bits}.
-    uint64_t baddr = 0, bsize = 0;
+    uint64_t baddr = 0, bsize = 0; uint32_t bd[3] = {0, 0, 0};
     if (g_sf[i].anon && g_sf[i].handle >= 0x20000u && g_sf[i].handle < 0x21000u && nb) {
-        const uint32_t *d = (const uint32_t *)(base + 8 + (nx * 2 + na * 3) * 4);
+        const uint32_t *d = (const uint32_t *)(base + 8 + (nx * 2 + na * 3) * 4); bd[0] = d[0]; bd[1] = d[1]; bd[2] = d[2];
         baddr = (uint64_t)d[1] | ((uint64_t)((d[2] >> 28) & 0xf) << 32) | ((uint64_t)((d[2] >> 2) & 0x3fffff) << 36);
         bsize = (uint64_t)d[0] | ((uint64_t)((d[2] >> 24) & 0xf) << 32);
     }
@@ -155,13 +155,13 @@ static Result sf_send(uint32_t h, uint32_t *m, uint64_t size) {
     // auddmg:u's manager: answer into the caller's buffer. Command 0 lists virtual output devices (a count, then 0x100 bytes of name each); the rest are
     // not implemented yet and leave the zeroed reply, which is what the title is expected to trip over next.
     if (bsize && baddr && !strncmp(g_sf[i].name, "auddmg:u", 8)) {
-        // The buffer can lie outside the reserved block (the SDK's own address space is mapped separately from it), so ask the kernel whether its pages exist
-        // rather than whether the address is in the block.
-        unsigned char vec = 0;
-        int mapped = mincore((void *)(uintptr_t)(baddr & ~(uint64_t)0xfff), 0x1000, &vec) == 0;
-        LOG("sf: auddmg:u manager command %u: answer buffer %#llx+%#llx%s", cmd, (unsigned long long)baddr, (unsigned long long)bsize,
-            mapped ? "" : " (its first page is not mapped)");
-        if (mapped && cmd == 0 && bsize >= 0x100) {
+        // Do NOT write yet. This decode gives an address outside the guest block but inside the host's own stack (0x16d991120 in one run), so the packing
+        // below is not the layout this client uses: writing "proved" only that some page exists there, and a mincore test let a write land in host memory.
+        // The reference port resolves these buffers through the CMIF pointer buffer (QueryPointerBufferSize), which this host answers 0 — that is the gap.
+        int in_as = dm_guest_as_contains((uintptr_t)baddr);
+        LOG("sf: auddmg:u manager command %u: descriptor %08x %08x %08x -> %#llx+%#llx%s", cmd, bd[0], bd[1], bd[2], (unsigned long long)baddr,
+            (unsigned long long)bsize, in_as ? "" : " (not a guest address; not written)");
+        if (in_as && cmd == 0 && bsize >= 0x100) {
             static const char name[] = "AudioVirtualOutput0";
             size_t n = bsize < 0x200 ? (size_t)bsize : 0x200;
             uint8_t *dst = (uint8_t *)(uintptr_t)baddr;
