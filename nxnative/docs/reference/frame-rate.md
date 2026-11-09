@@ -277,6 +277,14 @@ Frame pacing: the host's frame step, engine frame limiters, present intervals an
 
 ## CPU cost and pacing
 
+### Packed signed vertex conversion processes four vertices together
+
+- **Symptom:** CPU vertex conversion remains a major racing cost even after conversion is limited to each draw's referenced vertices.
+- **Cause:** the generic `vconv_elem` path decodes the packed signed 10:10:10:2 format separately for every vertex and component.
+- **Fix:** `vconv_fill` dispatches formats `0x69`/`0x6a` to a dedicated loop. On ARM NEON it unpacks and converts four vertices together, including unaligned/strided loads and scalar tails. Signed normalization preserves the scalar float32 bits, and the existing default fourth component remains 1. Other platforms use the same specialized scalar calculation; other formats keep their original conversion.
+- **Check:** `t_vconv_packed` compares 864 cases bit for bit, covering every ten-bit value, alpha patterns, unaligned addresses, six strides, empty inputs, vector tails and a write guard. Its M4 Max benchmark (180,000 vertices × 20, `-O1`) fell from 73.67 to 2.19 ms; this is conversion time, not a frame-rate multiplier. The GPU vertex-fetch regression passes 422 checks.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#current-rendering-diagnosis-2026-11-08): before the change, `vconv_fill` appeared in 493 of 966 presentation-thread samples; afterward, 72 of 707. These are separate race samples. Most later measured windows hold 59–60 FPS, with the remaining stalls tracked in the game note.
+
 ### Arena buffer ownership on allocation
 
 - **Symptom:** autorelease work takes a measurable share of replay time, with temporary arena-buffer ownership traffic a few times per draw.
@@ -360,3 +368,10 @@ Frame pacing: the host's frame step, engine frame limiters, present intervals an
 - **Cause:** the thread that acquires the window (here the render thread) runs under a time-constraint policy whose computation the host re-declares every 120 frames; it was 1.25 × the 90th percentile of that thread's CPU time per frame. This render thread needs 1.9–2.0 ms a frame with one or two frames in 120 near 4.4 ms, against 2.5 ms declared, and each frame past the declaration stalled the thread. Probes on both threads' waits showed the main thread's waits; adding probes slowed the render thread and the stalls vanished, and `DM_RT=0` or a fixed `DM_RT_COMP=5` / `10` removed them too (99th percentile 18–21 ms) at the same CPU energy.
 - **Fix:** the declaration also covers 1.1 × the window's peak (`rt_comp_tick` in `hle_nvn.c`): 5.6 ms here, 60.0 fps, 99th percentile 21 ms.
 - **Found on:** [DARK SOULS: REMASTERED](../../dm/games/01004AB00A260000/README.md), in the Asylum cell.
+
+### Performance HUD collection scope
+
+- **Symptom:** enabling the Metal performance HUD severely reduces race performance, although the same executable and rendering switches are fast without it.
+- **Cause:** `MTL_HUD_ENABLED` alone leaves the collection scope to the system's HUD configuration. On an M4 Max with macOS 27.0.1, that configuration reproduced single-digit race windows; disabling the HUD restored about 40–43 FPS. The exact optional collector responsible has not been isolated.
+- **Fix:** `front_hud_env` explicitly defaults encoder timing, performance insights and logging off, and selects device, size, memory, FPS, GPU time, frame interval and its graph. Explicit environment values still override these defaults. The tested configuration keeps the overlay visible and restores race speed; it does not disable the host's existing GPU timing. Apple's [HUD configuration reference](https://developer.apple.com/documentation/xcode/customizing-metal-performance-hud) describes these independent switches.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#current-rendering-diagnosis-2026-11-08). The HUD-off and reduced-collection runs use the same executable, dense texture path, shader cache and copied starting save. Checked frames of the POC video show 42–59 FPS with the overlay visible.

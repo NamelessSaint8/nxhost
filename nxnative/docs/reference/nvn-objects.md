@@ -96,6 +96,14 @@ The game may also write into an NVN object directly, without an NVN call, throug
 - **Note:** requests beyond the reserved range (iOS reserves 1 GB: the buffers stay under 0x20100000 through the opening) are kept in the table only, like unaligned ones: textures can read them, the GPU cannot address them.
 - **Found on:** [Monster Hunter Rise](../../dm/games/0100B04011742000/README.md).
 
+### Residency mutations and queue commits share a lock
+
+- **Symptom:** Metal shader validation crashes in `applyResidencySets:` on a deallocated debug buffer; freeing sparse metadata later hangs in an associated heap owner's destructor.
+- **Cause:** add/remove/set-commit calls held the residency mutex, but direct render, presentation and classic queue commits did not. Those commits enumerate attached sets while another thread can remove their allocations. Once placement metadata entered the set, committing a removal could also destroy its associated heap owner under that mutex; its destructor attempted another removal and deadlocked.
+- **Fix:** `queue4_commit` and `queue3_commit` hold the same mutex as set mutation and commit, including deferred encoding and presentation paths. Pending removals retain their allocations until the set commit completes, then release those references outside the mutex so associated-resource destructors can retire backing heaps safely.
+- **Check:** an isolated unlocked race reproduces a message to a deallocated Metal debug buffer; locking it passes. `t_residency_commit` exercises 12,000 Metal 4 and 120 classic commits during 12,000 allocation replacements under both validation layers. Sparse upload/copy tests exercise associated heap retirement.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#current-rendering-diagnosis-2026-11-08). The queue race, metadata residency failure and destructor deadlock were reproduced separately; none should be inferred from the same generic GPU fault alone.
+
 ### Finalized pools kept alive by residency and the sharing table
 
 - **Symptom:** GPU memory grows with every scene change (Engage's idle title demo reached 5.4 GB of GPU memory and 3.6 GB resident in 850 s).
@@ -455,6 +463,22 @@ Games read this count as a position in their own command memory and size their h
 - **Fix:** a packaged texture keeps the bytes of its storage that lie in its first and last host pages when they are shared (`pkg_edges_take`); when only those pages were written and the bytes are as uploaded, it is protected again instead of re-uploaded (`pkg_edges_clean`, counted in the `packaged textures` line as `writes beside a texture only`).
 - **Found on:** [Pokémon Sword](../../dm/games/0100ABF008968000/README.md): 73,232 re-uploads in 70 s from a save, 12 GB of upload staging in 8 minutes, frame times rising to 75 ms; the same 70 s with the fix: 0 re-uploads and 72,584 such checks.
 - **Check:** `t_nvn` 6c1 covers it.
+
+### Region writes hoist block-linear row addressing
+
+- **Symptom:** copying streamed texture data into sparse guest storage costs several milliseconds before the subsequent texture upload begins.
+- **Cause:** `write_region_bl` recomputed the full block-linear address and called a variable-length `memcpy` for every 16-byte piece of a row.
+- **Fix:** compute the slice/row address once per row, then add the GOB column and its selected Switch 1/2 x-lane offset. Full pieces use constant-length 16-byte copies; unaligned starts and short tails keep the original byte count. Sparse page resolution, hole skipping and preparation of only touched physical pages are unchanged. The shared C implementation also builds for Android; its mapped-byte helper uses an explicit minimum instead of relying on an Apple-provided `MIN` macro.
+- **Check:** `t_nvn` compares 15 region-write cases and eight texture/buffer copy-mirror cases with complete-level round trips, preserving untouched bytes. The sparse GPU copy suite also passes both encoding modes and compressed edge/partial-page cases. In three alternating M4 Max `-O1` runs, a synthetic 16 MiB sparse copy with 3,000 registered ranges has median 9.60 ms before and 7.05 ms after, with identical data and one preparation per touched host page. This does not establish a frame-rate multiplier. The changed source passes Android NDK 28.2 syntax checking.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#current-rendering-diagnosis-2026-11-08). `DM_NVN_SPARSE_COPY_TIMING=1` logs sparse storage writes over 3 ms, with byte and page-preparation counts; the diagnostic race records 10–16 MiB writes taking about 9–14 ms before the optimization. Final 16 MiB writes take about 11.3 ms against about 14.0 ms in the separate baseline with the same preparation count. End-to-end stalls remain.
+
+### Dirty-range lookup hints preserve first matches
+
+- **Symptom:** refreshing a sparse atlas spends tens of milliseconds checking tiles that have not changed, even when only a small amount of content needs uploading.
+- **Cause:** each physical-run dirty check called `find_span`, scanning every registered memory-pool range again. Thousands of tiles multiplied that linear search by thousands of pools.
+- **Fix:** `find_span` keeps one hint per thread, invalidated by a shared registration/retirement epoch. The hint covers only an interval where no earlier range can win the first-match search. A partial overlap restricts it to the exact query, preserving shared-page and overlapping-pool semantics for later smaller requests. Protection, dirty generations, write publication and retirement locking keep their existing rules. This shared C code is also built by the Android backend.
+- **Check:** `t_dirty_lookup` checks late pools, independent threads, earlier reused slots, partial overlaps, smaller queries, retirement, address reuse, dirty writes and full-span bounds (19 checks). With 3,000 pools, 100,000 repeated checks fell from 320.71 to 0.29 ms on an M4 Max (`-O1`); this is lookup time, not a frame-rate multiplier. `t_dirty_slots`, `t_dirty_race` and `t_dirty_retire_race` also pass. The changed source passes an Android NDK 28.2 syntax check, which does not establish Android runtime performance.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#current-rendering-diagnosis-2026-11-08). At 14,936 mapped tiles, the page-check phase falls from 33–35 ms to about 2 ms in separate runs of the same streaming route.
 
 ### Dirty-page tracker race and early stalls
 
