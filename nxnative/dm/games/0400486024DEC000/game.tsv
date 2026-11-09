@@ -21,12 +21,13 @@ modules	main subsdk0 sdk
 romfs_marker	System/GameRomConfig/NormalProduct.game__RomConfig.bgyml
 
 # ---- Memory (provisional: reservations, none measured on this title yet) ----
-# The NPDM declares 48 MB of system resource, so virtual address memory is on (unlike Donkey Kong Bananza). These are Splatoon Raiders' starting split
-# for the same engine and SDK generation; the first boot's SetHeapSize request is what corrects them.
-mem_reserve	0x550000000
+# The NPDM declares 48 MB of system resource, so virtual address memory is on (unlike Donkey Kong Bananza). The first boot asked SetHeapSize for
+# 0x18ce00000 (6.22 GB) and the Splatoon Raiders split left only 0x130000000 (4.75 GB), so these are Mario Kart World's reservations, measured on
+# this host: 25 GB reserve less 16 GB alias, 256 MB stack and a 256 MB gap leaves 8.5 GB of heap.
+mem_reserve	0x640000000
 mem_alias	0x400000000
 mem_stack	0x10000000
-app_pool	0x240000000
+app_pool	0x260000000
 sys_resource	0x3000000
 
 # ---- Shader split (shader_split.py) ----

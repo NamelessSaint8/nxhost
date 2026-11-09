@@ -1,8 +1,9 @@
 # The Legend of Zelda: Ocarina of Time (Switch 2) — `0400486024DEC000`
 
 A Switch 2 title, dumped loose as `exefs/` (`main` 29.9 MB, `sdk` 7.8 MB, `subsdk0` 533 KB, `rtld`) and `romfs/` (25 GB) from update **1.1.1**
-(`Product.100`/`Product.111` tables, `RegionLangMask.txt` `111`). Nintendo EPD's engine (Nin_Ounce: sead / agl / gsys, Phive), an `sdk` whose spec is
-`Ounce`, NVN2 with Ampere shaders. **In bring-up: the host has not booted this title yet.** What is measured so far is its shader set.
+(`Product.100`/`Product.111` tables, `RegionLangMask.txt` `111`). Nintendo EPD's engine (Nin_Ounce: sead / agl / gsys, Phive), SDK **22.2.8** (the `sdk`
+names its spec `Ounce`), NVN2 with Ampere shaders. **The host boots it to `nnMain` and its first NVN2 frame setup**; the shader map and the pipeline
+build are the next gate.
 
 Reference: `NX2navi-0.5.0` beside the dump is a static recompilation of this game (v1.1.1) to Windows x86-64 with a Vulkan renderer. It is read for
 **what the game asks of the SDK** — its architecture notes enumerate the services it had to serve (`fs`, `hid`, the audio renderer, `nn::codec`
@@ -20,6 +21,31 @@ here; only the facts about the title are used.
 
 The four dictionary IDs are not in pack order — `pack.zsdic` is third in the SARC and fourth by ID. Each dictionary records its own ID at +4 of its
 0xEC30A437 header, which is what a frame's header names, so the table is read from the dictionaries rather than assumed.
+
+## Boot (Mac)
+
+The 2026-11-09 run reaches `nnMain` and the first NVN2 setup. Two steps stopped it on the way:
+
+1. **`SetHeapSize OOM: req 0x18ce00000 > cap 0x130000000`** — the Splatoon Raiders split left 4.75 GB of heap for a title that asks 6.22 GB. Mario Kart
+   World's reservation (25 GB reserve, 16 GB alias, 256 MB stack and a 256 MB gap) leaves 8.5 GB, and the host then reports
+   `[mem] heap 6.70 GB (heap region 8.50 GB)` and carries on. This is the one measured memory number so far.
+2. **`FATAL cannot read the shader map …/shader_map.tsv`** — expected until the split finishes. Everything before it already ran: the RomFS mounted,
+   `nvnDeviceGetInteger` answered API **231.40** (SDK 22, Switch 2), a 2560x1440 swap chain of 3 textures at interval 1 was created, the address
+   regions were allocated, and CPU-written textures (serials 27–44) uploaded through the Metal layer.
+
+The modules rewrite as they are: `main` 48,889 plain sites, 861 conditional, 1,264 `tpidr` and 66 spin waits; `sdk` with 2 registered cuts, 5
+observation gates and 57 SVC sites; `subsdk0` and `rtld`. The SDK's `AddressRegionManager node area 1 GB → 62 MB` patch matches; the
+`AllocateAddressRegion` alignment patch still reports a version gap against SDK 22's code shape, as on Mario Kart World.
+
+Run recipe:
+
+```
+make -C nxnative/dm/host GAME=0400486024DEC000 -j8 dmhost
+DM_MSL_DIR=$W/shader/metal_cache DM_MEM_CAP_GB=48 DM_ROMFS="…/dump/romfs" DM_SAVE=$W/save DM_TEMP=$W/tmp ./dmhost $W/patched
+```
+
+with `$W` this title's work tree (`.gamedump/OcarinaOfTime/` here) and `patched/` written by `dm/tools/patch_nso.py` for all four modules. The dump's
+`main` is ZBIC-compressed (NSO flag bit 7), so the tooling needs the optional `zbic` package.
 
 ## Shaders
 
@@ -51,9 +77,10 @@ split and built in the background rather than inline in a probe.
 
 ## Open
 
-- The host boot itself: nothing has been run against this profile. The first probes are the SVCs the SDK reaches, then the same order the other two
-  Switch 2 titles used (`docs/SWITCH2.md`, Donkey Kong Bananza's Boot section).
-- The 845 task/mesh programs (this host has no task/mesh pipeline) and the 38 unimplemented instructions.
-- Memory: the 12 GiB layout the title plans from, and whether this engine's heap fits the host's reserve; the game's `System/HeapSize` table is
-  unread so far.
+- The shader map and the first full translation/pipeline build: 122,083 stage programs is a long build, and the 845 task/mesh programs stay refused
+  until this host has a task/mesh pipeline.
+- How far past the first frame the title gets: nothing after the shader map has run yet.
+- The 38 unimplemented Ampere instructions (`243`, `f8c`, `3a9`).
+- Memory: the 6.22 GB heap is the measured number; the game's `System/HeapSize` table is still unread, and the 12 GiB console layout the title plans
+  from is not modelled.
 - Android: untested, and the 25 GB RomFS is the first question there.
