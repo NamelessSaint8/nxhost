@@ -3,6 +3,8 @@
 // HIPC through svcSendSyncRequest; the host has neither. It hands out sessions of its own instead and answers each request in the message buffer, for the services listed in sf_served:
 // success, the output data zeroed, no objects or handles. For olsc that reads as "backup off for every user", so the game leaves the settings alone (main+0x2809c8c asks per user and
 // switches backup off where it is on). Any other service name is refused with a red line, as sm refuses a service that is not registered.
+// auddmg:u is Ocarina of Time (Switch 2, SDK 22): its audio device manager is a service the SDK does not proxy, and the title aborts (Result 0xa99) when the
+// connect comes back ResultNotRegistered. Zeroed answers read as "no audio device", which is what this host's silent sink already reports elsewhere.
 // The SDK's own client functions are taken over where they reach the kernel (their calls inside sdk go through its PLT): the session manager's CreateNewSession runs natively on
 // DuplicateSession, and ConvertToDomainImpl on QueryPointerBufferSize and ConvertSessionToDomain. DM_SF_TRACE=1 dumps every request.
 // Message layout (Atmosphère / libnx): HIPC header {u16 type, counts of X / A / B / W descriptors; u32 data words, receive list, special header flag}, the special header and descriptors,
@@ -15,7 +17,7 @@
 #define SF_MAX 64
 static struct { char name[16]; int used, domain, anon; uint32_t handle; unsigned seen; } g_sf[SF_MAX];
 static pthread_mutex_t g_sf_mu = PTHREAD_MUTEX_INITIALIZER;
-static const char *const sf_served[] = {"olsc:u", "chat:u"};
+static const char *const sf_served[] = {"olsc:u", "chat:u", "auddmg:u"};
 
 static int sf_slot(uint32_t h) {
     unsigned i = h - SF_H0;
@@ -103,6 +105,10 @@ static Result sf_send(uint32_t h, uint32_t *m, uint64_t size) {
     uint32_t magic = *(uint32_t *)(base + hin), ver = *(uint32_t *)(base + hin + 4), cmd = *(uint32_t *)(base + hin + 8);
     static int trace = -1; if (trace < 0) trace = getenv("DM_SF_TRACE") && atoi(getenv("DM_SF_TRACE"));
     if (trace) { char hx[3 * 0x80 + 1] = ""; for (unsigned k = 0; k < 0x80 && k < size; k++) snprintf(hx + 3 * k, 4, "%02x ", base[k]); LOG("sf: %s request: %s", g_sf[i].name, hx); }
+    // HIPC type 2 is Close, not a request: the guest is done with the session and expects success with no reply body. Refusing it left the SDK's client
+    // dereferencing a null result (Ocarina of Time's auddmg:u: SIGSEGV at sdk+0x2ace08 after "message type 2 not served"). The session itself stays until
+    // the guest closes the kernel handle (CloseClientSessionHandle), which is the call that frees the slot.
+    if (type == 2) return RES_OK;
     if (type != 4 && type != 6) { LOG("[RED] sf: %s: HIPC message type %u not served", g_sf[i].name, type); return 0xe401u; }
     if (dtype == 2) { memset(base, 0, 16); return RES_OK; }   // a domain object closed: nothing to answer
     if (magic != 0x49434653) { LOG("[RED] sf: %s: request without SFCI (%#x)", g_sf[i].name, magic); return 0xe401u; }
