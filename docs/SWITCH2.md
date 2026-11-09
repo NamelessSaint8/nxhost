@@ -64,10 +64,10 @@ stream, the GPU memory model and the services above.
    driving a Vulkan queue from that is the largest single piece (Eglantine's `NX2_NOTES.md` rows 42–66 and 130–152).
 3. **The services**: `vi2` (layers, presents, fences), `syncpt`, the newer `am` commands, audio's `aud:u` style entry.
 4. **A task/mesh pipeline** for the geometry drawn that way (`ISBERD`/`ISBEWR`): Vulkan's `VK_EXT_mesh_shader` or Metal's mesh stages, with the
-   stage buffer those two stages hand each other. The 26 programs above are exactly those draws.
-5. **Memory**: a title that plans 9.5 GiB does not fit a phone today, and the dump above needs 22 GB of RomFS on the device (the data pack would be
-   pushed whole). Measured in an emulator, it does *not* survive a smaller reported total: given 10 GiB it touches memory that only exists in the
-   12 GiB layout and never reaches its shaders (see below). The total is therefore fixed, and a port needs a host that can back it.
+   stage buffer those two stages hand each other. Mario Kart World's 26 programs above are exactly those draws; Ocarina of Time has **845** (below).
+5. **Memory**: a title that plans 9.5 GiB does not fit a phone today, and Mario Kart World's dump above needs 22 GB of RomFS on the device (the data
+   pack would be pushed whole). Measured in an emulator, it does *not* survive a smaller reported total: given 10 GiB it touches memory that only
+   exists in the 12 GiB layout and never reaches its shaders (see below). The total is therefore fixed, and a port needs a host that can back it.
 
 Two facts make the work bounded rather than open-ended: the shaders build (above), and running the title's own arm64 code means no CPU emulation is
 needed once the services answer — the same trade this port already makes for Switch 1.
@@ -152,7 +152,42 @@ a 9 GB guest — a 16 GB device stays marginal and a 24 GB one is comfortable. T
 `config.ini` only takes effect when its companion `key\default` line is also flipped, and any rebuild of the shader translator moves the bundle
 (`dmsh_chain.lock`).
 
-## On the native host: where the port stands
+## A second title: Ocarina of Time (0400486024DEC000, 2026-11-09)
+
+The Mac host now has a profile for *The Legend of Zelda: Ocarina of Time* (Switch 2, dump of update 1.1.1) beside Mario Kart World's: its shader set is
+measured and the host boots it to `nnMain` and its first NVN2 setup. The full record is the [profile's README](../nxnative/dm/games/0400486024DEC000/README.md).
+
+**Ocarina of Time's RomFS is compressed with zstd dictionaries, and the first census found no shader at all because of it.** Every `.zs` names one of
+four dictionaries in `Pack/ZsDic.pack.zs` (IDs: 1 `zs.zsdic`, 2 `bkprb.zsdic`, 3 `bcett.byml.zsdic`, 4 `pack.zsdic` — the ID is in each dictionary's
+own 0xEC30A437 header, not its SARC order). `shader_split` already read such frames for Tears of the Kingdom; `nvn2_shader_census.py` did not load the
+table, so every asset was skipped with `Dictionary mismatch` and the run ended with "no BNSH program under …". It now loads the pack and opens a frame
+with the dictionary it names, and refuses a frame naming a dictionary the pack does not have rather than aborting the census.
+
+| Ocarina of Time | |
+|---|---|
+| files holding shaders | 13 of 8,184 candidates |
+| stage programs | **122,083** (57,085 vs, 60,612 ps, 3,566 ds, 820 cs) in **33,939 unique** |
+| translator (arch sm86) | **33,056 of 33,939 (97.4%)** |
+| failures | **845** task/mesh (`Ampere 927`, ISBERD/ISBEWR), 22 opcode `243`, 10 `f8c`, 6 `3a9` |
+
+So the shader side holds on the same terms as Mario Kart World's, with the task/mesh gap much larger in count: Ocarina of Time draws with mesh shaders as
+a matter of course, and 845 of its unique programs are task/mesh. The 38 remaining failures are ordinary unimplemented Ampere instructions, two thirds of
+them compute. 122,083 stage programs is about ten times Mario Kart World's 11,603, so the first full build is long even at 33,939 unique programs.
+
+**Boot: two walls, both bounded.** Splatoon Raiders' memory split gave Ocarina of Time a 4.75 GB heap for a title that asks `SetHeapSize 0x18ce00000`
+(6.22 GB), so the profile took Mario Kart World's reservations and the host reports `[mem] heap 6.70 GB (heap region 8.50 GB)`. The run then reaches
+`nnMain`, mounts the RomFS, is answered `nvnDeviceGetInteger` as NVN2 API **231.40** (SDK 22), creates a 2560x1440 swap chain of 3 textures at interval
+1, allocates its address regions and uploads CPU-written textures. The dump's `main` is ZBIC-compressed, so the tooling needs the optional `zbic`
+package; its `sdk` is `nnSdk-Generic_22_2_8`, newer than Mario Kart World's SDK 21.4.0 and Donkey Kong Bananza's 20.5.19.
+
+The split then finished (56,339 unique programs, 39,776 variation pairs) and the full translation build started. Against the partial cache the run made
+5,698 SVCs, asked for **2,376 shader libraries** and stopped on its own `nn::diag abort` (Result `0xa99`, call site `sdk+0x1f61ac`) — expected while
+those libraries do not exist, and the wall the build removes.
+
+The census is `devtools/nvn2_shader_census.py "/Volumes/Data/Switch/Zelda Ocarina of Time/dump" --json .gamedump/OcarinaOfTime/census.json` (8m37s on
+this Mac), and `dm/tools/tests/test_zs_dict.py` covers the dictionary path with a synthetic pack.
+
+## On the native host: where Mario Kart World's port stands
 
 The Mac host is built per profile — `make GAME=<id>` generates `game_profile.h` from `dm/games/<id>/game.tsv` — and a Switch 2 profile needs four keys a
 split-only one does not carry: `mem_reserve`, `mem_alias`, `mem_stack`, `app_pool`. They are host address-space reservations rather than values the title
@@ -386,19 +421,20 @@ The zeros were memory traffic as well as memory, which is why the run nearly dou
 upload of that array runs) and the dense materialisation itself: the array is **sparse** on the console, only mapped pages are paid for, and a dense 5.8 GB texture for a 9% mapping
 is the difference between this host's ~29 GB and the console's budget. Metal's own answer to that is sparse heaps, not a smaller format.
 
-### Sparse textures are not available, so the arrays are dense
+### Native sparse textures: Mario Kart World's probe corrected, its game integration experimental
 
-If the arrays are 2-9% mapped, the obvious question is whether Metal can hold them sparsely. `tools/mtl_sparse_probe.m` answers it on this machine (Apple M4 Max, macOS 26):
+The original probe for Mario Kart World's arrays used `newTextureWithDescriptor:offset:` on an `MTLHeapTypeSparse` heap. That overload is for placement
+heaps; its failure did not establish that sparse textures were unavailable. The corrected `nxnative/dm/tools/mtl_sparse_probe.m` uses
+`newTextureWithDescriptor:` and an explicit 64 KB sparse page size. On the M4 Max with macOS 27.0.1 it creates genuinely sparse arrays of Mario Kart
+World's own shapes, 8192×8192×68 ASTC and BC6H. Their tile geometry matches the guest's 64 KB tiles (512×512 texels for ASTC 8×8, 256×256 for BC6H).
+Sparse resources use their mappings for residency and cannot be added to a Metal residency set.
 
-| | |
-|---|---|
-| per-format sparse tile size | reported for every format, including `BC6H_RGBUfloat` (16 KB) and `ASTC_8x8_sRGB` (64 KB) |
-| `MTLHeapTypeSparse` heap | created only with an explicit size; then `newTextureWithDescriptor:offset:` returns **nil** for every format, a 512x512 BGRA8 control included -- so it is the path, not the format or the size |
-| `MTLHeapTypePlacement` + `placementSparsePageSize` | the heap and the texture are created, for the exact shapes this title uses, but the texture is **not** sparse: `isSparse` is false, `sparseTextureTier` is `None`, `updateTextureMapping:` does not exist, and `allocatedSize` is the whole dense size (5803 MB for the BC6H array, 1451 MB for the ASTC 8x8 one) |
-
-So a texture of that shape costs its dense size on this GPU, whatever the title has mapped: the 29 GB is 5.8 GB + 5.8 GB of one array plus the rest, and no Metal API turns it into 9%. The alternatives are structural rather than a format or hint -- allocate one texture per layer and only the mapped ones, with the translated shaders sampling through a table instead of a layer index, which is a shader-translation project rather than a fix.
-
-Recorded because it rules out a whole direction cheaply: a `MTLHeapTypeSparse` heap that creates fine and then refuses to place a texture is easy to read as a wrong descriptor and spend a day on.
+Mario Kart World's opt-in `DM_NVN_NATIVE_SPARSE=1` upload prototype keeps block compression and gathers only mapped tiles. Its direct Metal 4 GPU tests
+pass 112 checks for coloured mapped tiles, holes, partially mapped ASTC tiles, mip tails, remapping, both GOB layouts and the full 68-layer BC6H shape.
+The first full-game Mario Kart World run reduced the early footprint to about 12–13 GiB but encountered a GPU address page fault around frame 206. This
+is not a validated gameplay improvement: the experiment stays off by default, and the restored POC uses the dense path. Bindless use, sampling, copies,
+views and lifetime differences from the direct-read test still need to be isolated. The
+[game note](../nxnative/dm/games/0400C3F00006E000/README.md) tracks the current result.
 
 ### The 48 KB compute kernels are one threadgroup each
 
@@ -1128,7 +1164,7 @@ First real run: that line appears **once**, and `[RED] texture type mismatch` is
 
 **No native-image call happens at all**, and the codec refused nothing: there is no `nvnNativeImage*` line in the run, so the game takes the CPU readback route (`ReadDecoderOutputImageRgba` / `Nv12`), and no `nn::codec` `[RED]` line fired — no picture was turned away for a region or a stride.
 
-**But 19 shaders failed to load, and every one is a refused task/mesh program.** `[RED] failed to load shader <key>_b: cannot open …metallib` appears 19 times, and each key is among the 26 that `_b_build.json` records as `translation failed` with `Ampere 927 … task/mesh program (ISBERD/ISBEWR): no task or mesh pipeline in this host`. None of those keys is in `shader_map.tsv`, which is why the build summary never named them. So in the window where the movie should appear the game also asks for nineteen mesh-shader programs and draws nothing for them. Whether the movie's compositor is one of the nineteen is answerable from this side: a readback counter proves the picture is read, and the mesh pipeline is the remaining gap.
+**But 19 shaders failed to load, and every one is a refused task/mesh program.** `[RED] failed to load shader <key>_b: cannot open …metallib` appears 19 times, and each key is among the 26 that `_b_build.json` records as `translation failed` with `Ampere 927 … task/mesh program (ISBERD/ISBEWR): no task or mesh pipeline in this host`. **Correction, 2026-11-08:** all nineteen keys are present in `shader_map.tsv`; the absent libraries are refused translations. These errors come from asynchronous prefetch at program creation, before the movie, and do not prove that the movie compositor uses a missing stage. A matched capture subsequently proved the movie writer and reader used separate Metal allocations for linear/sRGB descriptors of the same guest storage. Sharing that storage restores the displayed movie; the race still renders incompletely. Evidence, the fix and the independent mesh-draw gap are recorded in the game's [current rendering diagnosis](../nxnative/dm/games/0400C3F00006E000/README.md#current-rendering-diagnosis-2026-11-08).
 
 **Open alongside it: a quarter-size tile in the top-left of the frame.** In both a 2D map frame and a 3D attract frame, the top-left **512x288** block differs markedly from the rest of the top band (mean colour `(78,91,84)` vs `(107,118,91)`, and `(68,102,84)` vs `(107,120,112)`). 512x288 is exactly 2048x1152 divided by four, which is the signature of a pass drawing at quarter resolution into the target's corner — the same shape at two different scenes makes it a host artefact, not scene content.
 
@@ -1138,7 +1174,8 @@ First real run: that line appears **once**, and `[RED] texture type mismatch` is
 - **A rebuild after a same-minute `git checkout` restore can be skipped**: the restored file's mtime can be older than the object `make` compares it with, so the binary silently keeps the old build. `touch` the file before `make`, then `grep -ac <the new log string> dmhost` and check the timestamp before trusting a run.
 - **`Attribute offset 0x5C is not valid`** -- benign: no guest draw binds that offset, and it lies past every vertex stride. `tools/shader_notes.py` lists the keys behind any translator note without a retranslation.
 - **`N` in `nvn_fmt_mtl.c`** is a *texture* verdict; `vfmt()` is the vertex table and covers both leftovers (`0x22` -> `Float3`, `0x69` -> `Int1010102Normalized`, now CPU-unpacked).
-- **Metal has no usable sparse placement here**: `MTLHeapTypeSparse` places nothing, `MTLHeapTypePlacement` places densely. The 8K arrays stay dense; their footprint is understood, not fixable by API.
+- **Mario Kart World's sparse atlas copies must persist through the physical page table**: updating only the Metal image loses copied content on re-upload and can restore invalid ASTC bytes. The fix removes the broad pink course wash and reduces the dense race footprint; see [the current game measurements](../nxnative/dm/games/0400C3F00006E000/README.md#current-rendering-diagnosis-2026-11-08).
+- **Mario Kart World's sparse heaps use the non-offset texture constructor**: the old offset-based probe falsely reported no support. Direct sparse GPU tests pass, but the full-game prototype still faults and remains opt-in.
 - **`DM_NVN_GPUPROF=1` profiles frame 1**, which has five colour-only passes and no world: use `every:<n>`.
 - **Texture serials are per run** -- a `texraw` must be issued in the process that printed the serial, and the passdump and the texraw must share one host.
 - **The two probes print different enums**: passdump gives Metal formats, `vdraw` NVN ones. Join on pass number (63 == 92, 41 == 30, 41 == 115).

@@ -29,9 +29,13 @@ The 2026-11-09 run reaches `nnMain` and the first NVN2 setup. Two steps stopped 
 1. **`SetHeapSize OOM: req 0x18ce00000 > cap 0x130000000`** — the Splatoon Raiders split left 4.75 GB of heap for a title that asks 6.22 GB. Mario Kart
    World's reservation (25 GB reserve, 16 GB alias, 256 MB stack and a 256 MB gap) leaves 8.5 GB, and the host then reports
    `[mem] heap 6.70 GB (heap region 8.50 GB)` and carries on. This is the one measured memory number so far.
-2. **`FATAL cannot read the shader map …/shader_map.tsv`** — expected until the split finishes. Everything before it already ran: the RomFS mounted,
+2. **`FATAL cannot read the shader map …/shader_map.tsv`** — until the split wrote the tables. Everything before it already ran: the RomFS mounted,
    `nvnDeviceGetInteger` answered API **231.40** (SDK 22, Switch 2), a 2560x1440 swap chain of 3 textures at interval 1 was created, the address
    regions were allocated, and CPU-written textures (serials 27–44) uploaded through the Metal layer.
+
+With the split in place (56,339 programs) and the full translation build still running, the next run goes further: 5,698 SVCs, then **2,376 shader
+libraries** requested, then the game's own `nn::diag abort` (Result `0xa99`, call site `sdk+0x1f61ac`). That abort is expected while those libraries do
+not exist — it is the wall the build removes — and it says nothing yet about the title's own code or the host's NVN2 path.
 
 The modules rewrite as they are: `main` 48,889 plain sites, 861 conditional, 1,264 `tpidr` and 66 spin waits; `sdk` with 2 registered cuts, 5
 observation gates and 57 SVC sites; `subsdk0` and `rtld`. The SDK's `AddressRegionManager node area 1 GB → 62 MB` patch matches; the
