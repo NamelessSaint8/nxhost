@@ -1,20 +1,20 @@
 ---
-gsd_state_version: 1.0
+gsd_state_version: "1.0"
 milestone: v1.0
-milestone_name: milestone
 current_phase: 12
 current_phase_name: One command that verifies a change
 status: planning
 stopped_at: Completed 11-03-PLAN.md
-last_updated: "2026-11-05T06:31:16.257Z"
-last_activity: 2026-11-05
+last_updated: "2026-11-11T16:45:06.646Z"
+last_activity: 2026-11-11
 last_activity_desc: Phase 13 closed in the roadmap; Phases 1, 2, 11 and 13 complete of 14
+state_head: 0dca94f1fc92385dee45ae3f4fea0f16cfc5721e
 progress:
   total_phases: 14
   completed_phases: 4
   total_plans: 42
   completed_plans: 42
-state_head: ddc31a8fbec161010ac84b951068ad70f77b9fe3
+milestone_name: milestone
 ---
 
 # Project State
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-10-31)
 Phase: 12 — One command that verifies a change
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-11-05 — Phase 13 closed in the roadmap; Phases 1, 2, 11 and 13 complete of 14
+Last activity: 2026-11-11 - Completed quick task 261111-fxs: Cut Android Vulkan descriptor-collection CPU for atlas shaders (code left uncommitted in the working tree)
 
 Progress: [██████████] 100% (every plan written so far is complete: 42 of 42; phases 1, 2, 11 and 13 of 14 closed)
 
@@ -233,6 +233,12 @@ None yet.
 - [Phase 3]: Research: HomuHomu833 arm64 NDK (asset re-uploaded in place, so the pinned hash can drift; clang build parity with r27c; its glibc), minimum distro adb and when `push -Z` arrived (Debian 12 ships 29.0.6)
 - [Phase 5]: Research: confirm `feature:android.hardware.vulkan.version` on the Y700 via `pm list features`, and `pm list packages --show-versioncode` reliability
 - Upstream sync: merge shirai91/nx2android weekly (never rebase); keep edits to `pipeline.py`, `cli.py`, `gui/app.py` to hook lines
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 261111-fxs | Cut Android Vulkan descriptor-collection CPU for atlas shaders (atlas set memo + per-submission env/format caches); code uncommitted | 2026-11-11 | 0dca94f1 | [261111-fxs-cut-android-vulkan-descriptor-collection](./quick/261111-fxs-cut-android-vulkan-descriptor-collection/) |
 
 ## Deferred Items
 
