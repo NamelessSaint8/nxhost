@@ -10,12 +10,24 @@
 #include "../gfx/tex/nvn_bc.h"
 #include "nvn_hmap.h"
 #include <string.h>
+#include <dlfcn.h>
+#include <sys/mman.h>
 
 int nvn_dirty_since_span(const void *span, const void *addr, size_t len, uint64_t stamp);
 int nvn_flushed(const void *p, uint64_t n);   // hle_nvn.c: whether the CPU published [p, p + n) with nvnMemoryPoolFlushMappedRange
 const void *nvn_dirty_span(const void *addr, size_t len);
 void nvn_dirty_protect(const void *addr, size_t len); void nvn_dirty_release(const void *addr, size_t len); uint64_t nvn_dirty_released(void); int nvn_dirty_runs(void);
 uint64_t nvn_dirty_now(void);
+int nvn_sparse_pool(const void *pool);
+uint64_t nvn_sparse_mapped_bytes(const void *pool, uint64_t address, uint64_t bytes);
+int nvn_sparse_contiguous(const void *pool, uint64_t address, uint64_t bytes, const pool_t **physical, uint64_t *offset);
+int nvn_sparse_cpu_readable(const void *pool, uint64_t address, uint64_t bytes);
+uint64_t nvn_sparse_gen(void);
+uint64_t nvn_sparse_copy(const void *pool, void *dst, uint64_t address, uint64_t bytes);
+uint64_t nvn_sparse_copy_zeroed(const void *pool, void *dst, uint64_t address, uint64_t bytes);
+int nvn_sparse_since(const void *pool, uint64_t address, uint64_t bytes, uint64_t gen, uint64_t stamp);
+void nvn_sparse_protect(const void *pool, uint64_t address, uint64_t bytes);
+int nvn_ft_written(const tex_t *t);   // hle_nvn.c: unflushed CPU writes since registration
 
 // ---------------- formats ----------------
 enum { K_NONE, K_FLOAT, K_INT, K_SINT };
@@ -58,6 +70,11 @@ static const fent FT[0x9D] = {
 };
 static vkfmt_t g_fmt[0x9D]; static uint8_t g_fmt_done[0x9D];
 static pthread_mutex_t g_fmt_mu = PTHREAD_MUTEX_INITIALIZER;
+int vk_color_num(VkFormat format) {
+    for (unsigned i = 0; i < sizeof FT / sizeof FT[0]; i++) if (FT[i].vk == format && FT[i].kind)
+        return FT[i].kind == K_INT ? 1 : FT[i].kind == K_SINT ? 2 : 0;
+    return 0;
+}
 const vkfmt_t *vk_fmt(int f) {
     if (f <= 0 || f >= 0x9D) return NULL;
     if (__atomic_load_n(&g_fmt_done[f], __ATOMIC_ACQUIRE)) return g_fmt[f].kind ? &g_fmt[f] : NULL;   // made already: no lock (the replay looks formats up for every texture it binds)
@@ -124,10 +141,58 @@ static VkImageViewType vtype_of(int target) {
     }
 }
 // storage key: textures with the same pool, offset and description share one image
-typedef struct { uint64_t pool; int64_t off; nvn_texdesc d; } akey;
+typedef struct { uint64_t pool; int64_t off; nvn_texdesc d; uint64_t revision; } akey;
 static nvn_hmap g_by_key = {.klen = sizeof(akey)};     // akey → vkimg_t*
 static nvn_hmap g_by_serial = {.klen = sizeof(uint64_t)};  // serial → vkimg_t* (images with no storage key: no pool memory)
 static pthread_mutex_t g_img_mu = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic uint64_t g_image_ownership_gen=1;
+uint64_t vk_image_ownership_gen(void) { return atomic_load_explicit(&g_image_ownership_gen,memory_order_acquire); }   // gfx_vk_atlas.c vk_atlas_version
+void vk_tex_note_use(vkimg_t *im){
+    if(!im)return;extern uint64_t g_tex_frame;uint64_t fence=mtl_last_fence()+(vk_sub_open()?1:0);
+    if(!im->touch_ns || im->used!=g_tex_frame || im->last_use!=fence){struct timespec now;clock_gettime(CLOCK_MONOTONIC,&now);im->touch_ns=(uint64_t)now.tv_sec*1000000000ull+now.tv_nsec;}
+    im->used=g_tex_frame;im->last_use=fence;
+}
+void vk_tex_mark_gpu_write(vkimg_t *im){
+    vk_tex_note_use(im);
+    if(im && !atomic_load_explicit(&im->gpu_w,memory_order_relaxed) && !atomic_exchange_explicit(&im->gpu_w,1,memory_order_acq_rel))atomic_fetch_add_explicit(&g_image_ownership_gen,1,memory_order_release);
+}
+static akey storage_key(const tex_t *t, const vkfmt_t *f) {
+    akey k; memset(&k,0,sizeof k);k.pool=(uint64_t)(uintptr_t)t->pool;k.off=t->off;k.d=t->d;
+    k.d.flags &= NVN_TEXTURE_FLAGS_LINEAR | NVN_TEXTURE_FLAGS_SPARSE | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET | NVN_TEXTURE_FLAGS_MINIMAL_LAYOUT | (f->depth || f->stencil ? 0 : NVN_TEXTURE_FLAGS_IMAGE);
+    return k;
+}
+typedef struct sparse_cpu_state { akey key; uint32_t pool_generation; uint64_t address,bytes,gen,stamp,seen_gen,seen_stamp,revision; struct sparse_cpu_state *next; } sparse_cpu_state;
+static sparse_cpu_state *g_sparse_cpu;
+static pthread_mutex_t g_sparse_cpu_mu=PTHREAD_MUTEX_INITIALIZER;
+static uint64_t g_sparse_cpu_revision;
+extern uint64_t g_tex_gen;
+static int sparse_cpu_update(sparse_cpu_state *s,uint64_t gen,uint64_t stamp) {
+    int changed=0;const void *pool=(const void *)(uintptr_t)s->key.pool;
+    if(!s->revision || gen!=s->seen_gen || stamp!=s->seen_stamp) {
+        if(!s->revision || nvn_sparse_since(pool,s->address,s->bytes,s->gen,s->stamp)) {
+            if(!nvn_sparse_cpu_readable(pool,s->address,s->bytes))die("[RED] sparse snapshot needs CPU-readable physical storage");
+            s->gen=gen;s->stamp=stamp;s->revision=++g_sparse_cpu_revision;changed=1;
+            nvn_sparse_protect(pool,s->address,s->bytes);
+        }
+        s->seen_gen=gen;s->seen_stamp=stamp;
+    }
+    return changed;
+}
+void vk_sparse_cpu_poll(void) {
+    uint64_t gen=nvn_sparse_gen(),stamp=nvn_dirty_now();int changed=0;
+    pthread_mutex_lock(&g_sparse_cpu_mu);
+    for(sparse_cpu_state *s=g_sparse_cpu;s;s=s->next)changed|=sparse_cpu_update(s,gen,stamp);
+    pthread_mutex_unlock(&g_sparse_cpu_mu);
+    if(changed)__atomic_add_fetch(&g_tex_gen,1,__ATOMIC_RELEASE);
+}
+static uint64_t sparse_cpu_revision(const tex_t *t,const akey *key) {
+    pthread_mutex_lock(&g_sparse_cpu_mu);sparse_cpu_state *s=g_sparse_cpu;
+    while(s && (s->pool_generation!=t->pool->generation || memcmp(&s->key,key,sizeof *key)))s=s->next;
+    if(!s){s=calloc(1,sizeof*s);if(!s)die("[RED] sparse depth state allocation failed");s->key=*key;s->pool_generation=t->pool->generation;s->address=(uint64_t)(uintptr_t)t->mem;s->bytes=t->L.size;s->next=g_sparse_cpu;g_sparse_cpu=s;}
+    uint64_t gen=nvn_sparse_gen(),stamp=nvn_dirty_now();
+    if(sparse_cpu_update(s,gen,stamp))__atomic_add_fetch(&g_tex_gen,1,__ATOMIC_RELEASE);
+    uint64_t revision=s->revision;pthread_mutex_unlock(&g_sparse_cpu_mu);return revision;
+}
 // The sRGB / UNORM twin of a format (the one reinterpretation games make of uncompressed colour targets), VK_FORMAT_UNDEFINED when it has none
 static VkFormat srgb_twin(VkFormat f) {
     switch (f) {
@@ -167,7 +232,7 @@ static vkimg_t *img_new(const tex_t *t, const vkfmt_t *f) {
     im->usage = ci.usage; im->cflags = ci.flags;
     VkResult r = vkCreateImage(V.dev, &ci, NULL, &im->img);
     if (r) { VKRED_ONCE(10, "vkCreateImage failed (%d): %ux%ux%u format %#x (vk %d) target %d levels %u layers %u samples %u", r, im->w, im->h, im->d, d->format, f->vk, d->target, im->levels, im->layers, im->samples); free(im); return NULL; }
-    VkMemoryRequirements req; vkGetImageMemoryRequirements(V.dev, im->img, &req);
+    VkMemoryRequirements req; vkGetImageMemoryRequirements(V.dev, im->img, &req);im->device_bytes=req.size;
     if ((ci.usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) && im->w >= 256) { static int n; if (n++ < 16)   // UBWC check: a compressed target takes room for its metadata
         VKLOG("target %ux%u format %d%s: %llu bytes", im->w, im->h, f->vk, im->fixed_fmt ? " (format-listed)" : "", (unsigned long long)req.size); }
     VkDeviceSize moff;
@@ -284,8 +349,11 @@ static void pkg_upload_(vkimg_t *im, const tex_t *t, const vkfmt_t *f) {
     }
 }
 static int packaged_tex(const tex_t *t);
+static int initial_cpu_content(const tex_t *t,const vkfmt_t *f,vkimg_t *im);
+static void cpu_tex_drop_pool(const void *pool);
 static int lin_copy(vkimg_t *im, const tex_t *t, const vkfmt_t *f);
 static int linear_storage(const tex_t *t);
+static void vk_tex_view_drop_all_mode(vkimg_t *im,int completed);
 static void vk_tex_view_drop_all(vkimg_t *im);
 // Images over the same memory with different descriptions (the storage key differs) are separate Vulkan images: on the Switch a texture sees what another
 // one over its memory rendered, here it does not. They are linked both ways at creation (up to 8 each), and a sampled image older than an overlapping
@@ -316,7 +384,38 @@ extern uint64_t g_tex_frame;   // presents so far, for the packaged textures' la
 // last EVICT_KEEP presents go (their memory now holds another texture; one drawn again is made and filled again). Called with g_img_mu held
 enum { EVICT_KEEP = 60 };
 static uint64_t g_img_n, g_img_bytes, g_img_evicted;   // live images and their bytes, images evicted so far (vk_tex_sweep's line)
-static void img_drop(vkimg_t *im) { vk_lrz_forget(im); if (im->lin_mem) nvn_dirty_release(im->lin_mem, im->lin_len); if (im->packaged && !im->pkg_released && im->pkg_mem) nvn_dirty_release(im->pkg_mem, im->pkg_len); g_img_n--; g_img_bytes -= im->size > 0 ? (uint64_t)im->size : 0; alias_unlink(im); vk_tex_view_drop_all(im); if (im->full) vk_defer_free_view(im->full); if (im->sub) vk_defer_free_image_sub(im->img, im->sub); else vk_defer_free_image(im->img, im->mem); free(im); }
+void vk_tex_memory_census(void){
+    uint64_t gpu=0,cpu=0,other=0,old_gpu=0,family_bytes=0,family_max=0,file_pixels=0;unsigned families=0,family_images=0;vkimg_t *largest[12]={0};pthread_mutex_lock(&g_img_mu);
+    for(int table=0;table<2;table++){nvn_hmap *map=table?&g_by_serial:&g_by_key;
+        for(uint32_t i=0;i<map->cap;i++){vkimg_t *image=map->vals[i];if(!image)continue;if(image->file_paged){file_pixels+=image->file_bytes;continue;}
+            if(image->gpu_w){gpu+=image->device_bytes;if(g_tex_frame-image->used>2)old_gpu+=image->device_bytes;}
+            else if(image->packaged)cpu+=image->device_bytes;else other+=image->device_bytes;
+            for(unsigned at=0;at<12;at++)if(!largest[at] || image->device_bytes>largest[at]->device_bytes){memmove(largest+at+1,largest+at,(11-at)*sizeof *largest);largest[at]=image;break;}
+        }
+    }
+    // Measure the narrow GPU-only resolution families supported by Metal before
+    // changing Vulkan backing. Count each (pool, offset, format) only once.
+    for(uint32_t i=0;i<g_by_key.cap;i++){
+        vkimg_t *im=g_by_key.vals[i];if(!im || im->flags!=(NVN_TEXTURE_FLAGS_COMPRESSIBLE|NVN_TEXTURE_FLAGS_IMAGE) || im->target!=NVN_TEXTURE_TARGET_2D || im->d!=1 || im->layers!=1 || im->levels!=1 || im->samples!=1)continue;
+        const pool_t *pool=(const pool_t *)(uintptr_t)im->pool;if(!pool || !(pool->flags&NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS) || nvn_sparse_pool(pool))continue;
+        int first=1;unsigned count=0;uint64_t bytes=0,maximum=0;
+        for(uint32_t j=0;j<g_by_key.cap;j++){
+            vkimg_t *o=g_by_key.vals[j];if(!o || o->pool!=im->pool || o->off!=im->off || o->fmt!=im->fmt || o->flags!=im->flags || o->target!=im->target || o->d!=1 || o->layers!=1 || o->levels!=1 || o->samples!=1)continue;
+            if(j<i){first=0;break;}count++;bytes+=o->device_bytes;if(o->device_bytes>maximum)maximum=o->device_bytes;
+        }
+        if(first && count>1){families++;family_images+=count;family_bytes+=bytes;family_max+=maximum;}
+    }
+    VKLOG("texture census: GPU-written %.2f MiB (unused for >2 presents %.2f MiB), CPU-backed %.2f MiB, other %.2f MiB (image requirements, exclude slab slack)",gpu/1048576.0,old_gpu/1048576.0,cpu/1048576.0,other/1048576.0);
+    if(file_pixels)VKLOG("texture census: %.2f MiB inactive GPU pixels retained in private file storage",file_pixels/1048576.0);
+    VKLOG("texture census: %u GPU-only resolution families / %u images, %.2f MiB separate requirements, %.2f MiB largest-per-family (potential only)",families,family_images,family_bytes/1048576.0,family_max/1048576.0);
+    for(unsigned i=0;i<12 && largest[i];i++){const vkimg_t *im=largest[i];VKLOG("texture census largest: %.2f MiB %ux%ux%u layers %u levels %u samples %u format %#x flags %#x poolflags %#x GPU-written %d",im->device_bytes/1048576.0,im->w,im->h,im->d,im->layers,im->levels,im->samples,im->nvn_format,im->flags,im->pool?((const pool_t *)(uintptr_t)im->pool)->flags:0,(int)im->gpu_w);}
+    pthread_mutex_unlock(&g_img_mu);
+}
+static void image_file_release(vkimg_t *im);
+static void img_drop_mode(vkimg_t *im,int completed) { atomic_fetch_add_explicit(&g_image_ownership_gen,1,memory_order_release);image_file_release(im);vk_lrz_forget(im); if (im->lin_mem) nvn_dirty_release(im->lin_mem, im->lin_len); if (im->packaged && !im->pkg_released && im->pkg_mem) nvn_dirty_release(im->pkg_mem, im->pkg_len); g_img_n--; g_img_bytes -= im->size > 0 ? (uint64_t)im->size : 0; alias_unlink(im); vk_tex_view_drop_all_mode(im,completed); if (im->full) {if(completed)vkDestroyImageView(V.dev,im->full,NULL);else vk_defer_free_view(im->full);} if(im->img){if(completed)vk_free_completed_image(im->img,im->mem,im->sub);else if (im->sub) vk_defer_free_image_sub(im->img, im->sub); else vk_defer_free_image(im->img, im->mem);} free(im); }
+static void img_drop(vkimg_t *im){img_drop_mode(im,0);}
+static void img_drop_completed(vkimg_t *im){img_drop_mode(im,1);}
+#include "gfx_vk_image_file.inc"
 static void evict_overlaps(uint64_t pool, int64_t off, int64_t size) {
     akey ks[64]; int n = 0;
     for (uint32_t i = 0; i < g_by_key.cap && n < 64; i++) {
@@ -329,28 +428,72 @@ vkimg_t *vk_tex(const tex_t *t) {
     if (!t || !t->serial || t->magic != MAGIC('T', 'E', 'X', 0)) return NULL;
     const vkfmt_t *f = vk_fmt(t->d.format);
     if (!f) { VKRED_ONCE(14, "texture format %#x has no Vulkan counterpart here (first case %ux%u target %d)", t->d.format, t->d.width, t->d.height, t->d.target); return NULL; }
+    tex_t resolved;
+    if(vk_atlas_enabled() && !f->compressed && t->pool && nvn_sparse_pool(t->pool)) {
+        const pool_t *physical;uint64_t offset;
+        if(nvn_sparse_contiguous(t->pool,(uint64_t)(uintptr_t)t->mem,t->L.size,&physical,&offset)) {
+            resolved=*t;resolved.pool=(pool_t *)physical;resolved.off=(int64_t)offset;resolved.mem=physical->mem+offset;t=&resolved;
+        }
+    }
+    // Compatibility storage for uncompressed sparse resources. Adreno 840 has
+    // no sparse depth images or sparse-image aliasing. CPU-backed versions are
+    // immutable until a GPU write, which retains its contents. Remapping
+    // a GPU-written version still requires physical tile coherence (open), so
+    // reject it explicitly rather than replacing those contents with CPU zeros.
+    int sparse_cpu=vk_atlas_enabled() && t->pool && nvn_sparse_pool(t->pool) && !f->compressed && !f->stencil && t->d.samples<=1 && (t->d.target==NVN_TEXTURE_TARGET_2D || t->d.target==NVN_TEXTURE_TARGET_2D_ARRAY);
+    if (vk_atlas_candidate(t)) {Dl_info di;void *pc=__builtin_return_address(0);uint64_t caller=dladdr(pc,&di)?(uintptr_t)pc-(uintptr_t)di.dli_fbase:0;
+        die("[RED] [vk] compressed sparse texture needs atlas storage: serial=%llu format=%#x target=%u size=%ux%ux%u levels=%u caller=%#llx; dense allocation refused",(unsigned long long)t->serial,t->d.format,t->d.target,t->d.width,t->d.height,t->d.depth,t->d.levels,(unsigned long long)caller);}
+    if (!sparse_cpu && vk_atlas_enabled() && t->pool && nvn_sparse_pool(t->pool)) {
+        Dl_info caller;void *pc=__builtin_return_address(0);if(dladdr(pc,&caller))VKLOG("sparse texture caller offset %#llx",(unsigned long long)((uintptr_t)pc-(uintptr_t)caller.dli_fbase));
+        die("[RED] [vk] unsupported sparse texture: serial=%llu format=%#x flags=%#x target=%u size=%ux%ux%u levels=%u samples=%u offset=%#llx mapped=%llu/%llu layer_bytes=%llu packaged=%u", (unsigned long long)t->serial, t->d.format, t->d.flags, t->d.target, t->d.width, t->d.height, t->d.depth, t->d.levels, t->d.samples, (unsigned long long)t->off, (unsigned long long)nvn_sparse_mapped_bytes(t->pool,(uint64_t)(uintptr_t)t->mem,t->L.size), (unsigned long long)t->L.size, (unsigned long long)t->L.layer_size,t->has_layout);
+    }
     if (t->d.target == NVN_TEXTURE_TARGET_BUFFER) return NULL;   // buffer textures: texel buffer views of the pool (vk_tex_view)
-    akey k; memset(&k, 0, sizeof k); k.pool = (uint64_t)(uintptr_t)t->pool; k.off = t->off; k.d = t->d;
+    akey k = storage_key(t,f);
+    if(sparse_cpu)k.revision=sparse_cpu_revision(t,&k);
     // flags that do not change the storage's layout are not part of the key: on the Switch two textures over the same memory that differ only in them see the
     // same texels. Xenoblade Chronicles 3 renders its shadow maps and depth-stencil buffer through textures with COMPRESSIBLE and samples them through others with
     // IMAGE added; as separate images those were never written, the shadows were total and the stencil's material tags 0, and its lit scene black. IMAGE stays
     // in the key for colour formats (it gives the image storage usage), not for depth and stencil, which cannot be storage images
-    k.d.flags &= NVN_TEXTURE_FLAGS_LINEAR | NVN_TEXTURE_FLAGS_SPARSE | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET | NVN_TEXTURE_FLAGS_MINIMAL_LAYOUT | (f->depth || f->stencil ? 0 : NVN_TEXTURE_FLAGS_IMAGE);
     int keyed = t->pool != NULL;
     pthread_mutex_lock(&g_img_mu);
     vkimg_t *im = keyed ? nvn_hm_get(&g_by_key, &k) : nvn_hm_get(&g_by_serial, &t->serial);
     int fresh = 0;
     if (!im) {
+        // Earlier descriptors retain their images until the current fence.
+        // Retire old CPU snapshots immediately instead of keeping 60 frames of
+        // full depth arrays in the ordinary overlap-eviction cache.
+        if(sparse_cpu)for(uint32_t i=0;i<g_by_key.cap;i++)if(g_by_key.vals[i]){akey old;memcpy(&old,g_by_key.keys+(size_t)i*g_by_key.klen,sizeof old);
+            if(old.revision && old.pool==k.pool && old.off==k.off && !memcmp(&old.d,&k.d,sizeof k.d)){vkimg_t *previous=g_by_key.vals[i];if(previous->gpu_w)die("[RED] remap/CPU update of GPU-written sparse storage needs physical tile coherence");nvn_hm_del(&g_by_key,&old);img_drop(previous);i=(uint32_t)-1;}}
         if (keyed) evict_overlaps(k.pool, t->off, (int64_t)t->L.size);
         im = img_new(t, f); if (!im) { pthread_mutex_unlock(&g_img_mu); return NULL; }
         im->pool = k.pool; im->off = t->off; im->size = (int64_t)t->L.size; im->flags = t->d.flags; g_img_n++; g_img_bytes += t->L.size;
         if (keyed) { alias_link(im); nvn_hm_put(&g_by_key, &k, im); } else nvn_hm_put(&g_by_serial, &t->serial, im);
+        atomic_fetch_add_explicit(&g_image_ownership_gen,1,memory_order_release);
         fresh = 1;
     }
-    im->used = g_tex_frame;
+    if(im->file_paged)image_file_restore(im);
+    vk_tex_note_use(im);
     pthread_mutex_unlock(&g_img_mu);
     if (!vk_sub_open()) return fresh ? NULL : im;   // looked up outside a submission (present): nothing can be recorded, a new image has no contents yet
+    if(sparse_cpu) {
+        if(!im->packaged){
+            uint8_t *snapshot=mmap(NULL,t->L.size,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);if(snapshot==MAP_FAILED)die("[RED] sparse snapshot allocation failed");
+            nvn_sparse_copy_zeroed(t->pool,snapshot,(uint64_t)(uintptr_t)t->mem,t->L.size);
+            tex_t local=*t;local.mem=snapshot;pkg_upload(im,&local,f);
+            nvn_dirty_release(snapshot,t->L.size);im->pkg_mem=NULL;im->pkg_len=0;im->pkg_span=NULL;im->pkg_released=1;
+            munmap(snapshot,t->L.size);Dl_info di;void *pc=__builtin_return_address(0);uint64_t caller=dladdr(pc,&di)?(uintptr_t)pc-(uintptr_t)di.dli_fbase:0;
+            VKLOG("sparse %s snapshot ser=%llu revision=%llu size=%.2f MiB format=%#x flags=%#x %ux%ux%u levels=%u caller=%#llx",f->depth?"depth":"color",(unsigned long long)t->serial,(unsigned long long)k.revision,t->L.size/1048576.0,t->d.format,t->d.flags,t->d.width,t->d.height,t->d.depth,t->d.levels,(unsigned long long)caller);
+        }
+        return im;
+    }
+    // A CPU stream can fill before Initialize, or after an empty first binding.
+    // Render capability alone is not a GPU write. Actual GPU destinations and
+    // shader-writable images keep their GPU content when neighbouring pages change.
+    if(t->mem && !im->gpu_w && !(im->usage & VK_IMAGE_USAGE_STORAGE_BIT) && !packaged_tex(t)) {
+        if(nvn_ft_written(t) || initial_cpu_content(t,f,im))mtl_tex_cpu_written(t);
+    }
     if (t->mem && lin_copy(im, t, f)) {}
+    else if (im->gpu_w) {}   // a render/copy/storage write superseded CPU-backed storage
     else if (t->mem && packaged_tex(t)) {
         im->pkg_used = g_tex_frame;
         if (!im->packaged) { im->packaged = 1; pkg_upload(im, t, f); }
@@ -384,7 +527,11 @@ uint64_t g_tex_frame;
 typedef struct { uint64_t used; vkimg_t *im; } pkg_age;
 static int pkg_age_cmp(const void *a, const void *b) { uint64_t x = ((const pkg_age *)a)->used, y = ((const pkg_age *)b)->used; return x < y ? -1 : x > y; }
 void vk_tex_sweep(void) {
-    if (++g_tex_frame % 300) return;
+    ++g_tex_frame;vk_atlas_sweep(g_tex_frame);
+    if(image_file_budget()){
+        pthread_mutex_lock(&g_img_mu);image_file_trim();pthread_mutex_unlock(&g_img_mu);
+    }
+    if (g_tex_frame % 300) return;
     uint64_t idle = 0, lru = 0, before = nvn_dirty_released();
     pthread_mutex_lock(&g_img_mu);
     pkg_age *v = NULL; size_t nv = 0, cap = 0;
@@ -426,10 +573,71 @@ void vk_tex_drop_pool(const void *pool) {   // the pool is finalized: its textur
         img_drop(im);
     }
     pthread_mutex_unlock(&g_img_mu);
+    pthread_mutex_lock(&g_sparse_cpu_mu);sparse_cpu_state **state=&g_sparse_cpu;
+    while(*state){sparse_cpu_state *s=*state;if(s->key.pool==(uint64_t)(uintptr_t)pool){*state=s->next;free(s);}else state=&s->next;}
+    pthread_mutex_unlock(&g_sparse_cpu_mu);
+    cpu_tex_drop_pool(pool);
 }
-// CPU-written textures (WriteTexels / a dirty first use): packaged from now on
-static nvn_hmap g_cpu_written = {.klen = sizeof(uint64_t)}; static pthread_mutex_t g_cw_mu = PTHREAD_MUTEX_INITIALIZER;
-void mtl_tex_cpu_written(const tex_t *t) { if (!t->serial) return; pthread_mutex_lock(&g_cw_mu); nvn_hm_put(&g_cpu_written, &t->serial, (void *)1); pthread_mutex_unlock(&g_cw_mu); }
+// Retain classification/identity for command snapshots after TextureFinalize;
+// the pool owns the metadata and releases it, including retired serials.
+typedef struct { tex_t t; int cpu; } cpu_tex_record;
+static nvn_hmap g_cpu_records = {.klen = sizeof(uint64_t)}; static pthread_mutex_t g_cw_mu = PTHREAD_MUTEX_INITIALIZER;
+static nvn_hmap g_cpu_retired = {.klen = sizeof(uint64_t)};   // only CPU classification survives Finalize: serial -> pool
+static cpu_tex_record *cpu_record(const tex_t *t) {   // g_cw_mu held
+    cpu_tex_record *r=nvn_hm_get(&g_cpu_records,&t->serial);
+    if(!r){r=calloc(1,sizeof*r);if(!r)die("[vk] texture tracking allocation failed");r->t=*t;nvn_hm_put(&g_cpu_records,&t->serial,r);}return r;
+}
+void mtl_tex_init(const tex_t *t) { if(!t->serial || !t->pool || !t->mem)return;pthread_mutex_lock(&g_cw_mu);cpu_record(t);pthread_mutex_unlock(&g_cw_mu); }
+void mtl_tex_release(tex_t *t) {
+    pthread_mutex_lock(&g_cw_mu);cpu_tex_record *r=nvn_hm_get(&g_cpu_records,&t->serial);
+    if(r){if(r->cpu)nvn_hm_put(&g_cpu_retired,&t->serial,r->t.pool);nvn_hm_del(&g_cpu_records,&t->serial);free(r);}pthread_mutex_unlock(&g_cw_mu);
+}
+void mtl_tex_cpu_written(const tex_t *t) {
+    if(!t->serial || !t->pool || !t->mem)return;pthread_mutex_lock(&g_cw_mu);cpu_tex_record *r=nvn_hm_get(&g_cpu_records,&t->serial);
+    int changed=r?!r->cpu:!nvn_hm_get(&g_cpu_retired,&t->serial);if(r)r->cpu=1;else nvn_hm_put(&g_cpu_retired,&t->serial,t->pool);pthread_mutex_unlock(&g_cw_mu);
+    if(changed){extern uint64_t g_tex_gen;__atomic_add_fetch(&g_tex_gen,1,__ATOMIC_RELEASE);}
+}
+int vk_tex_gpu_content(const tex_t *t) {
+    if(!t)return 0;uint64_t pool=(uint64_t)(uintptr_t)t->pool;int64_t off=t->off;int owned=0;
+    typedef struct {uint64_t pool,serial,address,size,image_gen,map_gen;int64_t off;uint32_t incarnation;int owned;} owner_cache;
+    static __thread owner_cache cache[128];static int enabled=-1;int use=__atomic_load_n(&enabled,__ATOMIC_ACQUIRE);
+    if(use<0){const char *e=getenv("DM_VK_OWNERSHIP_CACHE");use=!e || atoi(e);__atomic_store_n(&enabled,use,__ATOMIC_RELEASE);}
+    uint64_t image_gen=atomic_load_explicit(&g_image_ownership_gen,memory_order_acquire),map_gen=t->pool && nvn_sparse_pool(t->pool)?nvn_sparse_gen():0,serial=pool?0:t->serial,address=(uint64_t)(uintptr_t)t->mem;
+    uint32_t incarnation=t->pool?t->pool->generation:0;uint64_t hash=(pool>>4)^((uint64_t)off>>12)^(t->L.size>>12)^serial;hash^=hash>>30;hash*=0xbf58476d1ce4e5b9ull;hash^=hash>>27;
+    owner_cache *hit=&cache[hash&127];
+    if(use && hit->image_gen==image_gen && hit->map_gen==map_gen && hit->pool==pool && hit->serial==serial && hit->incarnation==incarnation && hit->off==off && hit->size==t->L.size && hit->address==address)return hit->owned;
+    uint64_t original_pool=pool;int64_t original_off=off;
+    if(t->pool && nvn_sparse_pool(t->pool)){const pool_t *physical;uint64_t offset;if(nvn_sparse_contiguous(t->pool,(uint64_t)(uintptr_t)t->mem,t->L.size,&physical,&offset)){pool=(uint64_t)(uintptr_t)physical;off=(int64_t)offset;}}
+    pthread_mutex_lock(&g_img_mu);
+    if(pool)for(uint32_t i=0;i<g_by_key.cap && !owned;i++){vkimg_t *im=g_by_key.vals[i];if(im && im->pool==pool && im->off<off+(int64_t)t->L.size && off<im->off+im->size)owned=im->gpu_w || (im->usage&VK_IMAGE_USAGE_STORAGE_BIT);}
+    else{vkimg_t *im=nvn_hm_get(&g_by_serial,&t->serial);owned=im && (im->gpu_w || (im->usage&VK_IMAGE_USAGE_STORAGE_BIT));}
+    pthread_mutex_unlock(&g_img_mu);
+    // Capture versions before the scan. A later image change, GPU write or
+    // remap invalidates the next lookup, including cached negative results.
+    if(use)*hit=(owner_cache){.pool=original_pool,.serial=serial,.address=address,.size=t->L.size,.image_gen=image_gen,.map_gen=map_gen,.off=original_off,.incarnation=incarnation,.owned=owned};
+    return owned;
+}
+int mtl_tex_gpu_owned(uint64_t serial) {
+    tex_t t={.serial=serial};pthread_mutex_lock(&g_cw_mu);cpu_tex_record *r=nvn_hm_get(&g_cpu_records,&serial);if(r)t=r->t;pthread_mutex_unlock(&g_cw_mu);return vk_tex_gpu_content(&t);
+}
+static void cpu_tex_drop_pool(const void *pool) {
+    pthread_mutex_lock(&g_cw_mu);
+    for(uint32_t i=0;i<g_cpu_records.cap;) {cpu_tex_record *r=g_cpu_records.vals[i];if(r && r->t.pool==pool){uint64_t serial=r->t.serial;nvn_hm_del(&g_cpu_records,&serial);free(r);i=0;}else i++;}
+    for(uint32_t i=0;i<g_cpu_retired.cap;) {if(g_cpu_retired.vals[i]==pool){uint64_t serial;memcpy(&serial,g_cpu_retired.keys+(size_t)i*8,8);nvn_hm_del(&g_cpu_retired,&serial);i=0;}else i++;}
+    if(!g_cpu_records.n){free(g_cpu_records.keys);free(g_cpu_records.vals);g_cpu_records=(nvn_hmap){.klen=sizeof(uint64_t)};}
+    if(!g_cpu_retired.n){free(g_cpu_retired.keys);free(g_cpu_retired.vals);g_cpu_retired=(nvn_hmap){.klen=sizeof(uint64_t)};}
+    pthread_mutex_unlock(&g_cw_mu);
+}
+uint64_t vk_tex_tracking_count(void) { pthread_mutex_lock(&g_cw_mu);uint64_t n=g_cpu_records.n+g_cpu_retired.n;pthread_mutex_unlock(&g_cw_mu);return n; }
+static int initial_cpu_content(const tex_t *t,const vkfmt_t *f,vkimg_t *im) {
+    if(!t->serial || !t->pool || !t->mem || t->has_layout || t->d.samples>1 || t->d.target==NVN_TEXTURE_TARGET_BUFFER)return 0;
+    if(t->pool->flags & (NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS|NVN_MEMORY_POOL_FLAGS_VIRTUAL))return 0;
+    if(t->d.flags & (NVN_TEXTURE_FLAGS_IMAGE|NVN_TEXTURE_FLAGS_COMPRESSIBLE|NVN_TEXTURE_FLAGS_LINEAR|NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET|NVN_TEXTURE_FLAGS_SPARSE))return 0;
+    if(f->depth || f->stencil || (!(f->bc || f->compressed) && !DM_GAME_TEX_DIRTY_UPLOAD))return 0;
+    if(im->initial_cpu_serial==t->serial)return 0;im->initial_cpu_serial=t->serial;
+    const uint8_t *p=t->mem;size_t n=t->L.size;
+    while(n>=8){uint64_t word;memcpy(&word,p,8);if(word)return 1;p+=8;n-=8;}while(n--)if(*p++)return 1;return 0;
+}
 // Linear textures (LINEAR) in a pool are their storage on the Switch: the CPU writes the pool memory and the GPU reads it (Metal's tex_linear makes them on the pool buffer).
 // Hades II rasterizes its glyphs on the CPU into a 1024x1216 R8 IMAGE|LINEAR atlas (pool CPU_UNCACHED|GPU_CACHED, no flush, no WriteTexels) and decodes its Bink movies
 // into linear planes: as GPU-only images of zeros all text, the title art and the movies were blank. A Vulkan image cannot be bound to the pool's memory (a dedicated
@@ -452,7 +660,7 @@ static int lin_copy(vkimg_t *im, const tex_t *t, const vkfmt_t *f) {   // 1 = th
     // (below), so a texture drawn with something other than its storage gets its storage back. Read on every call: a ctl.txt env arms it mid-run
     int refresh = 0; { const char *e = getenv("DM_VK_LIN_REFRESH"); refresh = e && atoi(e); }
     if (im->gpu_w && !im->lin_mem && !refresh) { nvn_dirty_protect(t->mem, len); im->lin_stamp = nvn_dirty_now(); im->lin_span = nvn_dirty_span(t->mem, len); im->lin_mem = t->mem; im->lin_len = len; texlog("lin-gpuw", im, t, f, NULL, 0, NULL, 0, NULL, 0); return 1; }
-    if (im->gpu_w && !refresh) { if (!nvn_dirty_since_span(im->lin_span, t->mem, len, im->lin_stamp)) { texlog("lin-clean", im, t, f, NULL, 0, NULL, 0, NULL, 0); return 1; } nvn_dirty_release(im->lin_mem, im->lin_len); im->lin_mem = NULL; im->gpu_w = 0; im->lin_gen = 0; }
+    if (im->gpu_w && !refresh) { if (!nvn_dirty_since_span(im->lin_span, t->mem, len, im->lin_stamp)) { texlog("lin-clean", im, t, f, NULL, 0, NULL, 0, NULL, 0); return 1; } nvn_dirty_release(im->lin_mem, im->lin_len); im->lin_mem = NULL; im->gpu_w = 0;atomic_fetch_add_explicit(&g_image_ownership_gen,1,memory_order_release); im->lin_gen = 0; }
     VkCommandBuffer cb = vk_upload_cmd();
     if (im->lin_gen == g_up_gen) return 1;
     im->lin_gen = g_up_gen;
@@ -471,25 +679,23 @@ static int lin_copy(vkimg_t *im, const tex_t *t, const vkfmt_t *f) {   // 1 = th
 }
 static int packaged_tex(const tex_t *t) {
     if (t->has_layout || linear_tex(t)) return 1;
-    pthread_mutex_lock(&g_cw_mu); int r = nvn_hm_get(&g_cpu_written, &t->serial) != NULL; pthread_mutex_unlock(&g_cw_mu);
-    return r;
+    pthread_mutex_lock(&g_cw_mu);cpu_tex_record *r=nvn_hm_get(&g_cpu_records,&t->serial);int cpu=(r && r->cpu) || nvn_hm_get(&g_cpu_retired,&t->serial)!=NULL;pthread_mutex_unlock(&g_cw_mu);
+    return cpu;
 }
-void mtl_tex_init(const tex_t *t) { (void)t; }
-void mtl_tex_release(tex_t *t) { (void)t; }   // images belong to their storage key, dropped with the pool
-int mtl_tex_gpu_owned(uint64_t serial) { (void)serial; return 0; }
 
 // ---------------- views ----------------
 typedef struct vview { VkImageView v; VkImageViewType type; VkFormat fmt; uint32_t lv0, nlv, ly0, nly; VkComponentMapping swz; VkImageAspectFlags aspect; int attach; struct vview *next; } vview;   // attach: an attachment view (its usage differs from a sampling view's)
 static nvn_hmap g_views = {.klen = sizeof(vkimg_t *)};   // vkimg_t* → vview list
 static pthread_mutex_t g_view_mu = PTHREAD_MUTEX_INITIALIZER;
 extern uint64_t g_tex_gen;
-static void vk_tex_view_drop_all(vkimg_t *im) {
+static void vk_tex_view_drop_all_mode(vkimg_t *im,int completed) {
     pthread_mutex_lock(&g_view_mu);
     vview *v = nvn_hm_get(&g_views, &im); g_tex_gen++;
-    while (v) { vview *n = v->next; vk_defer_free_view(v->v); free(v); v = n; }
+    while (v) { vview *n = v->next; if(completed)vkDestroyImageView(V.dev,v->v,NULL);else vk_defer_free_view(v->v); free(v); v = n; }
     nvn_hm_del(&g_views, &im);
     pthread_mutex_unlock(&g_view_mu);
 }
+static void vk_tex_view_drop_all(vkimg_t *im){vk_tex_view_drop_all_mode(im,0);}
 static VkComponentSwizzle swz_comp(int nvn) {   // NVN swizzle enum: 0 zero 1 one 2 R 3 G 4 B 5 A
     switch (nvn) { case 0: return VK_COMPONENT_SWIZZLE_ZERO; case 1: return VK_COMPONENT_SWIZZLE_ONE; case 2: return VK_COMPONENT_SWIZZLE_R; case 3: return VK_COMPONENT_SWIZZLE_G; case 4: return VK_COMPONENT_SWIZZLE_B; default: return VK_COMPONENT_SWIZZLE_A; }
 }
@@ -505,19 +711,22 @@ static VkComponentSwizzle apply(VkComponentSwizzle outer, const VkComponentMappi
 }
 __thread VkFormat vk_view_fmt; __thread uint32_t vk_view_layers;
 static VkImageView vk_paint_view(int arrayed, int colour);
-VkImageView vk_tex_view(const tex_t *t, const view_t *vw, int dim, int arrayed, int as_attachment, vkimg_t **img_out) {
+VkImageView vk_tex_view(const tex_t *t, const view_t *vw, int dim, int arrayed, int purpose, vkimg_t **img_out) {
+    int as_attachment=purpose==1,storage=purpose==2;
+    if(t && t->pool && nvn_sparse_pool(t->pool) && getenv("DM_NVN_SPARSE_TRACE"))
+        VKLOG("sparse view ser=%llu format=%#x attachment=%d dim=%d arrayed=%d CPU-readable=%d view-layers=%u+%u set=%d view-levels=%u+%u set=%d",(unsigned long long)t->serial,t->d.format,as_attachment,dim,arrayed,nvn_sparse_cpu_readable(t->pool,(uint64_t)(uintptr_t)t->mem,t->L.size),vw?vw->min_layer:0,vw?vw->nlayers:0,vw?vw->set_layers:0,vw?vw->base_level:0,vw?vw->nlevels:0,vw?vw->set_levels:0);
     vkimg_t *im = vk_tex(t); if (img_out) *img_out = im;
     if (!im) return VK_NULL_HANDLE;
-    if (!as_attachment) {   // DM_VK_TEXPAINT=map: magenta BC7, green BC1, blue 4-byte uncompressed, yellow 1-2 byte
+    if (!purpose) {   // DM_VK_TEXPAINT=map: magenta BC7, green BC1, blue 4-byte uncompressed, yellow 1-2 byte
         const char *pt = getenv("DM_VK_TEXPAINT");
         if (pt && !strcasecmp(pt, "map")) {
             const vkfmt_t *pf = vk_fmt(t->d.format); int c = -1;
             if (pf && pf->compressed) c = pf->bpb >= 16 ? 0 : 1; else if (pf) c = pf->bpb >= 4 ? 2 : 3;
             if (c >= 0) { vk_view_fmt = VK_FORMAT_R8G8B8A8_UNORM; vk_view_layers = arrayed ? 6 : 1; return vk_paint_view(arrayed, c); }
         } }
-    if (as_attachment) { im->wseq = ++g_wseq; im->gpu_w = 1; } else if (im->novl) alias_check(im);
+    if (as_attachment) { im->wseq = ++g_wseq; vk_tex_mark_gpu_write(im); } else if (im->novl) alias_check(im);
     vk_watch(im, as_attachment ? "attachment" : "sampled or image");
-    if (!as_attachment) { void vk_texdump_note(vkimg_t *im); vk_texdump_note(im); }
+    if (!purpose) { void vk_texdump_note(vkimg_t *im); vk_texdump_note(im); }
     const vkfmt_t *f = vk_fmt(vw && vw->set_format ? vw->format : t->d.format); if (!f) f = vk_fmt(t->d.format);
     uint32_t lv0 = vw && vw->set_levels ? vw->base_level : 0, nlv = vw && vw->set_levels ? vw->nlevels : im->levels - lv0;
     if (lv0 >= im->levels) lv0 = im->levels - 1; if (!nlv || lv0 + nlv > im->levels) nlv = im->levels - lv0;
@@ -544,8 +753,9 @@ VkImageView vk_tex_view(const tex_t *t, const view_t *vw, int dim, int arrayed, 
     VkImageAspectFlags aspect = im->aspect;
     if (aspect == (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT) && !as_attachment)
         aspect = (!f->depth || t->stencil || (vw && vw->set_dsmode && vw->dsmode == 1)) ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT;   // (STENCIL8 alone may be stored combined)
+    if(storage)nlv=1;
     VkComponentMapping swz = f->swz;
-    if (!as_attachment) {
+    if (!purpose) {
         if (t->set_swz) { VkComponentMapping o = swz; swz.r = apply(swz_comp(t->swz & 7), &o, VK_COMPONENT_SWIZZLE_R); swz.g = apply(swz_comp(t->swz >> 3 & 7), &o, VK_COMPONENT_SWIZZLE_G);
                           swz.b = apply(swz_comp(t->swz >> 6 & 7), &o, VK_COMPONENT_SWIZZLE_B); swz.a = apply(swz_comp(t->swz >> 9 & 7), &o, VK_COMPONENT_SWIZZLE_A); }
         if (vw && vw->set_swizzle) { VkComponentMapping o = swz; swz.r = apply(swz_comp(vw->swz[0]), &o, VK_COMPONENT_SWIZZLE_R); swz.g = apply(swz_comp(vw->swz[1]), &o, VK_COMPONENT_SWIZZLE_G);
@@ -564,16 +774,17 @@ VkImageView vk_tex_view(const tex_t *t, const view_t *vw, int dim, int arrayed, 
     pthread_mutex_lock(&g_view_mu);
     vview *head = nvn_hm_get(&g_views, &im);
     for (vview *v = head; v; v = v->next)
-        if (v->type == type && v->fmt == fmt && v->lv0 == lv0 && v->nlv == nlv && v->ly0 == ly0 && v->nly == nly && v->aspect == aspect && v->attach == (as_attachment != 0) && !memcmp(&v->swz, &swz, sizeof swz)) { pthread_mutex_unlock(&g_view_mu); vk_view_fmt = fmt; vk_view_layers = nly; return v->v; }
+        if (v->type == type && v->fmt == fmt && v->lv0 == lv0 && v->nlv == nlv && v->ly0 == ly0 && v->nly == nly && v->aspect == aspect && v->attach == purpose && !memcmp(&v->swz, &swz, sizeof swz)) { pthread_mutex_unlock(&g_view_mu); vk_view_fmt = fmt; vk_view_layers = nly; return v->v; }
     VkImageViewUsageCreateInfo uci = {VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO, NULL, 0};
     VkFormatProperties fp; vkGetPhysicalDeviceFormatProperties(V.pd, fmt, &fp);
     uci.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    if (as_attachment) uci.usage = (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0) | (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : 0);
+    if(storage)uci.usage=VK_IMAGE_USAGE_STORAGE_BIT;
+    else if (as_attachment) uci.usage = (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0) | (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : 0);
     else if ((t->d.flags & NVN_TEXTURE_FLAGS_IMAGE) && (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) uci.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
     VkImageViewCreateInfo ci = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, &uci, 0, im->img, type, fmt, swz, {aspect, lv0, nlv, ly0, nly}};
     VkImageView view; VkResult r = vkCreateImageView(V.dev, &ci, NULL, &view);
     if (r) { pthread_mutex_unlock(&g_view_mu); VKRED_ONCE(15, "vkCreateImageView failed (%d): type %d format %d levels %u+%u layers %u+%u of image %ux%ux%u", r, type, fmt, lv0, nlv, ly0, nly, im->w, im->h, im->layers); return VK_NULL_HANDLE; }
-    vview *nv = calloc(1, sizeof *nv); *nv = (vview){view, type, fmt, lv0, nlv, ly0, nly, swz, aspect, as_attachment != 0, head};
+    vview *nv = calloc(1, sizeof *nv); *nv = (vview){view, type, fmt, lv0, nlv, ly0, nly, swz, aspect, purpose, head};
     nvn_hm_put(&g_views, &im, nv);
     pthread_mutex_unlock(&g_view_mu);
     vk_view_fmt = fmt; vk_view_layers = nly;
@@ -591,6 +802,7 @@ typedef struct { tex_t t; view_t v; uint8_t ok, has_v; uint64_t seq; } treg_ver;
 typedef struct { treg_ver cur; treg_ver *old; } treg_t;   // old: TREG_OLD earlier versions, newest first (allocated at the first rewrite)
 static treg_t *g_treg; static int g_ntreg;
 uint64_t g_tex_gen = 1;   // changes whenever a texture ID is registered again or views go (gfx_vk_exec.c's per-submission view cache)
+void mtl_sparse_mapping_changed(void) { __atomic_add_fetch(&g_tex_gen,1,__ATOMIC_RELEASE); }
 uint64_t g_samp_gen = 1;  // changes whenever a sampler ID is registered with other parameters (gfx_vk_exec.c samp_cached and the descriptor set memo)
 static samp_par *g_sreg; static uint8_t *g_sreg_ok; static VkSampler *g_samp; static int g_nsreg;
 static pthread_mutex_t g_rmu = PTHREAD_MUTEX_INITIALIZER;
@@ -689,6 +901,12 @@ VkSampler vk_dummy_sampler(void) {
     static VkSampler s; if (s) return s;
     samp_par p = {0}; p.magf = 1; p.minf = 1; p.lod_max = 1000; p.aniso = 1; s = make_sampler(&p); return s;
 }
+int vk_samp_parameters(VkSampler sampler, samp_par *out) {
+    if (sampler == vk_dummy_sampler()) { memset(out,0,sizeof *out);out->magf=out->minf=1;out->lod_max=1000;out->aniso=1;return 1; }
+    int found=0;pthread_mutex_lock(&g_rmu);
+    for(uint32_t i=0;i<g_samp_cache.cap;i++)if(g_samp_cache.vals[i]==(void*)sampler){memcpy(out,g_samp_cache.keys+(size_t)i*g_samp_cache.klen,sizeof *out);found=1;break;}
+    pthread_mutex_unlock(&g_rmu);return found;
+}
 // ---------------- dummies: what an unbound slot reads (zeros) ----------------
 VkImageView vk_dummy_view(int dim, int arrayed, int ms, int storage, int is_int) {
     static VkImageView cache[4][2][2][2][2]; static vkimg_t *imgs[4][2][2][2]; static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
@@ -745,7 +963,7 @@ VkBufferView vk_dummy_tbuf(int storage) {
         VkBufferCreateInfo bi = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, NULL, 0, 65536, VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_SHARING_MODE_EXCLUSIVE};
         VKCHK(vkCreateBuffer(V.dev, &bi, NULL, &b)); VkMemoryRequirements req; vkGetBufferMemoryRequirements(V.dev, b, &req);
         VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, NULL, req.size, vk_mem_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 0)};
-        VKCHK(vkAllocateMemory(V.dev, &ai, NULL, &m)); VKCHK(vkBindBufferMemory(V.dev, b, m, 0));
+        VKCHK(vk_memory_allocate(V.dev, &ai, NULL, &m)); VKCHK(vkBindBufferMemory(V.dev, b, m, 0));
         void *p; VKCHK(vkMapMemory(V.dev, m, 0, VK_WHOLE_SIZE, 0, &p)); memset(p, 0, 65536);
     }
     VkBufferViewCreateInfo ci = {VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO, NULL, 0, b, VK_FORMAT_R32_UINT, 0, 65536};

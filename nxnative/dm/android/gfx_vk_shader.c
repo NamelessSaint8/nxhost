@@ -10,9 +10,16 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "gfx_vk_spv_atlas.inc"
+#include "gfx_vk_spv_limits.inc"
 
 typedef struct __attribute__((packed)) { uint64_t key; uint32_t stage, spv_off, spv_len, refl_off, refl_len, pad; } bent;
 static const uint8_t *g_bundle; static uint32_t g_nent; static const bent *g_ent;
+void vk_shader_atlas_info(const vkshader_t *s,uint64_t active,VkSpecializationInfo *info,VkSpecializationMapEntry entries[64],uint32_t values[64]) {
+    memset(info,0,sizeof *info);memset(values,0,64*sizeof *values);uint32_t n=0;
+    for(unsigned i=0;i<64;i++)if(s->atlas_specs>>i&1){entries[n++]=(VkSpecializationMapEntry){VK_ATLAS_SPEC_BASE+i,i*4,4};values[i]=(uint32_t)(active>>i&1);}
+    info->mapEntryCount=n;info->pMapEntries=entries;info->dataSize=64*sizeof *values;info->pData=values;
+}
 void vk_shaders_open(const char *path) {
     int fd = open(path, O_RDONLY | O_CLOEXEC); struct stat st;
     if (fd < 0 || fstat(fd, &st)) { VKLOG("[RED] no shader bundle at %s: nothing will be drawn", path); if (fd >= 0) close(fd); return; }
@@ -46,10 +53,12 @@ int vk_shader_stage(uint64_t key) { bundle_auto(); const bent *e = g_bundle ? fi
 typedef struct { uint64_t key, data; uint32_t nctl, ncode; uint8_t *ctl; } pend_t;
 enum { NPEND = 4096 };
 static pend_t g_pend[NPEND]; static unsigned g_npend; static pthread_mutex_t g_pend_mu = PTHREAD_MUTEX_INITIALIZER;
+static int control_nvn2(const void *control) { uint32_t h[2]; memcpy(h, control, 8); return h[0] == 0x98761234 && h[1] == 0xc9; }
 static void shader_set(const uint8_t k[8], const void *control, uint64_t data, uint32_t ncode) {
     uint64_t key = 0; for (int i = 0; i < 8; i++) key = key << 8 | k[i];
     if (!key || !control || !data || !ncode || ncode >= (1u << 24) || vk_shader_stage(key) >= 0) return;
     uint32_t nctl = 0x880, own; memcpy(&own, (const uint8_t *)control + 0x20, 4); if (own >= 0x760 && own < 0x880) nctl = own;   // as hle_nvn.c keys_hash
+    if (control_nvn2(control)) nctl = 0xd8;   // version 0xc9 compiler metadata, including task/mesh launch bounds
     uint8_t *c = malloc(nctl); if (!c) return; memcpy(c, control, nctl);
     pthread_mutex_lock(&g_pend_mu);
     pend_t *p = &g_pend[g_npend++ % NPEND]; free(p->ctl); *p = (pend_t){key, data, nctl, ncode, c};   // the oldest goes: a draw needs a program soon after it is set
@@ -62,7 +71,9 @@ void vk_shader_missing(uint64_t key) {
     for (unsigned i = 0; i < NPEND && i < g_npend; i++) if (g_pend[i].key == key && g_pend[i].ctl) { p = g_pend[i]; p.ctl = malloc(p.nctl); if (p.ctl) memcpy(p.ctl, g_pend[i].ctl, p.nctl); break; }
     pthread_mutex_unlock(&g_pend_mu);
     if (!p.ctl) { VKLOG("[RED] shader %016llx is not in the bundle (and was not set while the capture could see it)", (unsigned long long)key); return; }
-    uint8_t md[CC_SHA256_DIGEST_LENGTH]; CC_SHA256_CTX hc; CC_SHA256_Init(&hc); CC_SHA256_Update(&hc, p.ctl, p.nctl); CC_SHA256_Update(&hc, (const void *)(uintptr_t)p.data, p.ncode); CC_SHA256_Final(md, &hc);
+    uint8_t md[CC_SHA256_DIGEST_LENGTH], canonical[0x48]; uint32_t hash_len = p.nctl; const uint8_t *hash_control = p.ctl;
+    if (control_nvn2(p.ctl)) { memcpy(canonical, p.ctl, sizeof canonical); memset(canonical + 0x30, 0, 4); hash_control = canonical; hash_len = sizeof canonical; }
+    CC_SHA256_CTX hc; CC_SHA256_Init(&hc); CC_SHA256_Update(&hc, hash_control, hash_len); CC_SHA256_Update(&hc, (const void *)(uintptr_t)p.data, p.ncode); CC_SHA256_Final(md, &hc);
     uint64_t now = 0; for (int i = 0; i < 8; i++) now = now << 8 | md[i];
     if (now != key) { VKLOG("[RED] shader %016llx is not in the bundle; its code area changed since SetShaders, not saved", (unsigned long long)key); free(p.ctl); return; }
     const char *r = getenv("DM_ROOT"); char dir[1024], path[1100], tmp[1110]; snprintf(dir, sizeof dir, "%s/captured_shaders", r ? r : "."); mkdir(dir, 0755);
@@ -77,9 +88,10 @@ void vk_shader_missing(uint64_t key) {
 }
 static VkShaderStageFlags stage_flag(int st) {
     switch (st) { case 0: return VK_SHADER_STAGE_VERTEX_BIT; case 1: return VK_SHADER_STAGE_FRAGMENT_BIT; case 2: return VK_SHADER_STAGE_GEOMETRY_BIT;
-                  case 3: return VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT; case 4: return VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT; default: return VK_SHADER_STAGE_COMPUTE_BIT; }
+                  case 3: return VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT; case 4: return VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+                  case 6: return VK_SHADER_STAGE_TASK_BIT_EXT; case 7: return VK_SHADER_STAGE_MESH_BIT_EXT; default: return VK_SHADER_STAGE_COMPUTE_BIT; }
 }
-static int set_of(int st) { return st == 5 ? 0 : st == 0 ? 0 : st == 1 ? 1 : st == 2 ? 2 : st; }
+static int set_of(int st) { return st == 5 || st == 6 ? 0 : st == 7 ? 2 : st; }
 static VkDescriptorType desc_type(int d) {
     switch (d) { case RD_UBO: return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; case RD_SSBO: return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; case RD_SAMPLED: return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                  case RD_STORAGE: return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; case RD_TBUF: return VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER; case RD_STORAGE_TBUF: return VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
@@ -165,13 +177,47 @@ vkshader_t *vk_shader(uint64_t key, int stage) {
     const bent *e = g_bundle ? find(key) : NULL;
     if (!e) { nvn_hm_put(&g_shaders, &hk, (void *)1); pthread_mutex_unlock(&g_sh_mu);
               static int n; if (n++ < 16) VKLOG("[RED] shader %016llx (stage %d) is not in the bundle", (unsigned long long)key, stage); return NULL; }
+    if ((uint32_t)stage != e->stage || stage < 0 || stage > 7) { pthread_mutex_unlock(&g_sh_mu); return NULL; }
+    // Entry flags: bit0 native trailer, bit1 NVN2 ABI, bit2 fragment atlas
+    // metadata with the device's LOD-bias limit. Old loaders reject new bundles.
+    // Older native entries used bit0 only; ordinary older entries remain classic.
+    if((e->pad & ~15u) || (stage<6 && (e->pad&1)) || (stage!=1 && (e->pad&4)) || (stage!=5 && (e->pad&8))){VKLOG("[RED] shader %016llx: unsupported entry flags %#x",(unsigned long long)key,e->pad);pthread_mutex_unlock(&g_sh_mu);return NULL;}
     s = calloc(1, sizeof *s); s->key = key; s->stage = stage; s->set = set_of(stage);
+    s->nvn2=stage>=6 || (e->pad&2);
     // reflection
     const uint8_t *r = g_bundle + e->refl_off; uint32_t hdr[5]; memcpy(hdr, r, 20);
     s->nbind = (int)hdr[0]; s->c1_len = hdr[1]; memcpy(s->local, hdr + 2, 12);
     s->b = (const dmsv_bind *)(r + 20); s->c1 = r + 20 + 20 * s->nbind;
+    for(int i=0;i<s->nbind;i++)if(s->b[i].kind==RK_WORKGROUP){
+        if(!(e->pad&8) || s->workgroup_spill || s->b[i].desc!=RD_SSBO || s->b[i].off<=0 || s->b[i].off%4)die("[RED] invalid workgroup spill reflection");s->workgroup_spill=(uint32_t)s->b[i].off;
+    }
+    if((e->pad&8) && !s->workgroup_spill)die("[RED] workgroup spill entry has no buffer binding");
+    if (stage >= 6) {
+        uint64_t end = 20ull + 20ull * s->nbind + s->c1_len;
+        int ok = (e->pad&1) && end + sizeof(s->mesh) <= e->refl_len;
+        if (ok) memcpy(&s->mesh, r + end, sizeof s->mesh);
+        const dmsv_mesh *m = &s->mesh; const VkPhysicalDeviceMeshShaderPropertiesEXT *p = &V.mesh;
+        uint64_t payload = m->payload_bytes, shared = m->shared_bytes;
+        ok &= m->version == 1 && m->threads && m->threads == s->local[0] && s->local[1] == 1 && s->local[2] == 1;
+        if (stage == 6) ok &= V.has_task && m->threads <= p->maxTaskWorkGroupInvocations && m->threads <= p->maxTaskWorkGroupSize[0] &&
+            payload <= p->maxTaskPayloadSize && shared <= p->maxTaskSharedMemorySize && payload + shared <= p->maxTaskPayloadAndSharedMemorySize;
+        else {
+            uint32_t vg = p->meshOutputPerVertexGranularity, pg = p->meshOutputPerPrimitiveGranularity;
+            uint64_t nv = vg ? ((m->vertices + vg - 1) / vg) * vg : 0, np = pg ? ((m->primitives + pg - 1) / pg) * pg : 0;
+            uint64_t output = nv * (4 + 4 * __builtin_popcount(m->vertex_mask)) * 4 + np * (3 + 4 * __builtin_popcount(m->primitive_mask)) * 4;
+            ok &= V.has_mesh && vg && pg && m->threads <= p->maxMeshWorkGroupInvocations && m->threads <= p->maxMeshWorkGroupSize[0] &&
+                shared <= p->maxMeshSharedMemorySize && payload + shared <= p->maxMeshPayloadAndSharedMemorySize &&
+                m->vertices && m->vertices <= p->maxMeshOutputVertices && m->primitives && m->primitives <= p->maxMeshOutputPrimitives &&
+                output <= p->maxMeshOutputMemorySize && payload + output <= p->maxMeshPayloadAndOutputMemorySize &&
+                4u + 4u * __builtin_popcount(m->vertex_mask | m->primitive_mask) <= p->maxMeshOutputComponents;
+        }
+        if (!ok) { VKLOG("[RED] shader %016llx stage %d: missing metadata or task/mesh device limits exceeded", (unsigned long long)key, stage);
+            free(s); nvn_hm_put(&g_shaders, &hk, (void *)1); pthread_mutex_unlock(&g_sh_mu); return NULL; }
+    }
     // SPIR-V with the stage's set
     uint32_t nw = e->spv_len / 4; uint32_t *w = malloc(e->spv_len); memcpy(w, g_bundle + e->spv_off, e->spv_len);
+    if(stage==5){uint64_t shared=spv_workgroup_bytes(w,nw);if(shared>V.props.limits.maxComputeSharedMemorySize)
+        die("[RED] compute shader %016llx needs %llu shared bytes, device limit %u: rebuild the bundle with dmsv_workgroup.py",(unsigned long long)key,(unsigned long long)shared,V.props.limits.maxComputeSharedMemorySize);}
     int f64_used = 0; uint32_t xb = 4;
     for (uint32_t i = 5; i < nw;) { uint32_t n = w[i] >> 16, op = w[i] & 0xffff; if (!n) break; if (op == 71 && n >= 4 && w[i + 2] == 34) w[i + 3] = (uint32_t)s->set;   // OpDecorate DescriptorSet
         if (op == 22 && n == 3 && w[i + 2] == 64) f64_used = 1;   // OpTypeFloat 64
@@ -200,6 +246,15 @@ vkshader_t *vk_shader(uint64_t key, int stage) {
                        (op == 10 && !memcmp(&w[i + 1], "SPV_EXT_fragment_shader_interlock", 33));
             if (drop) i += n; else for (uint32_t k = 0; k < n; k++) w[o++] = w[i++]; }
         nw = o; } }
+    if(stage==0){uint32_t trimmed_words=0,*trimmed=spv_prune_distances(w,nw,&trimmed_words);if(trimmed){free(w);w=trimmed;nw=trimmed_words;}}
+    s->atlas_directional=spv_atlas_directional(w,nw);
+    const char *specialize=getenv("DM_VK_ATLAS_SPECIALIZE");
+    if(!specialize || atoi(specialize)){
+        uint32_t bindings[64],slots[64],count=0,new_words=0;
+        for(int i=0;i<s->nbind && count<64;i++)if(s->b[i].kind==RK_ATLAS && s->b[i].off>=0 && s->b[i].off<64){bindings[count]=s->b[i].binding;slots[count++]=(uint32_t)s->b[i].off;}
+        uint32_t *optimized=spv_atlas_headers(w,nw,bindings,slots,count,&new_words,&s->atlas_specs);
+        if(optimized){free(w);w=optimized;nw=new_words;}
+    }
     spv_io_locs(w, nw, &s->in_locs, &s->out_locs);
     VkShaderModuleCreateInfo ci = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, NULL, 0, (size_t)nw * 4, w};
     VkResult vr = vkCreateShaderModule(V.dev, &ci, NULL, &s->mod); s->spv = w; s->nspv = nw;
@@ -209,7 +264,9 @@ vkshader_t *vk_shader(uint64_t key, int stage) {
     // with the same buffers (Unity updates a constant buffer before nearly every draw, and each update is a shadow at a new offset: NEO made a new set for
     // 94% of its draws, 5 ms a frame). Up to half the device's limit per stage, as the vertex and fragment sets share a pipeline layout. DM_VK_DYN_UBO=0: none.
     static int dyn_on = -1; if (dyn_on < 0) { const char *e = getenv("DM_VK_DYN_UBO"); dyn_on = !(e && !atoi(e)); }
-    uint32_t dynmax = dyn_on ? V.props.limits.maxDescriptorSetUniformBuffersDynamic / 2 : 0;
+    // A mesh draw can bind task, mesh and fragment simultaneously. Reserve an
+    // equal share for all three, including fragment programs shared with vertex draws.
+    uint32_t dynmax = dyn_on ? V.props.limits.maxDescriptorSetUniformBuffersDynamic / (stage == 5 ? 1 : 3) : 0;
     VkDescriptorSetLayoutBinding lb[96]; uint32_t nl = 0;
     for (int i = 0; i < s->nbind && nl < 96; i++) {
         const dmsv_bind *b = &s->b[i];
@@ -271,9 +328,13 @@ static uint32_t *spv_int_images(const uint32_t *w, uint32_t nw, const uint16_t *
         uint32_t src = n >= 4 ? w[i + 3] : 0, k = src && src < base ? taint[src] : 0;
         if (k && (op == 61 || op == 65 || op == 66 || op == 83 || op == 100 || op == 86)) {   // Load, AccessChain, InBoundsAccessChain, CopyObject, Image, SampledImage
             uint32_t t = spvi_type(&c, x[1], k); if (!t) { ok = 0; break; } x[1] = t; if (x[2] < base) taint[x[2]] = (uint8_t)k;
-        } else if (k && (op == 87 || op == 88 || op == 91 || op == 92 || op == 95 || op == 96)) {   // Sample{Implicit,Explicit}Lod, SampleProj*, Fetch, Gather: a vec4 of the integer type, bitcast back
+        } else if (k && (op == 87 || op == 88 || op == 91 || op == 92 || op == 95 || op == 96 || op == 98)) {   // sampling/fetch/gather and storage ImageRead: integer words, bitcast back
             uint32_t ft = x[1], r = x[2], r2 = c.bound++; x[1] = spvi_vec4(&c, k); x[2] = r2;
             fb[nf++] = 4u << 16 | 124; fb[nf++] = ft; fb[nf++] = r; fb[nf++] = r2;   // OpBitcast
+        } else if(op==99 && n>=4 && x[1]<base && taint[x[1]]) {   // ImageWrite has no result: bitcast the raw texel before the write
+            uint32_t image_kind=taint[x[1]],value=c.bound++;
+            nf-=n;fb[nf++]=4u<<16|124;fb[nf++]=spvi_vec4(&c,image_kind);fb[nf++]=value;fb[nf++]=w[i+3];
+            memcpy(fb+nf,w+i,n*4);fb[nf+3]=value;nf+=n;
         }
         i += n; }
     uint32_t *o = NULL, no = 5;
@@ -336,26 +397,74 @@ static VkShaderModule alt_module(vkshader_t *s) {
         if (vkCreateShaderModule(V.dev, &ci, NULL, &m)) m = s->mod; else VKLOG("shader %016llx: alternative code from %s", (unsigned long long)s->key, path); }
     free(w); fclose(f); return m;
 }
-VkShaderModule vk_shader_module(vkshader_t *s, uint64_t um, uint64_t im, uint32_t xo, int fd) {
+// A pixel program can serve both vertex and mesh draws. Qualify only the variant's
+// inputs supplied per primitive; preserve the ordinary module for vertex draws.
+static uint32_t *spv_perprimitive(const uint32_t *w, uint32_t nw, uint32_t mask, uint32_t *onw) {
+    uint8_t *input = calloc(w[3], 1), *selected = calloc(w[3], 1); uint32_t firsttype = 0, capend = 5; int cap = 0, ext = 0, global = 1;
+    for (uint32_t i = 5; i < nw;) { uint32_t n = w[i] >> 16, op = w[i] & 0xffff; if (!n || i + n > nw) { free(input); free(selected); return NULL; }
+        if (op == 54) global = 0;
+        if (op == 59 && n >= 4 && w[i + 2] < w[3]) input[w[i + 2]] = (w[i + 3] == 1) | (global ? 2 : 0);
+        if (op == 17) { capend = i + n; cap |= n == 2 && w[i + 1] == 5283; }
+        if (op == 10 && n == 6 && !memcmp(&w[i + 1], "SPV_EXT_mesh_shader", 19)) ext = 1;
+        if (!firsttype && op >= 19 && op <= 39) firsttype = i;
+        i += n; }
+    uint32_t count = 0;
+    for (uint32_t i = 5; i < nw;) { uint32_t n = w[i] >> 16;
+        if ((w[i] & 0xffff) == 71 && n == 4 && w[i + 2] == 30 && w[i + 1] < w[3] && (input[w[i + 1]] & 1) && w[i + 3] < 32 && (mask >> w[i + 3] & 1)) { selected[w[i + 1]] = 1; count++; }
+        i += n; }
+    uint32_t *o = malloc(((size_t)nw + 8 + count * 6 + w[3]) * 4), no = 5; memcpy(o, w, 20);
+    if (o[1] < 0x10400) o[1] = 0x10400;   // SPV_EXT_mesh_shader requires SPIR-V 1.4
+    for (uint32_t i = 5; i < nw;) { uint32_t n = w[i] >> 16, op = w[i] & 0xffff;
+        if (i == capend) { if (!cap) { o[no++] = 2u << 16 | 17; o[no++] = 5283; }
+            if (!ext) { o[no++] = 6u << 16 | 10; memcpy(o + no, "SPV_EXT_mesh_shader\0", 20); no += 5; } }
+        if (i == firsttype) for (uint32_t id = 0; id < w[3]; id++) if (selected[id]) {
+            o[no++] = 3u << 16 | 71; o[no++] = id; o[no++] = 5271;
+            o[no++] = 3u << 16 | 71; o[no++] = id; o[no++] = 14; }
+        int drop = op == 71 && n == 3 && w[i + 1] < w[3] && selected[w[i + 1]] &&
+            (w[i + 2] == 5271 || w[i + 2] == 13 || w[i + 2] == 14 || w[i + 2] == 16 || w[i + 2] == 17);
+        if (!drop) { uint32_t start = no; memcpy(o + no, w + i, n * 4); no += n;
+            if (op == 15 && w[1] < 0x10400) {   // 1.4 adds every global variable to the entry point interface
+                uint32_t first = 3; while (first < n && !memchr(w + i + first, 0, 4)) first++; first++;
+                for (uint32_t id = 0; id < w[3]; id++) if (input[id] & 2) { int have = 0; for (uint32_t j = first; j < n; j++) have |= w[i + j] == id; if (!have) o[no++] = id; }
+                o[start] = (no - start) << 16 | 15;
+            }
+        } i += n;
+    }
+    free(input); free(selected); *onw = no; return o;
+}
+#include "gfx_vk_spv_outputs.inc"
+VkShaderModule vk_shader_module(vkshader_t *s, uint64_t um, uint64_t im, uint32_t xo, int fd, uint32_t pm, uint32_t ou, uint32_t oi) {
+    if (s->stage != 1 && s->stage != 0) ou = oi = 0;
     if (fd && (s->stage != 1 || s->depth_repl)) fd = 0;
-    if (!(um | im | xo | (uint32_t)fd) || !s->spv) return s->mod;
-    if (xo == 1u << 31) {   // DM_VK_SPV_ALT
-        pthread_mutex_lock(&g_sh_mu); for (int i = 0; i < s->nvar; i++) if (s->var[i].um == 0 && s->var[i].im == 0 && s->var[i].xo == xo) { VkShaderModule m = s->var[i].mod; pthread_mutex_unlock(&g_sh_mu); return m; }
-        VkShaderModule m = alt_module(s); if (s->nvar < 8) s->var[s->nvar++] = (typeof(s->var[0])){0, 0, xo, 0, m}; pthread_mutex_unlock(&g_sh_mu); return m; }
-    xo &= ~(1u << 31);
+    if (!(um | im | xo | (uint32_t)fd | pm | ou | oi)) return s->mod;
+    if (!s->spv) return VK_NULL_HANDLE;
+    // Cache every created module. A fixed eight-entry array leaked later variants.
     pthread_mutex_lock(&g_sh_mu);
-    for (int i = 0; i < s->nvar; i++) if (s->var[i].um == um && s->var[i].im == im && s->var[i].xo == xo && s->var[i].fd == fd) { VkShaderModule m = s->var[i].mod; pthread_mutex_unlock(&g_sh_mu); return m; }
+    if (s->nvar == s->capvar) {
+        int cap = s->capvar ? s->capvar * 2 : 8;
+        vkshader_variant *v = realloc(s->var, (size_t)cap * sizeof *v);
+        if (!v) { pthread_mutex_unlock(&g_sh_mu); VKLOG("[RED] shader variant cache allocation failed"); return VK_NULL_HANDLE; }
+        s->var = v; s->capvar = cap;
+    }
+    if (xo == 1u << 31 && !(ou | oi)) {   // DM_VK_SPV_ALT
+        for (int i = 0; i < s->nvar; i++) if (s->var[i].um == 0 && s->var[i].im == 0 && s->var[i].xo == xo) { VkShaderModule m = s->var[i].mod; pthread_mutex_unlock(&g_sh_mu); return m; }
+        VkShaderModule m = alt_module(s); s->var[s->nvar++] = (vkshader_variant){.xo = xo, .mod = m}; pthread_mutex_unlock(&g_sh_mu); return m; }
+    xo &= ~(1u << 31);
+    for (int i = 0; i < s->nvar; i++) if (s->var[i].um == um && s->var[i].im == im && s->var[i].xo == xo && s->var[i].fd == fd && s->var[i].pm == pm && s->var[i].ou == ou && s->var[i].oi == oi) { VkShaderModule m = s->var[i].mod; pthread_mutex_unlock(&g_sh_mu); return m; }
     uint16_t bind[64]; uint8_t kind[64]; int nb = 0;
     for (int i = 0; i < s->nbind && i < 64; i++) if ((um | im) >> i & 1) { bind[nb] = s->b[i].binding; kind[nb++] = um >> i & 1 ? 1 : 2; }
     uint32_t nw = s->nspv, *w = nb ? spv_int_images(s->spv, s->nspv, bind, kind, nb, &nw) : NULL; VkShaderModule m = s->mod;
     if (xo && (w || !nb)) { uint32_t n2 = 0, *w2 = spv_add_outputs(w ? w : s->spv, nw, xo, &n2); free(w); w = w2; nw = n2; }
     if (fd && (w || !(nb || xo))) { uint32_t n2 = 0, *w2 = spv_frag_depth(w ? w : s->spv, nw, &n2); free(w); w = w2; nw = n2; }
+    if (pm && (w || !(nb || xo || fd))) { uint32_t n2 = 0, *w2 = spv_perprimitive(w ? w : s->spv, nw, pm, &n2); free(w); w = w2; nw = n2; }
+    if ((ou || oi) && (w || !(nb || xo || fd || pm))) { uint32_t n2 = 0, *w2 = (s->stage==0?spv_int_inputs:spv_int_outputs)(w ? w : s->spv, nw, ou, oi, &n2); free(w); w = w2; nw = n2; }
     if (w) { VkShaderModuleCreateInfo ci = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, NULL, 0, (size_t)nw * 4, w};
-        if (vkCreateShaderModule(V.dev, &ci, NULL, &m)) { m = s->mod; VKLOG("[RED] shader %016llx: its variant was refused (bindings %#llx / %#llx, outputs %#x, fragment depth %d)", (unsigned long long)s->key, (unsigned long long)um, (unsigned long long)im, xo, fd); }
+        if (vkCreateShaderModule(V.dev, &ci, NULL, &m)) { m = VK_NULL_HANDLE; VKLOG("[RED] shader %016llx: its variant was refused (bindings %#llx / %#llx, outputs %#x, fragment depth %d)", (unsigned long long)s->key, (unsigned long long)um, (unsigned long long)im, xo, fd); }
         else VKLOG("shader %016llx: variant for bindings %#llx (uint texels) %#llx (int texels), outputs added %#x, fragment depth written %d", (unsigned long long)s->key, (unsigned long long)um, (unsigned long long)im, xo, fd);
         free(w); }
-    else VKLOG("[RED] shader %016llx: no variant could be made (bindings %#llx / %#llx, outputs %#x, fragment depth %d)", (unsigned long long)s->key, (unsigned long long)um, (unsigned long long)im, xo, fd);
-    if (s->nvar < 8) s->var[s->nvar++] = (typeof(s->var[0])){um, im, xo, fd, m};
+    else { m = VK_NULL_HANDLE; VKLOG("[RED] shader %016llx: no variant could be made (bindings %#llx / %#llx, outputs %#x, fragment depth %d)", (unsigned long long)s->key, (unsigned long long)um, (unsigned long long)im, xo, fd); }
+    if (ou || oi) VKLOG("shader %016llx: integer interface uint=%#x sint=%#x %s", (unsigned long long)s->key, ou, oi, m ? "ready" : "FAILED");
+    s->var[s->nvar++] = (vkshader_variant){um, im, xo, fd, m, pm, ou, oi};
     pthread_mutex_unlock(&g_sh_mu);
     return m;
 }
@@ -368,7 +477,7 @@ static VkBuffer static_buf(int which) {
         VkBuffer nb; VkBufferCreateInfo bi = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, NULL, 0, 65536, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_SHARING_MODE_EXCLUSIVE};
         VKCHK(vkCreateBuffer(V.dev, &bi, NULL, &nb)); VkMemoryRequirements req; vkGetBufferMemoryRequirements(V.dev, nb, &req);
         VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, NULL, req.size, vk_mem_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 0)};
-        VkDeviceMemory m; VKCHK(vkAllocateMemory(V.dev, &ai, NULL, &m)); VKCHK(vkBindBufferMemory(V.dev, nb, m, 0));
+        VkDeviceMemory m; VKCHK(vk_memory_allocate(V.dev, &ai, NULL, &m)); VKCHK(vkBindBufferMemory(V.dev, nb, m, 0));
         void *p; VKCHK(vkMapMemory(V.dev, m, 0, VK_WHOLE_SIZE, 0, &p)); memset(p, 0, 65536);
         if (which == 0) for (int i = 0; i < 73; i++) *(float *)((uint8_t *)p + 192 + 16 * i) = 1.0f;   // render_scale[i].x (SupportBuffer.cs layout)
         __atomic_store_n(&b[which], nb, __ATOMIC_RELEASE);   // published once filled
@@ -385,21 +494,23 @@ void vk_shader_c1(vkshader_t *s, VkBuffer *buf, VkDeviceSize *off, VkDeviceSize 
         VkBufferCreateInfo bi = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, NULL, 0, (s->c1_len + 255) & ~255u, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_SHARING_MODE_EXCLUSIVE};
         VKCHK(vkCreateBuffer(V.dev, &bi, NULL, &s->c1_buf)); VkMemoryRequirements req; vkGetBufferMemoryRequirements(V.dev, s->c1_buf, &req);
         VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, NULL, req.size, vk_mem_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 0)};
-        VkDeviceMemory m; VKCHK(vkAllocateMemory(V.dev, &ai, NULL, &m)); VKCHK(vkBindBufferMemory(V.dev, s->c1_buf, m, 0));
+        VkDeviceMemory m; VKCHK(vk_memory_allocate(V.dev, &ai, NULL, &m)); VKCHK(vkBindBufferMemory(V.dev, s->c1_buf, m, 0));
         void *p; VKCHK(vkMapMemory(V.dev, m, 0, VK_WHOLE_SIZE, 0, &p)); memset(p, 0, bi.size); memcpy(p, s->c1, s->c1_len);
     }
     *buf = s->c1_buf; *off = 0; *len = (s->c1_len + 255) & ~255u;
 }
 // pipeline layouts by the set layouts of their stages (an empty layout fills the sets of absent stages)
-VkPipelineLayout vk_pipeline_layout(VkDescriptorSetLayout sets[5], int nsets) {
-    static VkDescriptorSetLayout empty; static nvn_hmap cache = {.klen = 5 * sizeof(VkDescriptorSetLayout)}; static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+VkPipelineLayout vk_pipeline_layout(VkDescriptorSetLayout sets[5], int nsets, int mesh) {
+    typedef struct { VkDescriptorSetLayout sets[5]; uint64_t mesh; } layout_key;
+    static VkDescriptorSetLayout empty; static nvn_hmap cache = {.klen = sizeof(layout_key)}; static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
     pthread_mutex_lock(&mu);
     if (!empty) { VkDescriptorSetLayoutCreateInfo li = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO}; VKCHK(vkCreateDescriptorSetLayout(V.dev, &li, NULL, &empty)); }
-    VkDescriptorSetLayout k[5]; for (int i = 0; i < 5; i++) { k[i] = i < nsets && sets[i] ? sets[i] : (i < nsets ? empty : VK_NULL_HANDLE); if (i < nsets) sets[i] = k[i]; }   // absent stages get the empty layout (the caller allocates their sets from it)
-    VkPipelineLayout pl = nvn_hm_get(&cache, k);
+    layout_key k = {.mesh = mesh}; for (int i = 0; i < 5; i++) { k.sets[i] = i < nsets && sets[i] ? sets[i] : (i < nsets ? empty : VK_NULL_HANDLE); if (i < nsets) sets[i] = k.sets[i]; }
+    VkPipelineLayout pl = nvn_hm_get(&cache, &k);
     if (!pl) {
-        VkPipelineLayoutCreateInfo ci = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, NULL, 0, (uint32_t)nsets, k};
-        VKCHK(vkCreatePipelineLayout(V.dev, &ci, NULL, &pl)); nvn_hm_put(&cache, k, pl);
+        VkPushConstantRange draw = {VK_SHADER_STAGE_MESH_BIT_EXT | (V.has_task ? VK_SHADER_STAGE_TASK_BIT_EXT : 0), 0, 8};
+        VkPipelineLayoutCreateInfo ci = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, NULL, 0, (uint32_t)nsets, k.sets, mesh ? 1u : 0u, mesh ? &draw : NULL};
+        VKCHK(vkCreatePipelineLayout(V.dev, &ci, NULL, &pl)); nvn_hm_put(&cache, &k, pl);
     }
     pthread_mutex_unlock(&mu);
     return pl;

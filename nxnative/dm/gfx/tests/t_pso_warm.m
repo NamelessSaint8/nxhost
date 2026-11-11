@@ -15,7 +15,8 @@ static int checks, failed;
 static int fixtures(NSString *dir) {
     NSString *source = @"#include <metal_stdlib>\nusing namespace metal;\n"
         "vertex float4 vs(uint id [[vertex_id]]) { float2 uv = float2((id << 1) & 2, id & 2); return float4(uv * 2 - 1, 0, 1); }\n"
-        "fragment float4 fs() { return float4(0.5, 0.25, 1, 0.5); }\n";
+        "fragment float4 fs() { return float4(0.5, 0.25, 1, 0.5); }\n"
+        "kernel void cs(device uint *out [[buffer(0)]], uint i [[thread_position_in_grid]]) { out[i] = 41; }\n";
     NSString *metal = [dir stringByAppendingPathComponent:@"fixture.metal"];
     NSString *library = [dir stringByAppendingPathComponent:@"warm-vs.metallib"];
     if (![source writeToFile:metal atomically:YES encoding:NSUTF8StringEncoding error:nil]) return 0;
@@ -25,7 +26,8 @@ static int fixtures(NSString *dir) {
     if (![compiler launchAndReturnError:&error]) { fprintf(stderr, "fixture compiler: %s\n", error.localizedDescription.UTF8String); return 0; }
     [compiler waitUntilExit]; if (compiler.terminationStatus) return 0;
     if (![NSFileManager.defaultManager copyItemAtPath:library toPath:[dir stringByAppendingPathComponent:@"warm-fs.metallib"] error:nil]) return 0;
-    for (NSString *stage in @[@"vs", @"fs"]) {
+    if (![NSFileManager.defaultManager copyItemAtPath:library toPath:[dir stringByAppendingPathComponent:@"warm-cs.metallib"] error:nil]) return 0;
+    for (NSString *stage in @[@"vs", @"fs", @"cs"]) {
         NSDictionary *reflection = @{@"chain": @DMSH_CHAIN, @"route": @"B", @"entry": stage, @"entry_z": stage, @"bindings": @[], @"vertex_inputs": @[]};
         NSData *json = [NSJSONSerialization dataWithJSONObject:reflection options:0 error:nil];
         if (![json writeToFile:[dir stringByAppendingPathComponent:[NSString stringWithFormat:@"warm-%@.json", stage]] atomically:YES]) return 0;
@@ -220,6 +222,55 @@ static void scenario(NSString *dir, int merged) {
     printf("%s manifests: six rows -> %llu builds, %u cache keys\n", merged ? "merged" : "normal", (unsigned long long)g_warm_rps, g_pso.n);
 }
 
+// A shader installed by any warm-item kind is already ready when the game later creates its NVN program.
+// Count real Metal library loads, and retain an unprepared-program control so disabling prefetch cannot pass this test.
+static void claimed_prefetch(NSString *dir) {
+    setenv("DM_NVN_PREFETCH", "1", 1);
+    prog_t programs[4] = {0};   // Program keys are cached by NVN object address until finalization.
+    for (int kind = 0; kind < 4; kind++) {
+        nvn_hm_clear(&g_pso, hm_rel); nvn_hm_clear(&g_cps, hm_rel); g_shcache = nil;
+        g_warm_items = [NSMutableArray array]; atomic_store(&g_warm_ready, 0); warm_load_begin();
+        os_unfair_lock_lock(&g_progpf_lock); g_progpf_seen = [NSMutableSet set]; os_unfair_lock_unlock(&g_progpf_lock);
+        uint32_t control[0x220] = {0x98761234u, 0xc9}; control[8] = 0x123400u + (unsigned)kind;
+        prog_t *program = &programs[kind]; *program = (prog_t){.nstage = 1, .serial = 0xf321000u + (unsigned)kind}; program->sd[0].control = control;
+        uint8_t md[8]; EXPECT("synthetic program key computes", 1, prog_key(program, 0, md));
+        NSString *key = [NSString stringWithFormat:@"%02x%02x%02x%02x%02x%02x%02x%02x", md[0], md[1], md[2], md[3], md[4], md[5], md[6], md[7]];
+        NSString *pc = [key stringByAppendingString:@"_b"], *source = kind == 2 ? @"warm-cs" : @"warm-vs";
+        for (NSString *ext in @[@"json", @"metallib"]) {
+            NSString *from = [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.%@", source, ext]];
+            NSString *to = [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.%@", pc, ext]];
+            EXPECT("prefetch fixture copied", 1, [NSFileManager.defaultManager copyItemAtPath:from toPath:to error:nil]);
+        }
+        g_shmap[key] = kind == 2 ? @"compute" : @"vertex";
+        WarmGateDevice *count = [WarmGateDevice new]; count->device = g_dev;
+        count->entered = dispatch_semaphore_create(0); count->release = dispatch_semaphore_create(0);
+        dispatch_semaphore_signal(count->release); g_dev = (id<MTLDevice>)count;
+        if (kind < 3) {
+            WarmTask *task = [WarmTask new]; task->kind = kind; task->key = pc; task->stage = kind == 2 ? 5 : 0;
+            if (kind == 1) {
+                task->vkey = pc; task->fkey = @"warm-fs";
+                pso_key k = {0}; k.cfmt[0] = MTLPixelFormatRGBA8Unorm; k.samples = 1; k.chmask = 15;
+                NvShader *vs = [NvShader new], *fs = [NvShader new];
+                strlcpy(vs->key, pc.UTF8String, sizeof vs->key); strcpy(fs->key, "warm-fs"); fs->stage = 1;
+                pso_skey sk; pso_skey_from(&k, vs, fs, 0, NULL, &sk);
+                task->rs = [NSMutableArray arrayWithObject:[NSData dataWithBytes:&sk length:sizeof sk]];
+            }
+            warm_task(task); warm_claim(); EXPECT("warm task publishes its shader", 1, g_shcache[pc] != nil);
+            if (kind == 1) EXPECT("render warm task publishes both stage identities", 0, progpf_first(@"warm-fs"));
+        }
+        NvShader *published = g_shcache[pc]; unsigned before = atomic_load(&count->library_calls);
+        mtl_prog_prefetch(program);
+        // The background pool has at most eight round-robin serial lanes. Drain each before inspecting load counts.
+        for (unsigned lane = 0; lane < 8; lane++) dispatch_sync(pp_bg_queue(), ^{});
+        EXPECT(kind < 3 ? "claimed shader causes no duplicate Metal library load" : "unprepared program still loads its library",
+            before + (kind == 3), atomic_load(&count->library_calls));
+        warm_claim();
+        EXPECT("program resolves the prepared or newly prefetched identity", 1, g_shcache[pc] != nil && (!published || g_shcache[pc] == published));
+        g_dev = count->device;
+    }
+    g_warm_dict = nil; g_warm_loads = nil;
+}
+
 int main(void) { @autoreleasepool {
     alarm(60);   // A regression in owner/waiter progress must fail rather than hang the suite.
     setenv("DM_PSO_ARCHIVE", "off", 1); setenv("DM_NVN_PREDICT", "0", 1);
@@ -229,6 +280,7 @@ int main(void) { @autoreleasepool {
     if (!fixtures(@(dir))) { fprintf(stderr, "failed to compile synthetic shader fixtures\n"); [NSFileManager.defaultManager removeItemAtPath:@(dir) error:nil]; return 1; }
     singleflight(@(dir));
     scenario(@(dir), 0); scenario(@(dir), 1);
+    claimed_prefetch(@(dir));
     const char *mode = getenv("DM_PSO_MTL4");
     if (mode) EXPECT("requested compiler path selected", strcmp(mode, "0") != 0, g_comp4 != nil);
     [NSFileManager.defaultManager removeItemAtPath:@(dir) error:nil];

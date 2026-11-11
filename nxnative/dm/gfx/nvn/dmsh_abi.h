@@ -5,6 +5,10 @@
 // its own copy of the c2 layout) agrees, and that the numbers and kind names do not come back as literals in the host or the build.
 #pragma once
 
+// NVN2 adds task/mesh stages; their storage tables follow the classic driver fields.
+#define DMSH_C0_SSBO_TASK 0x670
+#define DMSH_C0_SSBO_MESH 0x770
+
 // The NVN driver's constant segments: one layout in every game (NVN 53 and 55 drivers, SDK 6 to 21: the handles of every shader of every profile fit it). A shader reads them as
 // c[0] and c[2]; the build records which rows it reads (drv_reads), and the host fills one DMSH_DRV_SIZE buffer per segment it reads from the current bindings (nvn_mtl.m encode_args).
 #define DMSH_DRV_SIZE 0xA00              // bytes of a driver segment buffer the host fills

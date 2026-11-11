@@ -7,6 +7,8 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include <ctype.h>
+#include <sys/system_properties.h>
 #include "overlay_layout.h"
 #include "font5x7.h"
 #include "overlay_vert.spv.h"
@@ -55,6 +57,7 @@ static VkFormat g_want = VK_FORMAT_R8G8B8A8_UNORM;
 static VkSemaphore g_acq[8], g_done_sem[8]; static VkFence g_pfence[8]; static VkCommandPool g_ppool; static VkCommandBuffer g_pcb[8]; static uint32_t g_pi;
 static ANativeWindow *g_win;
 static VkImageView g_sview[8];
+#include "gfx_vk_present_metrics.inc"
 // Where the game's picture lies in the window (fractions: x, y, width, height; aspect kept, black borders around it), for the front end's touch points, which hle_touch.c
 // takes relative to the picture: normalized by the whole window, a tap in Unpacking's 3040x1904 window (97 px borders) was off by up to 5% of the height
 static _Atomic uint32_t g_pic[4] = {0, 0, 1u << 20, 1u << 20};
@@ -77,6 +80,7 @@ static void swap_destroy(void) {
     if (g_surf) { vkDestroySurfaceKHR(V.inst, g_surf, NULL); g_surf = VK_NULL_HANDLE; }
 }
 static int swap_make(void) {
+    if (present_size_poll()) swap_destroy();
     ANativeWindow *w = dm_front_window();
     if (w != g_win) { swap_destroy(); g_win = w; }
     if (!w) return 0;
@@ -88,8 +92,17 @@ static int swap_make(void) {
     g_sfmt = sf[0].format; for (uint32_t i = 0; i < nf; i++) if (sf[i].format == VK_FORMAT_R8G8B8A8_UNORM) g_sfmt = sf[i].format;
     for (uint32_t i = 0; i < nf; i++) if (sf[i].format == g_want) g_sfmt = g_want;   // the window texture's sRGB-ness (g_want), so the blit copies its bytes as they are
     if (g_sfmt != g_want) VKRED_ONCE(95, "the surface offers no format %d for the window texture: its picture is %s", g_want, g_want == VK_FORMAT_R8G8B8A8_SRGB ? "darker" : "lighter");
-    g_sext = (VkExtent2D){(uint32_t)ANativeWindow_getWidth(w), (uint32_t)ANativeWindow_getHeight(w)};   // the window as it is now; Android's compositor rotates (identity transform)
+    // currentExtent is the consumer's preferred window size. getWidth/Height
+    // can instead describe buffers from a previously reduced swapchain.
+    g_sext = caps.currentExtent;
+    if (g_sext.width == UINT32_MAX || g_sext.height == UINT32_MAX)
+        g_sext = (VkExtent2D){(uint32_t)ANativeWindow_getWidth(w), (uint32_t)ANativeWindow_getHeight(w)};
     if (!g_sext.width || !g_sext.height) g_sext = caps.currentExtent;
+    g_sext.width /= g_present_divisor; g_sext.height /= g_present_divisor;
+    if (g_sext.width < caps.minImageExtent.width) g_sext.width = caps.minImageExtent.width;
+    if (g_sext.height < caps.minImageExtent.height) g_sext.height = caps.minImageExtent.height;
+    if (g_sext.width > caps.maxImageExtent.width) g_sext.width = caps.maxImageExtent.width;
+    if (g_sext.height > caps.maxImageExtent.height) g_sext.height = caps.maxImageExtent.height;
     uint32_t n = caps.minImageCount < 3 ? 3 : caps.minImageCount; if (caps.maxImageCount && n > caps.maxImageCount) n = caps.maxImageCount;
     VkSwapchainCreateInfoKHR ci = {VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR, NULL, 0, g_surf, n, g_sfmt, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, g_sext, 1,
         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_SHARING_MODE_EXCLUSIVE, 0, NULL, VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR,
@@ -108,6 +121,7 @@ static int swap_make(void) {
         }
     }
     VKLOG("swapchain %ux%u format %d, %u images", g_sext.width, g_sext.height, g_sfmt, g_nsimg);
+    present_times_init();
     return 1;
 }
 static void barrier(VkCommandBuffer cb, VkImage img, VkImageLayout from, VkImageLayout to) {
@@ -122,11 +136,11 @@ static void barrier(VkCommandBuffer cb, VkImage img, VkImageLayout from, VkImage
 // panel is rasterized again whenever the menu's state (dm_menu_state) changes. Under the panel, the frame rate counter's characters (OV_FPS_CHARS, gh rows: one
 // cell each), from which the counter is put together on every present, so a changing number needs no upload.
 enum { SP_DISC = OV_N, SP_BLACK, SP_N };
-#define OV_FPS_CHARS "0123456789 FPS-"
+#define OV_FPS_CHARS "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ .:-()/"
 static struct { VkImage img; VkDeviceMemory mem; VkImageView view; VkSampler samp; VkDescriptorSetLayout dsl; VkPipelineLayout layout; VkDescriptorPool pool; VkDescriptorSet set;
                 VkDescriptorPool pic_pool; VkDescriptorSet pic_set[8];   // the game's picture, drawn through the same pipeline when the window origin is lower left
                 VkPipeline pipe; VkPipeline pipe_pic;   // pipe_pic: the same shaders with blending off, for the opaque picture
-                VkFormat pfmt; uint32_t w, h, sh, pw, ph, gh, gs; VkBuffer up; VkDeviceMemory upm; uint8_t *px; int uploaded, panel; float sp[SP_N][3];
+                VkFormat pfmt; uint32_t w, h, sh, pw, ph, gh, gs, gc, gr; VkBuffer up; VkDeviceMemory upm; uint8_t *px; int uploaded, panel; float sp[SP_N][3];
                 VkRenderPass rp; VkFramebuffer fb[8]; VkImageView fbview[8]; VkExtent2D fbext[8]; } g_ov;
 // Without dynamic rendering (a Vulkan 1.1 / 1.2 device, V.has_dynrender) the overlay draws in a render pass object over the swapchain image: one pass for the swapchain's
 // format (load and store, the image already in COLOR_ATTACHMENT_OPTIMAL), and a framebuffer per swapchain image, made again when its view or the extent changes
@@ -340,7 +354,7 @@ static void ov_raster(uint8_t *px, uint32_t w, uint32_t h, uint32_t sh) {
 typedef struct { float pos[4], uv[4], alpha; } ov_quad;
 static void ov_draw(VkCommandBuffer cb, const ov_quad *q) { vkCmdPushConstants(cb, g_ov.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof *q, q); vkCmdDraw(cb, 6, 1, 0, 0); }
 static void ov_rect(VkCommandBuffer cb, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, float alpha) {   // screen pixels, texels
-    float W = (float)g_sext.width, H = (float)g_sext.height, tw = (float)g_ov.w, th = (float)(g_ov.h + g_ov.sh + g_ov.ph + g_ov.gh);
+    float W = (float)g_sext.width, H = (float)g_sext.height, tw = (float)g_ov.w, th = (float)(g_ov.h + g_ov.sh + g_ov.ph + g_ov.gh * g_ov.gr);
     ov_quad q = {{x0 / W * 2 - 1, y0 / H * 2 - 1, x1 / W * 2 - 1, y1 / H * 2 - 1}, {u0 / tw, v0 / th, u1 / tw, v1 / th}, alpha}; ov_draw(cb, &q);
 }
 static void ov_sprite(VkCommandBuffer cb, int i, float sx, float sy, float r, float alpha) {   // sprite i centred on screen pixel (sx, sy), r screen pixels in radius
@@ -354,22 +368,49 @@ static float ov_glow(int64_t t, int64_t now) {   // a held button's glow: bright
 // The frame rate counter: the game's frames shown per second, measured over half a second, in the window's top left corner on a dark block
 static float ov_fps_cell(void) { return 6.0f * g_ov.gs + 2; }   // a character cell's width in texels (a glyph of 5 columns, a gap, a clear texel each side)
 static void ov_fps_glyphs(void) {   // the characters into the rows under the panel
-    ov_canvas cv = {g_ov.px, g_ov.w, 0, g_ov.h + g_ov.sh + g_ov.ph, g_ov.w, g_ov.gh};
-    for (int i = 0; OV_FPS_CHARS[i]; i++) { char one[2] = {OV_FPS_CHARS[i], 0}; cv_text(&cv, i * ov_fps_cell() + 1 + g_ov.gs * 0.5f, g_ov.gh / 2.0f, one, (int)g_ov.gs, C_WHITE); }
+    ov_canvas cv = {g_ov.px, g_ov.w, 0, g_ov.h + g_ov.sh + g_ov.ph, g_ov.w, g_ov.gh * g_ov.gr};
+    for (int i = 0; OV_FPS_CHARS[i]; i++) { char one[2] = {OV_FPS_CHARS[i], 0}; cv_text(&cv, (i % g_ov.gc) * ov_fps_cell() + 1 + g_ov.gs * 0.5f, (i / g_ov.gc + 0.5f) * g_ov.gh, one, (int)g_ov.gs, C_WHITE); }
+}
+static void ov_hud_text(VkCommandBuffer cb,const char *s,float x,float y,float cw,float ch) {
+    float gy=(float)(g_ov.h+g_ov.sh+g_ov.ph);
+    for(unsigned i=0;s[i];i++,x+=cw){int letter=toupper((unsigned char)s[i]);const char *c=strchr(OV_FPS_CHARS,letter);if(!c || letter==' ')continue;
+        unsigned index=(unsigned)(c-OV_FPS_CHARS);float u=(index%g_ov.gc)*ov_fps_cell(),v=gy+(index/g_ov.gc)*g_ov.gh;
+        ov_rect(cb,x,y,x+cw,y+ch,u,v,u+ov_fps_cell(),v+g_ov.gh,1);
+    }
+}
+static uint64_t ov_proc_kb(const char *path,const char *key) {
+    FILE *f=fopen(path,"r");if(!f)return 0;char line[256];unsigned long long kb=0;size_t n=strlen(key);
+    while(fgets(line,sizeof line,f))if(!strncmp(line,key,n)){sscanf(line+n,"%llu",&kb);break;}fclose(f);return kb;
 }
 static void ov_fps(VkCommandBuffer cb, int64_t now) {
-    static uint64_t n0; static int64_t t0; static int fps = -1;
-    uint64_t n = atomic_load(&g_fps_frames);
-    if (!t0 || now - t0 > 2000000000ll) { t0 = now; n0 = n; fps = -1; }   // the first frame, or after a pause in the presents (the menu, the background): measure anew
-    else if (now - t0 >= 500000000ll) { fps = (int)((double)(n - n0) * 1e9 / (double)(now - t0) + 0.5); t0 = now; n0 = n; }
-    char s[16]; if (fps < 0) snprintf(s, sizeof s, "-- FPS"); else snprintf(s, sizeof s, "%d FPS", fps > 999 ? 999 : fps);
-    float k = (float)g_sext.width / g_ov.w, cw = ov_fps_cell() * k, ch = (float)g_ov.gh * k, m = (float)g_sext.height * 0.02f, x = m + ch * 0.25f, pad = ch * 0.2f;
-    float bx = g_ov.sp[SP_BLACK][0], by = g_ov.sp[SP_BLACK][1], gy = (float)(g_ov.h + g_ov.sh + g_ov.ph);
-    ov_rect(cb, m, m, m + ch * 0.5f + strlen(s) * cw, m + ch + 2 * pad, bx - 2, by - 2, bx + 2, by + 2, 0.45f);
-    for (int i = 0; s[i]; i++, x += cw) {
-        const char *c = strchr(OV_FPS_CHARS, s[i]); if (!c || s[i] == ' ') continue;
-        float u = (float)(c - OV_FPS_CHARS) * ov_fps_cell(); ov_rect(cb, x, m + pad, x + cw, m + pad + ch, u, gy, u + ov_fps_cell(), gy + g_ov.gh, 1);
+    static uint64_t n0;static int64_t t0,mem_time;static double fps=-1;static uint64_t rss,available;
+    static int metrics=-1;static char model[PROP_VALUE_MAX],android[PROP_VALUE_MAX];
+    if(metrics<0){const char *e=getenv("DM_VK_METRICS");metrics=e && atoi(e);__system_property_get("ro.product.model",model);__system_property_get("ro.build.version.release",android);}
+    uint64_t n=atomic_load(&g_fps_frames);
+    if(!t0 || (now-t0>2000000000ll && n==n0)){t0=now;n0=n;fps=-1;}
+    else if(now-t0>=500000000ll){fps=(double)(n-n0)*1e9/(double)(now-t0);t0=now;n0=n;}
+    char lines[9][96];unsigned count=1;
+    if(fps<0)snprintf(lines[0],sizeof lines[0],"-- FPS");else snprintf(lines[0],sizeof lines[0],"%.1f FPS",fps);
+    if(metrics){
+        if(now-mem_time>1000000000ll){rss=ov_proc_kb("/proc/self/status","VmRSS:");available=ov_proc_kb("/proc/meminfo","MemAvailable:");mem_time=now;}
+        uint64_t live,peak,allocations;vk_memory_stats(&live,&peak,&allocations);
+        snprintf(lines[1],sizeof lines[1],"%s / ANDROID %s",model,android);
+        snprintf(lines[2],sizeof lines[2],"%s / VK %u.%u",V.props.deviceName,VK_API_VERSION_MAJOR(V.props.apiVersion),VK_API_VERSION_MINOR(V.props.apiVersion));
+        snprintf(lines[3],sizeof lines[3],"PRESENT %ux%u",g_sext.width,g_sext.height);
+        snprintf(lines[4],sizeof lines[4],"BUFFER %ux%u CROP %ux%u",g_source_size[0],g_source_size[1],g_source_size[2],g_source_size[3]);
+        if(fps>0)snprintf(lines[5],sizeof lines[5],"FRAME AVG %.2f MS",1000.0/fps);else snprintf(lines[5],sizeof lines[5],"FRAME AVG -- MS");
+        snprintf(lines[6],sizeof lines[6],"VK ALLOC %.2f GIB",live/1073741824.0);
+        snprintf(lines[7],sizeof lines[7],"CPU RSS %.2f GIB",rss/1048576.0);
+        snprintf(lines[8],sizeof lines[8],"SYS AVAIL %.2f GIB",available/1048576.0);count=9;
     }
+    float k=(float)g_sext.width/g_ov.w*(metrics?0.48f:1.0f),cw=ov_fps_cell()*k,ch=g_ov.gh*k,m=g_sext.height*0.02f,pad=ch*0.2f;
+    size_t longest=0;for(unsigned i=0;i<count;i++)if(strlen(lines[i])>longest)longest=strlen(lines[i]);
+    // Long GPU names still fit the window. Memory labels deliberately keep
+    // overlapping CPU and Vulkan counters separate; neither is total app RAM.
+    float width=longest*cw+2*pad;if(width>g_sext.width-2*m){float scale=(g_sext.width-2*m)/width;cw*=scale;ch*=scale;pad*=scale;width*=scale;}
+    float bx=g_ov.sp[SP_BLACK][0],by=g_ov.sp[SP_BLACK][1];
+    ov_rect(cb,m,m,m+width,m+count*ch+2*pad,bx-2,by-2,bx+2,by+2,0.6f);
+    for(unsigned i=0;i<count;i++)ov_hud_text(cb,lines[i],m+pad,m+pad+i*ch,cw,ch);
 }
 static void ov_render(VkCommandBuffer cb, int mode, int menu, int fps) {
     float W = (float)g_sext.width, H = (float)g_sext.height;
@@ -452,30 +493,32 @@ static int overlay_ready(VkCommandBuffer cb, uint32_t k, int menu) {   // k: thi
     }
     if (g_ov.w != w || g_ov.h != h) {   // (re)rasterize for this window size
         vkDeviceWaitIdle(V.dev);
-        if (g_ov.view) { vkDestroyImageView(V.dev, g_ov.view, NULL); vkDestroyImage(V.dev, g_ov.img, NULL); vkFreeMemory(V.dev, g_ov.mem, NULL); vkDestroyBuffer(V.dev, g_ov.up, NULL); vkFreeMemory(V.dev, g_ov.upm, NULL); }
+        if (g_ov.view) { vkDestroyImageView(V.dev, g_ov.view, NULL); vkDestroyImage(V.dev, g_ov.img, NULL); vk_memory_free(V.dev, g_ov.mem, NULL); vkDestroyBuffer(V.dev, g_ov.up, NULL); vk_memory_free(V.dev, g_ov.upm, NULL); }
         uint32_t sh = ov_layout_sprites(h); float mr[4]; ov_menu_rect((float)g_sext.width, (float)g_sext.height, mr);
         g_ov.pw = (uint32_t)(mr[2] / 2) + 1; g_ov.ph = (uint32_t)(mr[3] / 2) + 1; if (g_ov.pw > w) g_ov.pw = w;
         g_ov.gs = (uint32_t)fmaxf(2, roundf(h * 0.035f / 7)); g_ov.gh = 7 * g_ov.gs + 4;   // the counter's characters: 3.5% of the window's height
-        uint32_t th = h + sh + g_ov.ph + g_ov.gh;
+        g_ov.gc = (uint32_t)(w / ov_fps_cell()); if (!g_ov.gc) g_ov.gc = 1;
+        g_ov.gr = ((uint32_t)strlen(OV_FPS_CHARS) + g_ov.gc - 1) / g_ov.gc;
+        uint32_t th = h + sh + g_ov.ph + g_ov.gh * g_ov.gr;
         VkImageCreateInfo ic = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, NULL, 0, VK_IMAGE_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, {w, th, 1}, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL,
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_SHARING_MODE_EXCLUSIVE, 0, NULL, VK_IMAGE_LAYOUT_UNDEFINED};
         VKCHK(vkCreateImage(V.dev, &ic, NULL, &g_ov.img)); VkMemoryRequirements rq; vkGetImageMemoryRequirements(V.dev, g_ov.img, &rq);
         VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, NULL, rq.size, vk_mem_type(rq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0)};
-        VKCHK(vkAllocateMemory(V.dev, &ai, NULL, &g_ov.mem)); VKCHK(vkBindImageMemory(V.dev, g_ov.img, g_ov.mem, 0));
+        VKCHK(vk_memory_allocate(V.dev, &ai, NULL, &g_ov.mem)); VKCHK(vkBindImageMemory(V.dev, g_ov.img, g_ov.mem, 0));
         VkImageViewCreateInfo vi = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, NULL, 0, g_ov.img, VK_IMAGE_VIEW_TYPE_2D, VK_FORMAT_R8G8B8A8_UNORM, {0}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
         VKCHK(vkCreateImageView(V.dev, &vi, NULL, &g_ov.view));
         VkBufferCreateInfo bc = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, NULL, 0, (VkDeviceSize)w * th * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_SHARING_MODE_EXCLUSIVE};
         VKCHK(vkCreateBuffer(V.dev, &bc, NULL, &g_ov.up)); VkMemoryRequirements bq; vkGetBufferMemoryRequirements(V.dev, g_ov.up, &bq);
         VkMemoryAllocateInfo bi = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, NULL, bq.size, vk_mem_type(bq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 0)};
-        VKCHK(vkAllocateMemory(V.dev, &bi, NULL, &g_ov.upm)); VKCHK(vkBindBufferMemory(V.dev, g_ov.up, g_ov.upm, 0));
+        VKCHK(vk_memory_allocate(V.dev, &bi, NULL, &g_ov.upm)); VKCHK(vkBindBufferMemory(V.dev, g_ov.up, g_ov.upm, 0));
         void *px; VKCHK(vkMapMemory(V.dev, g_ov.upm, 0, VK_WHOLE_SIZE, 0, &px)); g_ov.px = px;
-        g_ov.w = w; g_ov.h = h; g_ov.sh = sh; ov_raster(g_ov.px, w, h, sh); memset(g_ov.px + (size_t)w * (h + sh) * 4, 0, (size_t)w * (g_ov.ph + g_ov.gh) * 4); ov_fps_glyphs();
+        g_ov.w = w; g_ov.h = h; g_ov.sh = sh; ov_raster(g_ov.px, w, h, sh); memset(g_ov.px + (size_t)w * (h + sh) * 4, 0, (size_t)w * (g_ov.ph + g_ov.gh * g_ov.gr) * 4); ov_fps_glyphs();
         VkDescriptorImageInfo ii = {g_ov.samp, g_ov.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet wr = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, NULL, g_ov.set, 0, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &ii};
         vkUpdateDescriptorSets(V.dev, 1, &wr, 0, NULL);
         g_ov.uploaded = 0; g_ov.panel = -1;
     }
-    uint32_t y0 = 0, rows = g_ov.h + g_ov.sh + g_ov.ph + g_ov.gh;   // the rows to upload
+    uint32_t y0 = 0, rows = g_ov.h + g_ov.sh + g_ov.ph + g_ov.gh * g_ov.gr;   // the rows to upload
     if (g_ov.uploaded && menu >= 0 && menu != g_ov.panel) {   // only the panel, after the last copy out of the buffer has run
         VkFence f[8]; uint32_t n = 0; for (uint32_t i = 0; i < 8; i++) if (i != k) f[n++] = g_pfence[i];
         vkWaitForFences(V.dev, n, f, 1, 1000000000ull);
@@ -553,6 +596,7 @@ static int pic_view(vkimg_t *im) {   // a view of the whole window image for the
 static void present_window(vkimg_t *im, const int crop[4], double period, uint64_t ticket) {   // period: the game's frame period (s); < 0 for a redraw (ticket 0)
     uint32_t k = g_pi++ % 8;
     vkWaitForFences(V.dev, 1, &g_pfence[k], 1, UINT64_MAX);
+    present_times_collect(k);
     VkFormat want = im->fmt == VK_FORMAT_R8G8B8A8_SRGB || im->fmt == VK_FORMAT_B8G8R8A8_SRGB || im->fmt == VK_FORMAT_A8B8G8R8_SRGB_PACK32 ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
     if (want != g_want) { g_want = want; swap_destroy(); if (!swap_make()) return; }   // once, at the first present of the other kind
     uint32_t idx; VkResult r = vkAcquireNextImageKHR(V.dev, g_swap, UINT64_MAX, g_acq[k], VK_NULL_HANDLE, &idx);
@@ -561,11 +605,16 @@ static void present_window(vkimg_t *im, const int crop[4], double period, uint64
     vkResetFences(V.dev, 1, &g_pfence[k]);
     VkCommandBuffer cb = g_pcb[k];
     VkCommandBufferBeginInfo bi = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT}; vkBeginCommandBuffer(cb, &bi);
+    if (g_present_queries) vkCmdResetQueryPool(cb, g_present_queries, k * 2, 2);
     vk_img_barrier_all(cb);   // after everything submitted before on this queue
     barrier(cb, g_simg[idx], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    // Start after producer dependencies and image acquisition (the submit waits
+    // at TRANSFER), so earlier guest rendering is outside the measured interval.
+    if (g_present_queries) vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, g_present_queries, k * 2);
     VkClearColorValue black = {{0, 0, 0, 1}}; VkImageSubresourceRange rg = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     vkCmdClearColorImage(cb, g_simg[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &rg);
     int cx = crop ? crop[0] : 0, cy = crop ? crop[1] : 0, cw = crop && crop[2] ? crop[2] : (int)im->w, ch = crop && crop[3] ? crop[3] : (int)im->h;
+    g_source_size[0] = im->w; g_source_size[1] = im->h; g_source_size[2] = (uint32_t)cw; g_source_size[3] = (uint32_t)ch;
     double s = fmin((double)g_sext.width / cw, (double)g_sext.height / ch); int dw = (int)(cw * s), dh = (int)(ch * s), dx = ((int)g_sext.width - dw) / 2, dy = ((int)g_sext.height - dh) / 2;
     vk_pic_set((float)dx / g_sext.width, (float)dy / g_sext.height, (float)dw / g_sext.width, (float)dh / g_sext.height);
     int ovm = dm_overlay_visible(), menu = dm_menu_state(), fps = dm_overlay_fps();
@@ -605,12 +654,17 @@ static void present_window(vkimg_t *im, const int crop[4], double period, uint64
         if (V.has_dynrender) vkCmdEndRendering(cb); else vkCmdEndRenderPass(cb);
     }
     barrier(cb, g_simg[idx], lay, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    if (g_present_queries) vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_present_queries, k * 2 + 1);
     vkEndCommandBuffer(cb);
     VkPipelineStageFlags ws = VK_PIPELINE_STAGE_TRANSFER_BIT;
     VkSubmitInfo si = {VK_STRUCTURE_TYPE_SUBMIT_INFO, NULL, 1, &g_acq[k], &ws, 1, &cb, 1, &g_done_sem[k]};
     extern pthread_mutex_t g_vk_queue_mu;
     pthread_mutex_lock(&g_vk_queue_mu);
     if (vkQueueSubmit(V.q, 1, &si, g_pfence[k])) { pthread_mutex_unlock(&g_vk_queue_mu); VKRED_ONCE(91, "present submit failed"); return; }
+    if (g_present_queries) {
+        struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+        g_present_samples[k] = (present_sample){ticket, ts.tv_sec + ts.tv_nsec / 1e9, {im->w, im->h, (uint32_t)cw, (uint32_t)ch, g_sext.width, g_sext.height}, 1};
+    }
     VkPresentInfoKHR pi = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, NULL, 1, &g_done_sem[k], 1, &g_swap, &idx, NULL};
     VkPresentTimeGOOGLE ptm = {++g_pace_id, period >= 0 ? pace_desired(period) : 0};
     VkPresentTimesInfoGOOGLE pti = {VK_STRUCTURE_TYPE_PRESENT_TIMES_INFO_GOOGLE, NULL, 1, &ptm};
@@ -721,9 +775,14 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
               (unsigned long long)g_vkst.passes, (unsigned long long)g_vkst.folded, (unsigned long long)g_vkst.dispatches, (unsigned long long)g_vkst.pipes_built,
               (unsigned long long)shown, (unsigned long long)no_img, (unsigned long long)undrawn, (unsigned long long)g_ubd_landed, (unsigned long long)g_ubd_superseded, (unsigned long long)g_ubd_shadows, (unsigned long long)g_ubd_racy, (unsigned long long)g_vkst.rt_kept, (unsigned long long)g_vkst.max_pass_draws);
         double nd = g_vkst.draws > pdr ? (double)(g_vkst.draws - pdr) / 600 : 0;
-        VKLOG("replay per frame (last 600): %.0f draws, replay %.2f ms (descriptor sets %.2f, pipeline keys %.2f), queue submit %.2f ms, uniform shadows %.0f KB; GPU busy %.2f ms; texture uploads %.1f (%.2f MB, %.2f ms); descriptor sets reused %llu, new %llu (collecting %.2f ms, hashing %.2f, new ones %.2f), kept per stage %.0f a frame (memo differences %llu)",
+        VKLOG("replay per frame (last 600): %.0f draws, replay %.2f ms (descriptor sets %.2f, pipeline keys %.2f), queue submit %.2f ms, uniform shadows %.0f KB; GPU timestamp span %.2f ms (includes submission gaps); texture uploads %.1f (%.2f MB, %.2f ms); descriptor sets reused %llu, new %llu (collecting %.2f ms, hashing %.2f, new ones %.2f), kept per stage %.0f a frame (memo differences %llu)",
               nd, (g_vkst.ns_exec - pe) / 6e8, (g_vkst.ns_desc - pd) / 6e8, (g_vkst.ns_pipe - pp) / 6e8, (g_ns_submit - ps) / 6e8, (g_ubd_bytes - pb) / 600.0 / 1024, (g_gpu_ns - pg) / 6e8, (g_pkg_n - pkn) / 600.0, (g_pkg_bytes - pkb) / 600.0 / 1048576, (g_pkg_ns - pkt) / 6e8, (unsigned long long)g_set_hits, (unsigned long long)g_set_new, (g_ns_set_build - psb) / 6e8, (g_ns_set_hash - psh) / 6e8, (g_ns_set_new - psn) / 6e8,
               (g_set_memo - psm) / 600.0, (unsigned long long)g_set_memo_bad);
+        uint64_t memory_live, memory_peak, memory_count; vk_memory_stats(&memory_live, &memory_peak, &memory_count);
+        VKLOG("Vulkan allocations: live %.2f MiB, peak %.2f MiB, live allocation count %llu (overlap process RAM; exclude driver internals)", memory_live / 1048576.0, memory_peak / 1048576.0, (unsigned long long)memory_count);
+        uint64_t cache_hits, cache_unconfirmed; vk_pipeline_cache_feedback_stats(&cache_hits, &cache_unconfirmed);
+        VKLOG("pipeline cache creation feedback: confirmed application hits %llu, unconfirmed %llu (cumulative successful creations)",
+              (unsigned long long)cache_hits, (unsigned long long)cache_unconfirmed);
         void vk_pass_report(void); vk_pass_report();
         pe = g_vkst.ns_exec; pd = g_vkst.ns_desc; pp = g_vkst.ns_pipe; ps = g_ns_submit; pb = g_ubd_bytes; pdr = g_vkst.draws; pg = g_gpu_ns; pkn = g_pkg_n; pkb = g_pkg_bytes; pkt = g_pkg_ns; psb = g_ns_set_build; psh = g_ns_set_hash; psn = g_ns_set_new; psm = g_set_memo;
     }
@@ -733,8 +792,7 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
     if (shot_wanted(n)) shot(im, n);
     { void vk_pass_dump_poll(uint64_t done); uint64_t vk_fence_done(void); vk_pass_dump_poll(vk_fence_done()); void vk_pass_frame(void); vk_pass_frame(); void vk_tex_sweep(void); vk_tex_sweep(); }
     if (n % 1800 == 0) {   // every ~30 s: the pipeline cache to disk on a thread of its own (an Android app can be killed without any exit path)
-        void vk_pipeline_cache_save(void); pthread_t th; pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
-        pthread_create(&th, &a, (void *(*)(void *))(void *)vk_pipeline_cache_save, NULL); pthread_attr_destroy(&a);
+        vk_pipeline_cache_schedule();
     }
     return present_enqueue(im, crop, n, period);
 }

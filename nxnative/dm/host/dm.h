@@ -151,6 +151,7 @@ uint64_t dm_nvn_sub_cpu_ns(void);     // Cumulative CPU nanoseconds of submit (e
 void dm_backtrace(uint64_t fp);
 void crash_watch_progress(uint32_t tick, const char *stage);
 void crash_watch_frame(void);
+void crash_watch_work_completed(void);   // Completed blocking startup work; preserves frame/tick diagnostics
 void crash_watch_pregame_done(void);
 uint64_t crash_watch_progress_count(void);
 void crash_dump_now(const char *why);   // Dump state on demand (threads + graphics wait points), without exiting

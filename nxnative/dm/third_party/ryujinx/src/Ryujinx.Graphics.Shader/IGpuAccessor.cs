@@ -11,6 +11,10 @@ namespace Ryujinx.Graphics.Shader
         // Fixed VS capture ABI used by the offline Metal geometry path.
         bool QueryGeometryInputFixed() => false;
 
+        // Offline NVN2 task/mesh bridge: stage (6 task / 7 mesh), input payload words,
+        // output attribute words and output map entries. Null preserves the ordinary pipeline.
+        int[] QueryAmpereStageBuffers() => null;
+
         /// <summary>
         /// Reads data from the constant buffer 1.
         /// </summary>

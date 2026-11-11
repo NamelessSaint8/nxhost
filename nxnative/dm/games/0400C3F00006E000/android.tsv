@@ -1,0 +1,21 @@
+# Experimental optimized preview. Completes Crown City on the tested Adreno 840.
+# Broader devices/courses, first-use pauses and total RAM remain under test.
+status	experimental
+tested	0.17-preview Lenovo TB323FU / Adreno 840 / Android 16: completed Crown City (three laps)
+package	org.nx2a.mariokartworld
+orientation	landscape
+requires	bcn
+setting	overlay=1
+setting	fps=1
+setting	docked=0
+env	DM_VK_ATLAS=1
+env	DM_NVN_ASYNC=1
+env	DM_VK_COMPILER_PURGE=1
+env	DM_VK_NOPREWARM=1
+env	DM_VK_METRICS=1
+env	DM_VK_INFLIGHT=3
+env	DM_VK_CPU_BACKING=file
+env	DM_VK_LAZY_CACHED_POOLS=1
+env	DM_VK_LAZY_POOLS=1
+env	DM_VK_IMAGE_BUDGET_MB=2048
+env	DM_VK_ATLAS_NATIVE_FILTER=1

@@ -870,6 +870,38 @@ Finding, keying and translating shaders (`dm/gfx/tools/shader_split.py`, `dmsh_b
 - **Found on:** [Fire Emblem Fortune's Weave](../../dm/games/04007EF01F8AE000/README.md): the Lighting compute shaders' division, run line by line from its translated MSL on 208 known inputs, with dividends up to 2^44: 26 wrong with only the pair fixed, none with both. Other Switch 2 games share the decoder and have not been rebuilt with this.
 - **Check:** `DMSH_TEST_XLATE=<translator> python3 dm/gfx/tests/test_dmsh_ampere_mem.py`.
 
+### Vulkan integer attachments consume raw fragment export bits
+
+- **Symptom:** a fragment program declares float outputs even though its color attachment has an unsigned or signed integer format. A pipeline may compile while leaving its output interpretation incompatible with the attachment.
+- **Cause:** the translator represents Maxwell fragment export registers as float vectors. Their bits can carry integers; numerical float-to-integer conversion changes those bits. Android previously adapted sampled image types but never adapted fragment exports to attachment types.
+- **Fix:** `gfx_vk_exec.c` derives output numeric classes from the actual attachment view formats, already present in the pipeline cache key. `gfx_vk_shader.c` composes a typed output variant with image, depth and per-primitive variants. `gfx_vk_spv_outputs.inc` retypes selected output variables and derived pointers, bitcasts stores to the attachment class and bitcasts output loads back to their original type. Float outputs keep the original module. Mixed signed/unsigned/float locations remain independent. Unsupported output layouts fail explicitly. A growing module cache retains variants beyond the previous eight-entry limit instead of leaking uncached modules. This follows the [Vulkan fragment output interface](https://docs.vulkan.org/spec/latest/chapters/interfaces.html#interfaces-fragmentoutput).
+- **Check:** the host compiles the exact runtime transform with address/undefined sanitizers; independent SPIR-V validation checks mixed targets and scalar/component reads and writes. Production GPU replay checks all 27 numeric-class combinations over three attachments, a narrow R8 unsigned target and a return to the original float module. Literal readback and the 26-entry cache check pass. The actual observed integer-target program also validates and compiles with its typed variant. See [reproduction](../../../probes/README.md#offset-gather-and-typed-attachments).
+- **Found on:** [Mario Kart World Android attachment checkpoint](../../dm/games/0400C3F00006E000/README.md#android-offsetgather-and-attachment-parity-2026-11-10), an observed native mesh pass using an R8Uint Metal attachment. These checks establish backend export behavior, not a full-game visual correction on Android.
+
+### Fragment atlas helpers retain function calls
+
+- **Symptom:** atlas conversion produces unexpectedly large SPIR-V modules and substantial process memory while loading them.
+- **Cause:** glslang's offline size optimizer aggressively inlines the repeated page lookup/filtering tree at each material sample.
+- **Fix:** `shader_vk.compile_atlas` preserves fragment function calls with `-Od`; the device compiler handles optimization. Other stages retain their checked compiler path. No shader data or sampling operations are removed.
+- **Check:** both representations independently validate and load, and the same production GPU pixel regression passes. Alternate fresh processes load identical real program sets under Android `time -v` to compare peak RSS. Record this as module-loading memory, separately from gameplay working sets. An all-stages experiment exposed higher compute-fixture peak memory, so the change is scoped to fragment materials.
+- **Found on:** [Mario Kart World Android implicit checkpoint](../../dm/games/0400C3F00006E000/README.md#android-implicit-atlas-sampling-2026-11-10): the real converted bundle falls by about 60%, with about 1.26 GiB lower peak RSS when loading the complete tested shader subset. Full-game savings remain unmeasured.
+
+### Padded Vulkan vertex outputs reuse SPIR-V types
+
+- **Symptom:** a shader build succeeds, but independent SPIR-V validation reports `Duplicate non-aggregate type declarations are not allowed` in vertex programs padded for missing fragment inputs. A separate fixture reads incorrect defaults from short float-vector inputs.
+- **Cause:** Android `dmsv_pad.py` unconditionally created scalar, vector and pointer types already present in the original module. It also assigned 1 to the last component of every float vector, including vec2/vec3.
+- **Fix:** intern the needed declarations against original and newly created types. Missing float attributes retain (0,0,0,1), truncated to the consumer's width: vec2/vec3 stay zero and vec4 receives W=1. Integer defaults retain their existing zero policy. Unwritten outputs are added without changing existing shader instructions or interfaces.
+- **Check:** independent validation, repeated padding and literal stored defaults cover shared types and float/signed/unsigned vectors. A production GPU draw checks actual fragment inputs. A control restoring only the wrong short-vector defaults remains valid SPIR-V but fails the literal pixel comparison. See [reproduction](../../../probes/README.md#real-android-shader-and-pipeline-audit).
+- **Found on:** [Mario Kart World Android interface checkpoint](../../dm/games/0400C3F00006E000/README.md#android-shader-and-interface-coverage-2026-11-10): 40 real padded vertex programs failed validation before type reuse; the complete shader set validates afterward. The short-vector defect was exposed by the expanded fixture.
+
+### Formatless storage images require SPIR-V capabilities
+
+- **Symptom:** `spirv-val` rejects an Unknown-format `OpImageRead` or `OpImageWrite` although Vulkan module creation succeeds.
+- **Cause:** the Vulkan translator can emit storage-image instructions with format Unknown without declaring `StorageImageReadWithoutFormat` or `StorageImageWriteWithoutFormat`. Module loading alone does not establish valid SPIR-V.
+- **Fix:** Android finalization resolves the image value's declared result type for each read/write and inserts only the missing capability55/56 declarations. Typed image accesses need no such declaration. The pass is idempotent and changes no image types, IDs, bounds or executable instructions; unresolved image values fail explicitly. The device must expose and enable the corresponding [Vulkan features](https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceFeatures.html). The Android device setup already enables the supported features.
+- **Check:** a typed/formatless mixed fixture checks exact required capabilities, idempotence and independent SPIR-V validation. The device replay writes and reads a formatless R32F image and checks its actual image content after execution. Both feature bits are reported with the test.
+- **Found on:** [Mario Kart World Android driver checkpoint](../../dm/games/0400C3F00006E000/README.md#android-driver-state-parity-2026-11-09). Independent validation exposed missing declarations in 239 of 755 selected programs; all 755 pass after finalization. Real-program module loading is separate from GPU execution of synthetic fixtures.
+
 ### NVN2 compute reads its workgroup counts at c0 + 4
 
 - **Symptom:** a scene lit by many small lights comes out too dark, with its clustered light lists empty for most clusters.
@@ -1336,6 +1368,14 @@ Finding, keying and translating shaders (`dm/gfx/tools/shader_split.py`, `dmsh_b
 - **Found on:** [Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md#found-on-this-game), through source review of the shared prewarm lookup/load/publish path and a normal-start Mac probe; [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game), the same probe.
 - **Regression seam:** `t_pso_warm` parses actual `S` and `R` manifest tasks sharing a vertex key and gates the first real `MTLDevice` library load. A test-owned dictionary proxy observes the second same-key lookup under the production dictionary lock before the owner is released; a third key must finish independently while the owner is held. Actual device library-load counts check that the shared key is prepared once and cached hits do not reload it; both callers retain one shader identity. It also checks warm negative caching and a later successful demand retry after reflection appears. The existing `check_t_pso_warm` target runs both MTLDevice and Metal 4 paths.
 
+### Published startup shaders were loaded again at program creation
+
+- **Symptom:** creating an NVN program loads a Metal library already installed by startup preparation, repeating reflection, function and constant-bank work.
+- **Cause:** `warm_claim` installed ready shaders in `g_shcache` without adding their keys to the synchronized `progpf_first` set. `mtl_prog_prefetch` runs on game threads and uses that set instead of reading the submit-thread cache, so it considered prepared shaders new. Discarding the duplicate at its later claim did not avoid its preparation cost.
+- **Fix:** mark shader keys when `warm_claim` publishes each completed shader, render-pipeline pair or compute pipeline. Both render stages are marked, including manifests with no standalone shader rows. Failed or unfinished warm loads are not marked here; their demand retry behavior remains unchanged. This does not coalesce a prefetch already in flight before publication.
+- **Check:** `t_pso_warm` counts actual device library loads after claiming each of the three warm-item kinds, retains the published shader identity and verifies that an unprepared program still prefetches its library. These checks run with both MTLDevice and Metal 4, alongside GPU pixel comparisons and the existing negative-load demand retry. Before the fix, all three prepared-program cases reloaded their library; after it, none does.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#found-on-this-game), through review of normal-start preparation and a synthetic reproduction of the shared publication/prefetch path.
+
 ### Function constants specialized at load
 
 - **Symptom:** `fragmentFunction main0 cannot be used to build a pipeline state` (a Metal validation assertion).
@@ -1414,3 +1454,78 @@ Finding, keying and translating shaders (`dm/gfx/tools/shader_split.py`, `dmsh_b
 - **Check:** `t_host_msl` loads every library, with a swizzled `newLibraryWithSource:` that counts 0 calls, and finds all 24 clear functions. `t_builtin`, `t_geometry` and `t_deswz_gpu` use the built libraries.
 - **Build inputs:** Mac libraries use `MACOS_MIN` from `dm/mac/min_os.mk`, matching the host's deployment target; otherwise a newer SDK emits libraries older supported Macs cannot load and the host falls back to runtime compilation. Every build rechecks the compiler, SDK, deployment target and source contents, reusing the header only when all match. Installing the Metal toolchain after a source-only build therefore regenerates the libraries without a clean build.
 - **Build callers:** the NSP packer and regression harness generate the Mac header before checking their cached host executables, and include it in the host fingerprint. The standalone iOS compile check generates the iPhone header before its dry run, as the app build does. A dry run alone does not generate either header.
+
+
+### GLSL round-trip of explicit array-shadow LOD
+
+- **Symptom:** glslang rejects a three-argument `textureGrad` call on `sampler2DArrayShadow` while upgrading another sampler in the same module.
+- **Cause:** SPIRV-Cross emits the Grad name with the original scalar LOD operand. Grad requires two gradient vectors. The original SPIR-V explicit depth LOD operation is valid.
+- **Fix:** repair only that invalid three-argument array-shadow overload to `textureLod` and require `GL_EXT_texture_shadow_lod`. Other shadow sampling remains unchanged. The extension provides the exact explicit-LOD operation, avoiding an approximate LOD calculation.
+- **Check:** ten atlas compiler/reflection tests pass, including retained shadow level-zero semantics, native 2D size types and idempotent upgrades. The actual failed fragment shader `0ffca436cba481a0` compiles and independently validates after repair. This is compiler evidence; full-scene shadow validation remains open.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#android-full-game-bring-up-2026-11-10). See [SPIRV-Cross's shadow-LOD implementation](https://github.com/KhronosGroup/SPIRV-Cross/blob/main/spirv_glsl.cpp).
+
+### Vulkan atlas modes specialize before material inlining
+
+- **Symptom:** first-use material pipelines compile for several seconds after sparse 2D sampling is enabled. A direct `OpCopyObject` from the new specialization constant causes Adreno pipeline result-13 in an implicit-sampling fragment fixture, despite valid SPIR-V.
+- **Cause:** each sampling helper retains both native and mapped lookup trees. Resolving the metadata word only inside its generic accessor leaves these branches dynamic during early compiler passes. The direct-copy failure is isolated to Adreno's handling of this valid instruction form.
+- **Fix:** specialize the backend-owned header word0 per texture binding and include mode bits in pipeline and descriptor-memo keys. Expose literal-zero accessor calls directly in their caller. Exact unsigned addition of zero avoids the driver rejection. Existing user specialization IDs keep their values. Explicit LOD/fetch operations accept anisotropic samplers because they have no directional footprint; implicit/gradient sampling still rejects unsupported anisotropy.
+- **Check:** all 9,880 affected game modules pass the exact runtime transform under ASAN/UBSAN and independent SPIR-V validation. GPU regressions pass 384 explicit-LOD, 400 uncompressed, 868 compressed-atlas, 2,166 implicit and 15,750 offset/gather checks. The implicit anisotropy2 negative control still stops. Complete-scene compile latency and filtering need further game measurements.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#android-full-game-bring-up-2026-11-10), Lenovo TB323FU / Adreno840. See [GLSL explicit-LOD semantics](https://raw.githubusercontent.com/KhronosGroup/OpenGL-Refpages/main/gl4/textureLod.xml).
+
+### Vulkan compilation progress survives interrupted loading
+
+- **Symptom:** each startup reports an empty driver pipeline cache even after earlier runs compiled hundreds of materials.
+- **Cause:** automatic saving waited for 1,800 presented frames. Loading stalled or ended before that point, losing completed compilation work. The previous asynchronous callback also cast a void function to a thread entry signature.
+- **Fix:** request an asynchronous save after each 50 successful graphics or compute pipeline compilations. Coalesce concurrent requests, use a correctly typed thread entry, and serialize the full temporary-file write and rename. Update saved state only after success. Frame-based and suspend saves remain available.
+- **Check:** the next guarded game run writes a 6,197,135-byte driver cache during initial loading. A subsequent launch must show cache reuse before claiming a startup improvement.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#android-full-game-bring-up-2026-11-10), Android full-game startup.
+
+### Vulkan cache hits do not need another disk snapshot
+
+- **Symptom:** a prepared Android driver cache is written repeatedly during play; 55 complete writes total 35,988,622,619 bytes in one Mario Kart World preview run.
+- **Cause:** every successful `vkCreateGraphicsPipelines` or `vkCreateComputePipelines` incremented the save revision, including pipelines served by the supplied cache. The save path also treated an accepted disk cache as unsaved at startup. Vulkan's [pipeline creation feedback](https://docs.vulkan.org/spec/latest/chapters/pipelines.html#pipelines-pipeline-creation-feedback) reports a valid application-cache hit separately from success.
+- **Fix:** request creation feedback for graphics, compute and optional fragment-library pipelines on Vulkan 1.3 devices or devices with the extension enabled. Only a valid application-cache hit leaves the save revision unchanged; missing or invalid feedback keeps the conservative save path. An accepted on-disk cache starts at saved revision zero. Every 50 successful creations without a confirmed hit still schedule a save, and present/exit saves remain.
+- **Check:** the 196-source Android host compiles. An isolated production-backend replay on Adreno 840 writes a 55,938-byte cache on its cold run and passes 12 GPU checks. The same warm run passes 12 checks without changing the cache file's size or timestamps. Khronos validation is active with zero API errors for the warm replay, 102 compute-driver checks and 18 optional fragment-library checks. The full game's cache-write reduction is not yet measured; preview 0.17 predates this change.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#android-full-game-bring-up-2026-11-10), Lenovo TB323FU / Adreno 840.
+
+
+### Vulkan vertex inputs preserve integer fetch bits
+
+- **Symptom:** validation reports VUID08733: an integer vertex format feeds a floating-point shader input.
+- **Cause:** the translator represents guest register words as floats, while Vulkan requires the interface type to match the vertex format's numeric class.
+- **Fix:** specialize vertex input interfaces for actual unsigned/signed formats, then bitcast loaded words back to the original register type. Keep the original pipeline key and cache the resulting module variants.
+- **Check:** eight API-validated GPU cases cover 8/16/32-bit unsigned/signed inputs, sign/zero extension and repeated variants. The original fragment-output transform still passes its ASAN/UBSAN regression.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#android-full-game-bring-up-2026-11-10), Lenovo TB323FU / Adreno840.
+
+### Unused distance declarations exceed the mobile interface limit
+
+- **Symptom:** validation reports VUID00710: eight declared clip distances plus one cull distance exceed the combined device limit, although the shader uses neither array.
+- **Cause:** translating the complete output block retained unused distance members. Vulkan counts declared array lengths. A later recorded-pipeline replay found two more shaders where the scan mistook `OpExtInst`'s literal instruction number for an output pointer ID: GLSL `FMin` has number 37, which can also be an unrelated variable ID.
+- **Fix:** remove only unreferenced clip/cull members and reindex surviving members and access chains. Exclude the extended-instruction opcode from ID uses. Unknown pointer uses or whole-block loads retain the complete block. Written distances are preserved.
+- **Check:** all 3,547 game vertex modules pass the exact C transform under ASAN/UBSAN and independent SPIR-V validation; 3,522 change in the initial census. Focused tests retain active clip/cull arrays, validate shifted accesses, preserve whole-block loads and check idempotence. The literal-ID collision regression constructs a valid FMin shader with output variable ID37; both actual newly exposed programs also pass the corrected transform and independent validation.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#android-full-game-bring-up-2026-11-10), Adreno840's combined limit of eight.
+
+### Compute shared storage exceeds the device limit
+
+- **Symptom:** validation reports VUID06530: a compute shader declares 49,152 shared bytes on a device permitting 32,768.
+- **Cause:** the source GPU permits a larger workgroup allocation. Successful module creation does not establish a valid dispatch on the destination device.
+- **Fix:** lower oversized uint arrays to coherent storage buffers with a separate range per linearized workgroup. Retain execution scopes and retarget shared-memory barriers to buffer memory. Runtime allocates fence-owned storage from actual group counts; GPU-generated indirect counts use an ordered host read before sizing. Reject known oversized native modules with a rebuild instruction.
+- **Check:** all 168 affected compute modules independently validate with unchanged existing descriptor interfaces. Six API-validated GPU cases check every 48 KiB word, 3D groups, zero counts, barriers, atomics and GPU-produced indirect arguments. Direct dispatch remains asynchronous. The indirect fallback waits for earlier queue work; its full-game cost remains open.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#android-full-game-bring-up-2026-11-10), Lenovo TB323FU / Adreno840.
+
+
+### Completed pipeline builds count as watchdog progress
+
+- **Symptom:** a diagnostic cold start exits with `watchdog: no progress` during a batch of successful Vulkan pipeline builds before the first frame.
+- **Cause:** the watchdog tracks presented frames or guest ticks. A batch can exceed the stall threshold even though individual compilations keep completing.
+- **Fix:** successful graphics and compute pipeline creation refreshes the watchdog's monotonic progress timestamp. This records completed blocking work without changing tick, stage or frame counters. An individual stalled compilation still reaches the original timeout.
+- **Check:** `--watch-work` keeps a child alive through more than twice its one-second stall threshold using completed-work reports. Frame progress counts stay unchanged. Once work stops, the child exits at the stall threshold. Two checks pass on Android; the full release host compiles.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#android-full-game-bring-up-2026-11-10), Android preview cold start after shader rebuilding.
+
+### Recorded Vulkan states can prepare before replay
+
+- **Symptom:** first-use graphics pipeline compilation consumes much of loading and interrupts gameplay, even with a persistent driver cache.
+- **Cause:** the Vulkan driver still needs to create a pipeline for each exact shader and render-state combination. A driver cache reduces that work but does not create live pipeline objects before their first use.
+- **Fix:** recorded PPE3 states are deduplicated by their complete key. Optional `DM_VK_PREWARM_SYNC=1` prepares them on one thread before replay; `DM_VK_NOPREWARM` disables both synchronous and background preparation. An isolated offscreen process can instead prepare the driver cache and exit, freeing its live objects before the game starts. Unseen states still compile on demand. The cache is specific to compatible GPU/driver implementations.
+- **Check:** the Android recorded-state probe creates all 2,769 unique pipelines in 965.33 seconds. API validation exposes three unused-distance errors in two shaders; all 17 recorded states of those corrected shaders subsequently pass with zero API errors. The full offscreen process reports 7,595,460 KiB PSS, which is not a gameplay RAM result. A separate 128-state batch passes API validation and completes in 21.86 seconds. Warm gameplay benefit remains under measurement.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#android-full-game-bring-up-2026-11-10), Lenovo TB323FU / Adreno840.

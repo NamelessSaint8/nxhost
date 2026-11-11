@@ -120,6 +120,13 @@ namespace Ryujinx.Graphics.Shader.Instructions
 
         public static void AIsberd(EmitterContext context)
         {
+            // Geometry registers this opcode after the memory table. NVN2 uses
+            // the same opcode for real task/mesh stage-buffer reads.
+            if (context.TranslatorContext.GpuAccessor.QueryAmpereStageBuffers() != null)
+            {
+                AIsbe(context);
+                return;
+            }
             AmpereOp x = new(context.CurrOp);
 
             if (x.Rd < RegisterConsts.RegisterZeroIndex)
@@ -147,6 +154,14 @@ namespace Ryujinx.Graphics.Shader.Instructions
         public static void AAld(EmitterContext context)
         {
             AmpereOp x = new(context.CurrOp);
+
+            if (context.TranslatorContext.GpuAccessor.QueryAmpereStageBuffers() != null &&
+                !x.Bit(77) && !x.Bit(79) && x.Ra == RegisterConsts.RegisterZeroIndex && x.Bits(40, 50) == AttributeConsts.VertexId && x.Bits(74, 76) == 0)
+            {
+                // In the NVN2 task/mesh input region VERTEX_ID identifies the workgroup.
+                context.Copy(Register(x.Rd, RegisterType.Gpr), context.Load(StorageKind.Input, IoVariable.CtaId, null, Const(0)));
+                return;
+            }
 
             if (!x.Bit(77) && x.Ra != RegisterConsts.RegisterZeroIndex)
             {
@@ -461,11 +476,43 @@ namespace Ryujinx.Graphics.Shader.Instructions
         // ISBERD / ISBEWR (0x923 / 0x927): a task or mesh program's stage buffer. NVN2 draws some geometry with task and mesh programs: while
         // SET_MESH_CONTROL is on, the task program sits in the vertex slot and the mesh program in the tessellation slot (header type VS), and each
         // writes its vertices' outputs as linear bytes into that buffer (Eglantine's NX2_NOTES rows 89 and 97; Mario Kart World's 24 LOD libraries do).
-        // This host's NVN2 path has no task or mesh pipeline, so such a program cannot run at all: refusing it by name says why, where "instruction not
-        // implemented" read as a decoder gap and invited a store that would have drawn nothing.
+        // Workgroup-local input, attribute and primitive-map arrays retain this
+        // layout until the Metal object/mesh wrappers publish the stage outputs.
         public static void AIsbe(EmitterContext context)
         {
-            throw AFail(context, "task/mesh program (ISBERD/ISBEWR): no task or mesh pipeline in this host");
+            int[] layout = context.TranslatorContext.GpuAccessor.QueryAmpereStageBuffers();
+            if (layout == null) throw AFail(context, "task/mesh program (ISBERD/ISBEWR): no task or mesh pipeline in this host");
+            AmpereOp x = new(context.CurrOp);
+            bool write = x.Opcode == 0x927;
+            int region = x.Bits(76, 78);
+            bool word = x.Bit(75);
+            if (x.Bit(79) != write || (region != 0 && region != 3) || (!write && (region != 3 || !word)))
+                throw AFail(context, "NVN2 stage-buffer access mode");
+
+            Operand address = context.IAdd(GetSrcReg(context, x.Ra), Const(x.Bits(40, 64)));
+            Operand index = context.ShiftRightU32(address, Const(2));
+            if (!write)
+            {
+                Operand group = context.Load(StorageKind.Input, IoVariable.CtaId, null, Const(0));
+                Operand value = layout[0] == 6 ? group : context.ConditionalSelect(context.ICompareEqual(address, Const(0)), group,
+                    context.Load(StorageKind.SharedMemory, context.ResourceManager.AmpereInputMemoryId, index));
+                context.Copy(Register(x.Rd, RegisterType.Gpr), value);
+            }
+            else if (region == 3)
+            {
+                if (!word) throw AFail(context, "NVN2 byte attribute write");
+                context.Store(StorageKind.SharedMemory, context.ResourceManager.AmpereAttributeMemoryId, index, GetSrcReg(context, x.Rb));
+            }
+            else
+            {
+                if (layout[0] != 7 || (word && (x.Ra != RegisterConsts.RegisterZeroIndex || x.Bits(40, 64) != 3)))
+                    throw AFail(context, "NVN2 primitive map write");
+                // The map's reverse 32-bit count write at byte 3 is its first word.
+                // U8 indices each get a word, avoiding races between neighboring byte writes.
+                Operand value = GetSrcReg(context, x.Rb);
+                context.Store(StorageKind.SharedMemory, context.ResourceManager.AmpereMapMemoryId, word ? Const(0) : address,
+                    word ? value : context.BitwiseAnd(value, Const(255)));
+            }
         }
 
         // BAR.SYNC: the workgroup barrier

@@ -50,7 +50,8 @@ int main(void) {
     if (!npd) { printf("no physical device\n"); return 1; }
 
     // ---- identity and limits
-    VkPhysicalDeviceExternalMemoryHostPropertiesEXT hostp = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT};
+    VkPhysicalDeviceMeshShaderPropertiesEXT meshp = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT};
+    VkPhysicalDeviceExternalMemoryHostPropertiesEXT hostp = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT, &meshp};
     VkPhysicalDeviceDriverProperties drv = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES, &hostp};
     VkPhysicalDeviceVulkan11Properties p11 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES, &drv};
     VkPhysicalDeviceProperties2 props = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &p11};
@@ -64,6 +65,11 @@ int main(void) {
            L->maxComputeSharedMemorySize, L->maxComputeWorkGroupInvocations, (unsigned long long)L->minStorageBufferOffsetAlignment,
            (unsigned long long)L->minUniformBufferOffsetAlignment, L->maxPushConstantsSize, L->maxVertexInputBindings, L->maxColorAttachments);
 
+    printf("mesh: task invocations %u, shared %u, payload %u, payload+shared %u; mesh invocations %u, shared %u, payload+shared %u, output %u, payload+output %u, vertices %u, primitives %u\n",
+           meshp.maxTaskWorkGroupInvocations, meshp.maxTaskSharedMemorySize, meshp.maxTaskPayloadSize, meshp.maxTaskPayloadAndSharedMemorySize,
+           meshp.maxMeshWorkGroupInvocations, meshp.maxMeshSharedMemorySize, meshp.maxMeshPayloadAndSharedMemorySize, meshp.maxMeshOutputMemorySize,
+           meshp.maxMeshPayloadAndOutputMemorySize, meshp.maxMeshOutputVertices, meshp.maxMeshOutputPrimitives);
+    printf("subgroup stages %#x operations %#x\n",p11.subgroupSupportedStages,p11.subgroupSupportedOperations);
     // ---- features
     VkPhysicalDeviceVulkan13Features f13 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
     VkPhysicalDeviceVulkan12Features f12 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, P->apiVersion >= VK_API_VERSION_1_3 ? &f13 : NULL};
@@ -97,12 +103,13 @@ int main(void) {
     for (uint32_t i = 0; i < sparse_qn; i++) printf("queue %u: count %u flags %#x sparse-binding %s\n", i, sparse_queues[i].queueCount,
                                                  sparse_queues[i].queueFlags, YN(sparse_queues[i].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT));
     free(sparse_queues);
-    static const struct { VkFormat f; const char *name; int writable; } SPARSE_FMT[] = {
-        {VK_FORMAT_R8_UNORM, "R8", 1}, {VK_FORMAT_R16_UNORM, "R16", 1}, {VK_FORMAT_R16G16_UNORM, "RG16", 1},
+    static const struct { VkFormat f; const char *name; int writable, depth; } SPARSE_FMT[] = {
+        {VK_FORMAT_D16_UNORM, "D16", 1, 1}, {VK_FORMAT_D32_SFLOAT, "D32F", 1, 1},
+        {VK_FORMAT_R8_UNORM, "R8", 1, 0}, {VK_FORMAT_R16_UNORM, "R16", 1}, {VK_FORMAT_R16G16_UNORM, "RG16", 1},
         {VK_FORMAT_BC6H_UFLOAT_BLOCK, "BC6H", 0}, {VK_FORMAT_ASTC_4x4_UNORM_BLOCK, "ASTC4x4", 0}, {VK_FORMAT_ASTC_8x8_SRGB_BLOCK, "ASTC8x8s", 0}};
     for (unsigned i = 0; i < sizeof SPARSE_FMT / sizeof *SPARSE_FMT; i++) for (int writable = 0; writable <= SPARSE_FMT[i].writable; writable++) {
         VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        if (writable) usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+        if (writable) usage |= SPARSE_FMT[i].depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
         uint32_t count = 0; vkGetPhysicalDeviceSparseImageFormatProperties(pd, SPARSE_FMT[i].f, VK_IMAGE_TYPE_2D, VK_SAMPLE_COUNT_1_BIT, usage, VK_IMAGE_TILING_OPTIMAL, &count, NULL);
         VkSparseImageFormatProperties *sp = calloc(count, sizeof *sp);
         if (!sp && count) { printf("sparse-property allocation failed\n"); return 1; }

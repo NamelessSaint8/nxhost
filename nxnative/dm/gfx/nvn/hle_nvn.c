@@ -12,6 +12,7 @@
 #include "nvn_protos.h"
 #include "nvn_count.h"
 #include "nvn_tex.h"
+#include "nvn_hmap.h"
 #include "../tex/nvn_deswizzle.h"
 #include "nvn_mtl.h"
 #include "nvn_pace.h"
@@ -243,21 +244,24 @@ static uint8_t *vpool_reserve(pool_t *o); static void vpool_release(pool_t *o); 
 static void replay_lock(void); static void replay_unlock(void);   // the replay's state, from a game thread (see "Asynchronous replay")
 static void nvn_drain(void);
 __attribute__((weak)) void vk_pool_set_flags(const void *mem, int flags) { (void)mem; (void)flags; }
+__attribute__((weak)) void vk_pool_add_flags(const void *mem,uint64_t size,int flags){mtl_pool_add(mem,size);vk_pool_set_flags(mem,flags);}
 __attribute__((weak)) void dm_perf_replay_thread(void) {}   // Android (perf_android.c): the replay thread's CPU placement   // Android's Vulkan host (gfx_vk_core.c): copied pools by their flags
 NVN(nvnMemoryPoolInitialize, NVNboolean, NVNmemoryPool *p, const NVNmemoryPoolBuilder *b) {
     const pool_builder_t *s = (const pool_builder_t *)b; pool_t *o = (pool_t *)p;
     o->magic = MAGIC('P', 'O', 'O', 'L'); o->flags = s->flags; o->mem = s->mem; o->size = s->size; o->vp = NULL; o->vmode = 0; o->generation = (uint32_t)nvn_new_serial();
     if (!o->mem && (o->flags & 0x200)) { uint8_t *vr = vpool_reserve(o); if (vr) o->mem = vr; }   // a virtual pool's own address range until its first mapping decides (see MapVirtual)
-    else if (o->mem) { replay_lock(); mtl_pool_add(o->mem, o->size); vk_pool_set_flags(o->mem, o->flags); replay_unlock(); nvn_dirty_add_range(o->mem, o->size); }
+    else if (o->mem) { replay_lock(); vk_pool_add_flags(o->mem,o->size,o->flags);replay_unlock();nvn_dirty_add_range(o->mem,o->size); }
     if (!o->mem && !(o->flags & 0x200)) LOG("[RED] MemoryPoolInitialize: non-virtual pool has no storage flags=%#x size=%#llx", o->flags, o->size);
     if (getenv("DM_NVN_VLOG")) { LOG("[nvn] MemoryPool %p mem=%p size=%#llx flags=%#x", (void *)p, (void *)o->mem, (unsigned long long)o->size, o->flags); void dm_backtrace(uint64_t fp); dm_backtrace((uint64_t)__builtin_frame_address(0)); }
     OLOG("MemoryPool %p mem=%p size=%#llx flags=%#x", (void *)p, (void *)o->mem, o->size, o->flags);
     return 1;
 }
 static void fl_add(const uint8_t *a, uint64_t n); static void fl_drop(const uint8_t *a, uint64_t n);   // flushed ranges, see nvn_flushed
+static void sparse_forget_physical(const pool_t *pool);
 // Under asynchronous replay the submissions queued before it are replayed first: they may still read the pool (Unicorn Overlord's skipped scenes freed theirs
 // right after submitting, and the replay then found its index buffers outside every pool and the command memory overwritten: a black screen, the sound going on)
 NVN(nvnMemoryPoolFinalize, void, NVNmemoryPool *p) { nvn_drain();
+    sparse_forget_physical((const pool_t *)p);
     mtl_alias_drop_pool(p); ((pool_t *)p)->magic = 0;
     if (((pool_t *)p)->flags & 0x200 && ((pool_t *)p)->vp) vpool_release((pool_t *)p);
     if (((pool_t *)p)->mem && !(((pool_t *)p)->flags & 0x200)) {   // A virtual pool's storage is borrowed from a physical pool; do not unregister it
@@ -710,7 +714,7 @@ NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData 
     k->ok = 0;
     for (int i = 0; i < n; i++) {
         if (keys_hash(&sd[i], 1, k->key[i])) k->ok |= (uint8_t)(1u << i);
-        if (g_nvn_on_shader && (k->ok >> i & 1)) { uint32_t ncode; memcpy(&ncode, (const uint8_t *)sd[i].control + 0x704, 4); g_nvn_on_shader(k->key[i], sd[i].control, sd[i].data, ncode); }
+        if (g_nvn_on_shader && (k->ok >> i & 1)) { uint32_t ncode, nctl; nvn_ctl_lens(sd[i].control, &nctl, &ncode); g_nvn_on_shader(k->key[i], sd[i].control, sd[i].data, ncode); }
         // Diagnostic: trace the loader of selected shader keys (comma-separated hex).
         if (trace && (k->ok & (1u << i))) {
             char key[17]; for (int j = 0; j < 8; j++) snprintf(key + j * 2, 3, "%02x", k->key[i][j]);
@@ -720,7 +724,7 @@ NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData 
             }
         }
         // DM_NVN_SHDUMP (debugging): keep a copy of the control section so the replay layer can save shaders missing from the map (never freed)
-        if (dump && sd[i].control) { void *c = malloc(0x880); memcpy(c, sd[i].control, 0x880); o->sd[i].control = c; }
+        if (dump && sd[i].control) { size_t n = nvn2_ctl(sd[i].control) ? 0xd8 : 0x880; void *c = calloc(1, 0x880); memcpy(c, sd[i].control, n); o->sd[i].control = c; }
     }
     OLOG("ProgramSetShaders %p n=%d data0=%#llx", (void *)p, n, n ? (unsigned long long)sd[0].data : 0ull);
     mtl_prog_prefetch(o);   // its libraries load in the background now, not at its first draw
@@ -949,8 +953,9 @@ NVN(nvnCommandBufferEndRecording, NVNcommandHandle, NVNcommandBuffer *c) {
     return (NVNcommandHandle)o->begin;
 }
 NVN(nvnCommandBufferIsRecording, NVNboolean, const NVNcommandBuffer *c) { return ((const cmd_t *)c)->recording != 0; }
+static void cmd_copy_commands(NVNcommandBuffer *c, uint64_t handle);
 NVN(nvnCommandBufferCopyCommands, void, NVNcommandBuffer *c, int n, const NVNcommandHandle *h) {
-    for (int i = 0; i < n; i++) { uint8_t *p = cmd_alloc(CB(c), 16); put_hdr(p, OP_CALL, 16); memcpy(p + 8, &h[i], 8); }
+    for (int i = 0; i < n; i++) cmd_copy_commands(c, h[i]);
 }
 NVN(nvnCommandBufferSignalEvent, void, NVNcommandBuffer *c, const NVNevent *e, NVNeventSignalMode m, NVNeventSignalLocation loc, int flags, uint32_t v) {
     (void)loc; (void)flags;
@@ -1047,6 +1052,9 @@ NVN(nvnCommandBufferSetViewports, void, NVNcommandBuffer *c, int first, int n, c
 }
 NVN(nvnCommandBufferSetScissor, void, NVNcommandBuffer *c, int x, int y, int w, int h) { *REC(c, OP_SCISSOR, p_scissor) = (p_scissor){x, y, w, h}; }
 NVN(nvnCommandBufferSetDepthRange, void, NVNcommandBuffer *c, float n, float f) { *REC(c, OP_DEPTH_RANGE, p_depth_range) = (p_depth_range){n, f}; }
+NVN_NOPROTO(nvnCommandBufferDrawMeshTasks, void, NVNcommandBuffer *c, uint32_t first, uint32_t count) {
+    *REC(c, OP_DRAW_MESH, p_draw_mesh) = (p_draw_mesh){first,count};
+}
 NVN(nvnCommandBufferBindProgram, void, NVNcommandBuffer *c, const NVNprogram *p, int stages) {
     *REC(c, OP_BIND_PROGRAM, p_bind_program) = (p_bind_program){(const prog_t *)p, stages};
 }
@@ -1077,7 +1085,7 @@ NVN(nvnCommandBufferBindUniformBuffer, void, NVNcommandBuffer *c, NVNshaderStage
     // anything or been told the wrong address, and this is the only place that distinction is visible: the replay only stores what this records.
     { static int on = -1; if (on < 0) { const char *e = getenv("DM_NVN_UBO_LOG"); on = e ? atoi(e) : 0; }
       if (on) { static int nseen; if (nseen++ < (on > 1 ? on : 400)) LOG("ubo bind: st %d slot %d addr %#llx size %zu", st, i, (unsigned long long)a, n); } }
-    if ((unsigned)st < 6 && (unsigned)i < 16 && n <= UINT32_MAX) {
+    if ((unsigned)st < NVN_STAGES && (unsigned)i < 16 && n <= UINT32_MAX) {
         *REC(c, OP_BIND_UBO_SMALL, p_bind_ubo_small) = (p_bind_ubo_small){(uint16_t)st, (uint16_t)i, (uint32_t)n, a}; return;
     }
     *REC(c, OP_BIND_UBO, p_bind_buf) = (p_bind_buf){st, i, a, n};
@@ -1372,28 +1380,98 @@ static void replay_unlock(void) { if (nvn_async()) pthread_mutex_unlock(&g_sub_m
 // Under asynchronous replay the game may record into its command memory again before the replay thread reaches what it submitted (Unicorn Overlord's skipped
 // scenes: the replay read overwritten records, "unknown record op", and drew nothing while the sound went on). So each submitted handle is copied whole when it
 // is submitted: JUMPs followed, CALLs inlined, and the pointers a record keeps to its own texture snapshots (tex_snap) moved with it. out NULL: only the size
-static size_t rec_flat(const uint8_t *p, uint8_t *out, size_t at, size_t cap, int depth) {
+static void rec_relocate(uint8_t *d, const uint8_t *p, uint32_t size) {
+    for (uint32_t k = 8; k + 8 <= size; k += 8) { uint64_t v; memcpy(&v, d + k, 8);
+        if (v >= (uintptr_t)p && v < (uintptr_t)p + size) { v += (uintptr_t)d - (uintptr_t)p; memcpy(d + k, &v, 8); } }
+}
+// DM_NVN_REC_TRACE=1 records the ancestry of malformed submitted command lists.
+// It is only for diagnostic builds/runs: probing every link's mapping perturbs recording time.
+typedef struct {
+    const uint8_t *root, *call_at[9], *call_to[9], *jump_at[9], *jump_to[9];
+    const char *why, *pass;
+} rec_diag;
+static int rec_diag_on(void) {
+    static _Atomic int enabled = -1;
+    int on = atomic_load(&enabled);
+    if (on < 0) { on = getenv("DM_NVN_REC_TRACE") != NULL; atomic_store(&enabled, on); }
+    return on;
+}
+static int rec_target_mapped(const uint8_t *p) {
+    long page = sysconf(_SC_PAGESIZE); unsigned char vec;
+    uintptr_t addr = (uintptr_t)p;
+#if defined(DM_ANDROID)
+    addr &= UINT64_C(0x00ffffffffffffff);   // Android malloc may return a tagged pointer; mincore takes its untagged address.
+#endif
+    // The 64-bit host's command memory lives above 4 GiB. macOS mincore may
+    // report low reserved regions as mapped even though dereferencing faults.
+    if (addr < UINT64_C(0x100000000) || page <= 0) return 0;
+    return mincore((void *)(addr & ~((uintptr_t)page - 1)), (size_t)page, (void *)&vec) == 0;
+}
+static void rec_diag_bad(const rec_diag *d, const uint8_t *p, op_hdr h, int depth, const char *fault) {
+    static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER; static unsigned count;
+    int seg = -1, busy = 0; uintptr_t lo = 0, hi = 0;
+    pthread_mutex_lock(&g_hostseg_mu);
+    for (int i = 0; i < g_nhostseg; i++) if ((uintptr_t)p >= (uintptr_t)g_hostseg[i].mem &&
+            (uintptr_t)p < (uintptr_t)g_hostseg[i].mem + g_hostseg[i].n) {
+        seg = i; busy = g_hostseg[i].busy; lo = g_hostseg[i].org_lo; hi = g_hostseg[i].org_hi; break;
+    }
+    pthread_mutex_unlock(&g_hostseg_mu);
+    pthread_mutex_lock(&mu); unsigned n = ++count;
+    if (n <= 16 || n % 100 == 0) LOG("[nvn] record trace #%u %s %s pass=%s root=%p depth=%d at=%p op=%u size=%u call1=%p->%p call2=%p->%p call=%p->%p jump=%p->%p hostseg=%d busy=%d origin=%p..%p",
+        n, fault, d->why, d->pass, d->root, depth, p, h.op, h.size,
+        d->call_at[1], d->call_to[1], d->call_at[2], d->call_to[2], d->call_at[depth], d->call_to[depth],
+        d->jump_at[depth], d->jump_to[depth], seg, busy, (void *)lo, (void *)hi);
+    pthread_mutex_unlock(&mu);
+}
+static size_t rec_flat(const uint8_t *p, uint8_t *out, size_t at, size_t cap, int depth, rec_diag *d) {
     for (;;) {
         op_hdr hd; memcpy(&hd, p, sizeof hd);
+        if (d && (hd.op >= OP_COUNT_ || (hd.op == OP_END && hd.size != 8) ||
+                  (hd.op == OP_JUMP && hd.size != 16) || (hd.op == OP_CALL && hd.size != 16))) {
+            rec_diag_bad(d, p, hd, depth, "invalid header"); return at;
+        }
         if (hd.op == OP_END) return at;
-        if (hd.op == OP_JUMP) { memcpy(&p, p + 8, 8); continue; }
-        if (hd.op == OP_CALL && depth < 8) { uint64_t t; memcpy(&t, p + 8, 8); at = rec_flat((const uint8_t *)(uintptr_t)t, out, at, cap, depth + 1); p += hd.size; continue; }
-        if (hd.size < 8 || hd.size & 7) { LOG("[RED] submission copy: a record of size %u (op %u): copied up to it", hd.size, hd.op); return at; }
+        if (hd.op == OP_JUMP) {
+            const uint8_t *t; memcpy(&t, p + 8, 8);
+            if (d) { d->jump_at[depth] = p; d->jump_to[depth] = t;
+                if (!rec_target_mapped(t)) { rec_diag_bad(d, p, hd, depth, "unmapped jump target"); return at; } }
+            p = t; continue;
+        }
+        if (hd.op == OP_CALL && depth < 8) { const uint8_t *t; memcpy(&t, p + 8, 8);
+            if (d) { d->call_at[depth + 1] = p; d->call_to[depth + 1] = t; d->jump_at[depth + 1] = NULL; d->jump_to[depth + 1] = NULL;
+                if (!rec_target_mapped(t)) { rec_diag_bad(d, p, hd, depth + 1, "unmapped call target"); return at; } }
+            at = rec_flat(t, out, at, cap, depth + 1, d); p += hd.size; continue; }
+        if (hd.size < 8 || hd.size & 7) { LOG("[RED] submission copy: a record of size %u (op %u): copied up to it", hd.size, hd.op);
+            if (d) rec_diag_bad(d, p, hd, depth, "invalid record size"); return at; }
         if (out) {
             if (at + hd.size > cap) return at;   // (the game changed the records between the two walks)
             uint8_t *d = out + at; memcpy(d, p, hd.size);
-            for (uint32_t k = 8; k + 8 <= hd.size; k += 8) { uint64_t v; memcpy(&v, d + k, 8);
-                if (v >= (uintptr_t)p && v < (uintptr_t)p + hd.size) { v += (uintptr_t)d - (uintptr_t)p; memcpy(d + k, &v, 8); } }
+            rec_relocate(d, p, hd.size);
         }
         at += hd.size; p += hd.size;
     }
 }
 static uint64_t g_flat_bytes;
-static uint64_t rec_copy(uint64_t h) {
-    const uint8_t *p = (const uint8_t *)(uintptr_t)h; size_t n = rec_flat(p, NULL, 0, 0, 0) + 8;
+static uint64_t rec_snapshot(uint64_t h, size_t *bytes, const char *why) {
+    const uint8_t *p = (const uint8_t *)(uintptr_t)h;
+    rec_diag diag = {.root = p, .why = why, .pass = "size"};
+    rec_diag *d = rec_diag_on() ? &diag : NULL;
+    size_t n = rec_flat(p, NULL, 0, 0, 0, d) + 8;
     uint8_t *c = malloc(n); if (!c) die("submission copy: out of memory (%zu bytes)", n);
-    size_t at = rec_flat(p, c, 0, n - 8, 0); op_hdr e = {OP_END, 8}; memcpy(c + at, &e, 8);
-    g_flat_bytes += n; return (uint64_t)(uintptr_t)c;
+    if (d) { memset(diag.call_at, 0, sizeof diag.call_at); memset(diag.call_to, 0, sizeof diag.call_to);
+        memset(diag.jump_at, 0, sizeof diag.jump_at); memset(diag.jump_to, 0, sizeof diag.jump_to); diag.pass = "copy"; }
+    size_t at = rec_flat(p, c, 0, n - 8, 0, d); op_hdr e = {OP_END, 8}; memcpy(c + at, &e, 8);
+    if (bytes) *bytes = n; return (uint64_t)(uintptr_t)c;
+}
+static uint64_t rec_copy(uint64_t h) { size_t n; uint64_t copy=rec_snapshot(h,&n,"submit"); g_flat_bytes+=n; return copy; }
+static void cmd_copy_commands(NVNcommandBuffer *c, uint64_t handle) {
+    // Copy consumes its source now. A temporary protects it while command-memory
+    // callbacks extend the destination. Calls reached from the source are also
+    // copied now, so neither parent nor child source storage is needed later.
+    uint8_t *snapshot = (uint8_t *)(uintptr_t)rec_snapshot(handle, NULL, "copy-commands");
+    for (const uint8_t *p = snapshot;;) { op_hdr h; memcpy(&h,p,8); if (h.op == OP_END) break;
+        uint8_t *d = cmd_alloc(CB(c), h.size); memcpy(d,p,h.size); rec_relocate(d,p,h.size); p += h.size; }
+    free(snapshot);
 }
 NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h) {
     if (nvn_async()) { uint64_t *c = malloc(sizeof *c * (size_t)(n > 0 ? n : 1)); for (int i = 0; i < n; i++) c[i] = rec_copy(h[i]); ((queue_t *)q)->submits++;
@@ -2263,10 +2341,18 @@ _Static_assert(sizeof(map_req) == 0x28, "NVNmappingRequest");
 // mapping) and the later mappings were refused (`[RED] MapVirtual: non-contiguous mapping`). A pool larger than the application pool is sparse from the start
 enum { NVRUN = 1024, VPT_LEAF = 512 };   // a page-table leaf covers 2 MB
 typedef struct { const uint8_t *phys; uint64_t gen; uint32_t physical_generation; } vpte;
-struct vpool { const pool_t *pool; uint8_t *base; uint64_t len, size, top; int nrun; struct { uint64_t lo, hi; } run[NVRUN]; vpte **pt; };   // len: reserved; size: the pool's; top: highest mapped end so far (logged per 128 MB)
+struct vpool { const pool_t *pool; uint8_t *base; uint64_t len, size, top; int nrun; struct { uint64_t lo, hi; } run[NVRUN]; vpte **pt;
+    struct { const pool_t *pool; uint32_t generation; } *physical; unsigned nphysical, cphysical;
+};   // len: reserved; size: the pool's; top: highest mapped end so far (logged per 128 MB)
 static struct vpool **g_vp; static int g_nvp, g_cvp;   // the pools with a range of their own, under g_vp_mu
 static pthread_mutex_t g_vp_mu = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic uint64_t g_vp_gen;   // bumped per mapping request
+static void sparse_forget_physical(const pool_t *pool) {
+    pthread_mutex_lock(&g_vp_mu);
+    for(int i=0;i<g_nvp;i++)for(unsigned j=0;j<g_vp[i]->nphysical;j++)
+        if(g_vp[i]->physical[j].pool==pool)g_vp[i]->physical[j].pool=NULL;
+    pthread_mutex_unlock(&g_vp_mu);
+}
 static struct vpool *vpool_of(const pool_t *o) { return o->vp; }
 static uint8_t *vpool_reserve(pool_t *o) {   // → the reserved range, or NULL
     if (!(o->flags & 0x200)) return NULL;
@@ -2295,7 +2381,7 @@ static void vpool_drop(pool_t *o) {   // caller holds g_vp_mu
     munmap(v->base, v->len);
     for (uint64_t l = 0; l < (v->size + (2u << 20) - 1) >> 21; l++) free(v->pt[l]);
     for (int i = 0; i < g_nvp; i++) if (g_vp[i] == v) { g_vp[i] = g_vp[--g_nvp]; break; }
-    free(v->pt); free(v); o->vp = NULL;
+    free(v->physical); free(v->pt); free(v); o->vp = NULL;
 }
 static void vpool_release(pool_t *o) { replay_lock(); pthread_mutex_lock(&g_vp_mu); vpool_drop(o); pthread_mutex_unlock(&g_vp_mu); replay_unlock(); }   // the replay lock first: the replay thread takes g_vp_mu under it
 // Mapped runs of a sparse pool: [lo, hi) sorted, disjoint, adjacent runs merged. Caller holds g_vp_mu
@@ -2331,7 +2417,23 @@ static int vpool_map(struct vpool *v, const map_req *r) {   // caller holds g_vp
     if (((uint64_t)r->voff | r->size | (uint64_t)r->poff) & 0xFFF) { LOG("[RED] virtual pool %p: request %#llx+%#llx (physical offset %#llx) is not 4 KB aligned", (const void *)v->pool, (unsigned long long)r->voff, (unsigned long long)r->size, (unsigned long long)r->poff); return 0; }
     const pool_t *ph = (const pool_t *)r->phys;
     if (ph && (!ph->mem || r->poff < 0 || (uint64_t)r->poff + r->size > ph->size)) { LOG("[RED] virtual pool %p: physical pool %p (%#llx bytes, storage %p) cannot supply %#llx+%#llx", (const void *)v->pool, (const void *)ph, (unsigned long long)ph->size, (void *)ph->mem, (unsigned long long)r->poff, (unsigned long long)r->size); return 0; }
+    if (ph) {
+        unsigned slot=0;while(slot<v->nphysical && v->physical[slot].pool && v->physical[slot].pool!=ph)slot++;
+        if(slot==v->nphysical){
+            if(v->nphysical==v->cphysical){unsigned cap=v->cphysical?v->cphysical*2:8;void *p=realloc(v->physical,cap*sizeof*v->physical);if(!p)die("sparse physical-pool registry allocation failed");v->physical=p;v->cphysical=cap;}
+            v->nphysical++;
+        }
+        v->physical[slot].pool=ph;v->physical[slot].generation=ph->generation;
+    }
     vpt_set(v, (uint64_t)r->voff, r->size, ph ? ph->mem + r->poff : NULL, ph ? ph->generation : 0);
+#if TARGET_OS_ANDROID
+    // The optional Vulkan atlas representation resolves GPU resource addresses
+    // through this table. Linux's anonymous CPU vm_remap cannot alias them;
+    // materializing a CPU copy would lose physical alias/remap semantics.
+    // Other sparse resource uses are rejected by the Vulkan backend in this mode.
+    const char *atlas = getenv("DM_VK_ATLAS");
+    if (atlas && atoi(atlas)) return 1;
+#endif
     vm_address_t to = (vm_address_t)(v->base + r->voff);
     // Not aliased (see above): only textures read through the page table see it; the GPU cannot address it directly
     if ((uint64_t)r->voff + r->size > v->len || ((uintptr_t)to | r->size | (uint64_t)r->voff) & (pg - 1) || (ph && (((uintptr_t)ph->mem + (uintptr_t)r->poff) & (pg - 1)))) {
@@ -2740,7 +2842,9 @@ NVN_NOPROTO(nvnProgramSetSampleShading, NVNboolean, NVNprogram *p, int mode) { (
 // Singular / combined forms → plural / separate forms; state the replay layer does not have yet (conditional render, depth bounds, ...) is logged once and drawing continues (better to over-draw than to drop).
 #include "../tex/nvn_deswizzle.h"
 
-NVN(nvnCommandBufferCallCommands, void, NVNcommandBuffer *c, int n, const NVNcommandHandle *h) { h_nvnCommandBufferCopyCommands(c, n, h); }   // the replay layer treats CALL and COPY alike
+NVN(nvnCommandBufferCallCommands, void, NVNcommandBuffer *c, int n, const NVNcommandHandle *h) {
+    for (int i = 0; i < n; i++) { uint64_t handle=h[i]; uint8_t *p=cmd_alloc(CB(c),16); put_hdr(p,OP_CALL,16); memcpy(p+8,&handle,8); }
+}
 // Combined texture handle (texture id | sampler id << 20) is recorded into the texture slot as is: the replay layer takes the texture from the low 20 bits and the sampler from the high bits (nvn_mtl.m NVN_RB_SAMPT)
 // One combined handle: recorded as the hardware lays the command out, the handle 16 bytes in, where Luigi's Mansion 3 patches it after recording (nvn_obj.h p_bind_tex1)
 NVN(nvnCommandBufferBindTexture, void, NVNcommandBuffer *c, NVNshaderStage st, int i, NVNtextureHandle h) {
@@ -2808,6 +2912,47 @@ static struct vpool *vpool_at(const void *pool, uint64_t a) {   // caller holds 
     return v && a >= (uint64_t)(uintptr_t)v->base && a < (uint64_t)(uintptr_t)v->base + v->size ? v : NULL;
 }
 int nvn_sparse_pool(const void *pool) { return pool && ((const pool_t *)pool)->vp; }   // no lock: set at Initialize, cleared at the first mapping (an aliased pool) or Finalize; called per texture lookup
+// A fully mapped interval can be an ordinary physical resource even when the
+// containing virtual pool has other holes or mappings. Resolve every page and
+// its physical-pool lifetime before lending the physical identity to a backend.
+int nvn_sparse_contiguous(const void *pool,uint64_t address,uint64_t bytes,const pool_t **physical,uint64_t *offset) {
+    int ok=0;pthread_mutex_lock(&g_vp_mu);struct vpool *v=vpool_at(pool,address);
+    uint64_t start=v?address-(uint64_t)(uintptr_t)v->base:0;
+    const vpte *first=v && bytes && bytes<=v->size-start?vpt_get(v,start):NULL;
+    const pool_t *p=NULL;const uint8_t *data=first && first->phys?first->phys+(start&4095):NULL;
+    if(data)for(unsigned i=0;i<v->nphysical;i++)if(v->physical[i].pool && v->physical[i].generation==first->physical_generation){p=v->physical[i].pool;break;}
+    if(p && p->magic==MAGIC('P','O','O','L') && p->generation==first->physical_generation && (uintptr_t)data>=(uintptr_t)p->mem && (uint64_t)((uintptr_t)data-(uintptr_t)p->mem)<=p->size && bytes<=p->size-(uint64_t)((uintptr_t)data-(uintptr_t)p->mem)) {
+        ok=1;
+        for(uint64_t n=0;n<bytes;){uint64_t at=start+n,step=4096-(at&4095);if(step>bytes-n)step=bytes-n;const vpte *e=vpt_get(v,at);
+            if(!e || !e->phys || e->physical_generation!=first->physical_generation || e->phys+(at&4095)!=data+n){
+                if(getenv("DM_NVN_SPARSE_TRACE"))LOG("[nvn] physical interval splits at +%#llx of %#llx: first %p gen %u, page %p gen %u, physical pool size %#llx",(unsigned long long)n,(unsigned long long)bytes,(void *)data,first->physical_generation,e?(void *)e->phys:NULL,e?e->physical_generation:0,(unsigned long long)p->size);
+                ok=0;break;}n+=step;}
+        if(ok){*physical=p;*offset=(uint64_t)((uintptr_t)data-(uintptr_t)p->mem);}
+    }
+    if(!ok && getenv("DM_NVN_SPARSE_TRACE"))LOG("[nvn] physical interval not a single pool span: bytes=%#llx first=%p generation=%u pool=%p pool_bytes=%#llx pool_flags=%#x",(unsigned long long)bytes,(void *)data,first?first->physical_generation:0,(void *)p,p?(unsigned long long)p->size:0,p?p->flags:0);
+    pthread_mutex_unlock(&g_vp_mu);return ok;
+}
+int nvn_sparse_cpu_readable(const void *pool,uint64_t address,uint64_t bytes) {
+    int ok=1;pthread_mutex_lock(&g_vp_mu);struct vpool *v=vpool_at(pool,address);uint64_t start=v?address-(uint64_t)(uintptr_t)v->base:0;
+    if(!v || bytes>v->size-start)ok=0;
+    uint32_t generation=0;int readable=0;
+    for(uint64_t n=0;ok && n<bytes;){uint64_t at=start+n,step=4096-(at&4095);if(step>bytes-n)step=bytes-n;const vpte *e=vpt_get(v,at);
+        // An absent leaf contains no physical references. Skip its whole
+        // remaining 2 MiB, as the content-version walker already does.
+        if(!e){step=(2u<<20)-(at&((2u<<20)-1));if(step>bytes-n)step=bytes-n;n+=step;continue;}
+        if(e && e->phys){
+            if(e->physical_generation!=generation){generation=e->physical_generation;readable=0;
+                for(unsigned i=0;i<v->nphysical;i++)if(v->physical[i].pool && v->physical[i].generation==generation){const pool_t *p=v->physical[i].pool;readable=p->magic==MAGIC('P','O','O','L') && p->generation==generation && !(p->flags&NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS);break;}}
+            if(!readable)ok=0;
+        }n+=step;
+    }
+    pthread_mutex_unlock(&g_vp_mu);return ok;
+}
+int nvn_sparse_owns_address(uint64_t address) {
+    int found=0;pthread_mutex_lock(&g_vp_mu);
+    for(int i=0;i<g_nvp && !found;i++){const struct vpool *v=g_vp[i];found=address>=(uint64_t)(uintptr_t)v->base && address-(uint64_t)(uintptr_t)v->base<v->size;}
+    pthread_mutex_unlock(&g_vp_mu);return found;
+}
 uint64_t nvn_sparse_gen(void) { return atomic_load(&g_vp_gen); }
 uint64_t nvn_sparse_copy(const void *pool, void *dst, uint64_t a, uint64_t n) {
     pthread_mutex_lock(&g_vp_mu); struct vpool *v = vpool_at(pool, a); uint64_t miss = 0;
@@ -2971,6 +3116,10 @@ static int write_region_bl(const tex_t *t, unsigned level, unsigned layer, const
     static int timing=-1;if(timing<0){const char *e=getenv("DM_NVN_SPARSE_COPY_TIMING");timing=e && atoi(e);}
     uint64_t started=timing&&sparse?now_ns():0,prepares=0;
     uintptr_t prepared[64]={0}, page_size=(uintptr_t)getpagesize();
+    // Wide block-linear rows revisit more than 64 physical pages. The hot
+    // cache alone collided on every row, repeating a full dirty-range scan
+    // millions of times. Keep every page prepared by this copy as well.
+    nvn_hmap prepared_pages={.klen=sizeof(uintptr_t)};
     static const uint16_t x1[4]={0,32,256,288},x2[4]={0,64,256,320};
     const uint16_t *xoff=nvn_gob_switch2?x2:x1;uint64_t block=512ull<<th<<td;
     for (size_t y = 0; y < hb; y++) {
@@ -2981,12 +3130,16 @@ static int write_region_bl(const tex_t *t, unsigned level, unsigned layer, const
             uint64_t off=row_off+(uint64_t)(bx>>6)*block+xoff[(bx>>4)&3]+(bx&15);
             if(vp){uint64_t at=(uint64_t)(uintptr_t)t->mem-(uint64_t)(uintptr_t)vp->base+off;const vpte *p=at<vp->size?vpt_get(vp,at):NULL;
                 if(p&&p->phys){uint8_t *dst=(uint8_t *)p->phys+(at&0xfff);uintptr_t page=(uintptr_t)dst&~(page_size-1),slot=(page/page_size)%64;
-                    if(prepared[slot]!=page){dm_guest_write_prepare(dst,n);prepared[slot]=page;if(timing)prepares++;}
+                    if(prepared[slot]!=page){
+                        if(!nvn_hm_get(&prepared_pages,&page)){dm_guest_write_prepare((void *)page,page_size);nvn_hm_put(&prepared_pages,&page,(void *)1);if(timing)prepares++;}
+                        prepared[slot]=page;
+                    }
                     if(n==16)memcpy(dst,src+y*row+x,16);else memcpy(dst,src+y*row+x,n);}}
             else {if(n==16)memcpy(t->mem+off,src+y*row+x,16);else memcpy(t->mem+off,src+y*row+x,n);}
             x += n;
         }
     }
+    free(prepared_pages.keys);free(prepared_pages.vals);
     if(sparse)pthread_mutex_unlock(&g_vp_mu);
     if(started && now_ns()-started>=3000000ull)LOG("[nvn] sparse storage write ser=%llu: %.1f MB, %llu page preparations, %.2f ms",(unsigned long long)t->serial,wb*hb/1048576.0,(unsigned long long)prepares,(now_ns()-started)/1e6);
     return 0;

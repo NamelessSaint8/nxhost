@@ -79,4 +79,23 @@ static void reused_physical_address(void){
     MTLTextureDescriptor *descriptor=tex_desc(&next,0);id<MTLTexture> probe=sparse_upload(&next,descriptor,NULL,fresh,1);CHECK(probe!=nil && descriptor.placementSparsePageSize==0,"sparse creation leaves the dense fallback descriptor unchanged");defer_obj_release(probe);
     mtl_tex_release(&next);h_nvnMemoryPoolFinalize((NVNmemoryPool *)&virt);h_nvnMemoryPoolFinalize((NVNmemoryPool *)&physical);finish();finish();munmap(mem,size);
 }
-int main(void){@autoreleasepool{nvn_gob_switch2=1;mtl_init();mtl_sub_begin();run(NVN_FORMAT_R8);run(NVN_FORMAT_R16);run(NVN_FORMAT_RG16);reused_physical_address();mtl_sub_commit();mtl_drain();printf("sparse writable images: %d checks, %d failed\n",checks,failed);return failed!=0;}}
+static void sampled_target(void){
+    size_t size=2*65536;uint8_t *mem=mmap(NULL,size,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON,-1,0);
+    for(size_t i=0;i<size;i+=4){mem[i]=i<65536?64:128;mem[i+3]=255;}
+    pool_t physical,virt;pool_builder_t pb={.mem=mem,.size=size,.flags=0x21};CHECK(h_nvnMemoryPoolInitialize((NVNmemoryPool*)&physical,(NVNmemoryPoolBuilder*)&pb),"sampled target physical pool initializes");virtual_pool(&virt);map(&virt,&physical,0,0,65536);
+    tex_t t=image(&virt,99700,NVN_FORMAT_RGBA8);t.d.flags=NVN_TEXTURE_FLAGS_SPARSE;nvn_tex_layout(&t.d,&t.L);
+    id<MTLTexture> first=tex_mtl(&t);CHECK(first.isSparse && (first.usage&MTLTextureUsageRenderTarget),"GPU-only sampled storage is writable sparse from first use");
+    CHECK(mtl_tex_gpu_owned(t.serial),"a packaged sparse GPU target has GPU ownership");
+    uint32_t tw,th,td;nvn_tex_sparse_tiles(&t.d,&tw,&th,&td);const uint32_t q[][3]={{0,0,0},{tw,0,0}};pixels(first,q,(float[]){64/255.f,0},2);
+    clear_image(first,.75,0);pixels(first,q,(float[]){.75,0},2);
+    uint8_t out[4]={0};NVNcopyRegion r={0,0,0,1,1,1};mtl_read_texels(&t,0,0,&r,out,4,4);CHECK(out[0]==191,"ReadTexels returns GPU content rather than the original CPU mirror");
+    mtl_reg_tex(777,&t,NULL);tex_by_id(777);map(&virt,&physical,65536,65536,65536);id<MTLTexture> current=(__bridge id)tex_fast(777);
+    CHECK(current.isSparse && current!=first,"cached packaged descriptor refreshes sparse mappings");pixels(current,q,(float[]){.75,128/255.f},2);
+    tex_t alias=t;alias.serial++;mtl_tex_init(&alias);id<MTLTexture> other=tex_mtl(&alias);pixels(other,q,(float[]){.75,128/255.f},2);
+    clear_image(other,.25,0);pixels(tex_mtl(&t),q,(float[]){.25,.25},2);
+    map(&virt,&physical,0,2*65536,4096);id<MTLTexture> dense=tex_mtl(&t);
+    CHECK(!dense.isSparse && mtl_tex_gpu_owned(t.serial),"a partial-tile fallback retains packaged GPU ownership");
+    pixels(dense,q,(float[]){.25,.25},2);CHECK(tex_mtl(&t)==dense,"resolving the dense fallback does not restore stale CPU bytes");
+    mtl_tex_release(&alias);mtl_tex_release(&t);h_nvnMemoryPoolFinalize((NVNmemoryPool*)&virt);h_nvnMemoryPoolFinalize((NVNmemoryPool*)&physical);finish();finish();munmap(mem,size);
+}
+int main(void){@autoreleasepool{setenv("DM_NVN_SPARSE_GPU_SAMPLED","1",1);nvn_gob_switch2=1;mtl_init();mtl_sub_begin();run(NVN_FORMAT_R8);run(NVN_FORMAT_R16);run(NVN_FORMAT_RG16);reused_physical_address();sampled_target();mtl_sub_commit();mtl_drain();printf("sparse writable images: %d checks, %d failed\n",checks,failed);return failed!=0;}}

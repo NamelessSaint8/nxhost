@@ -103,6 +103,54 @@ static void finalized_upload(int write_after_record) {
     CHECK(!tex_cpu_written(serial), "pool finalization drops retired CPU classification");
     defer_drain(); munmap(mem,len);
 }
+static void late_uncompressed_fill(void) {
+    if (!DM_GAME_TEX_FLUSH_UPLOAD || !DM_GAME_TEX_DIRTY_UPLOAD) return;
+    const size_t len = 262144;
+    uint8_t *mem = mmap(NULL,len,PROT_READ|PROT_WRITE,MAP_ANON|MAP_PRIVATE,-1,0);
+    if(mem==MAP_FAILED)abort();
+    pool_t pool={0};pool_builder_t pb={.mem=mem,.size=len,.flags=NVN_MEMORY_POOL_FLAGS_CPU_CACHED|NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
+    CHECK(h_nvnMemoryPoolInitialize((NVNmemoryPool*)&pool,(const NVNmemoryPoolBuilder*)&pb),"late-fill pool initialized");
+    NVNtextureBuilder tb;NVNtexture tex={0};h_nvnTextureBuilderSetDefaults(&tb);
+    h_nvnTextureBuilderSetWidth(&tb,4);h_nvnTextureBuilderSetHeight(&tb,4);h_nvnTextureBuilderSetFormat(&tb,NVN_FORMAT_R16);
+    h_nvnTextureBuilderSetFlags(&tb,NVN_TEXTURE_FLAGS_MINIMAL_LAYOUT);h_nvnTextureBuilderSetStorage(&tb,(NVNmemoryPool*)&pool,16384);
+    CHECK(h_nvnTextureInitialize(&tex,&tb),"uncompressed streamed texture initialized");
+    tex_t t=*(tex_t*)&tex;mtl_sub_begin();id<MTLTexture> initial=tex_mtl(&t);
+    CHECK(mtl_wait(mtl_sub_commit(),5000000000ull),"empty first resolution completed");
+    CHECK(initial && (initial.usage&MTLTextureUsageRenderTarget) && !mtl_tex_gpu_owned(t.serial),"render capability alone does not claim GPU ownership");
+    dm_guest_write_prepare(t.mem,t.L.size);memset(t.mem,0x44,t.L.size);nvn_ft_poll();
+    CHECK(tex_cpu_written(t.serial),"CPU fill after first resolution is discovered");
+    NVNcopyRegion region={0,0,0,4,4,1};p_copy_b2t read={.tex=&t,.src=(uint64_t)mem+131072,.r=region};
+    mtl_sub_begin();copy_t2b(&read);CHECK(mtl_wait(mtl_sub_commit(),5000000000ull),"late fill readback completed");
+    int correct=1;for(int i=0;i<32;i++)correct&=mem[131072+i]==0x44;
+    CHECK(correct,"late uncompressed height data reaches every GPU texel");
+    h_nvnTextureFinalize(&tex);
+
+    // Filling before initialization cannot produce a write-since-registration
+    // stamp. The CPU-stream profile still publishes that initial content.
+    dm_guest_write_prepare(mem+49152,4096);memset(mem+49152,0x55,4096);
+    h_nvnTextureBuilderSetStorage(&tb,(NVNmemoryPool*)&pool,49152);CHECK(h_nvnTextureInitialize(&tex,&tb),"pre-filled uncompressed texture initialized");
+    t=*(tex_t*)&tex;read.tex=&t;mtl_sub_begin();copy_t2b(&read);CHECK(mtl_wait(mtl_sub_commit(),5000000000ull),"pre-initialization fill readback completed");
+    correct=1;for(int i=0;i<32;i++)correct&=mem[131072+i]==0x55;
+    CHECK(correct,"uncompressed content filled before initialization reaches the GPU");
+    h_nvnTextureFinalize(&tex);
+
+    h_nvnTextureBuilderSetStorage(&tb,(NVNmemoryPool*)&pool,32768);CHECK(h_nvnTextureInitialize(&tex,&tb),"GPU target initialized");
+    t=*(tex_t*)&tex;mtl_sub_begin();id<MTLTexture> target=tex_mtl(&t);
+    MTL4RenderPassDescriptor *rp=[MTL4RenderPassDescriptor new];rp.colorAttachments[0].texture=target;
+    rp.colorAttachments[0].loadAction=MTLLoadActionClear;rp.colorAttachments[0].storeAction=MTLStoreActionStore;rp.colorAttachments[0].clearColor=MTLClearColorMake(.25,0,0,1);
+    enc_r_end(enc_r_begin(rp));CHECK(mtl_wait(mtl_sub_commit(),5000000000ull),"GPU clear completed");
+    CHECK(mtl_tex_gpu_owned(t.serial),"actual render destination owns its GPU data");
+    mtl_sub_begin();target=tex_upgrade_pfv(&t,target,MTLPixelFormatR16Unorm);
+    CHECK(mtl_wait(mtl_sub_commit(),5000000000ull),"owned texture upgrade completed");
+    CHECK(mtl_tex_gpu_owned(t.serial),"format-view upgrade preserves GPU ownership");
+    id<MTLTexture> view=[target newTextureViewWithPixelFormat:target.pixelFormat];
+    CHECK(view && tex_gpu_wrote(view),"a view observes its allocation's ownership");
+    dm_guest_write_prepare(t.mem,t.L.size);memset(t.mem,0xcc,t.L.size);nvn_ft_poll();
+    CHECK(!tex_cpu_written(t.serial),"CPU writes cannot replace an actual GPU target");
+    read.tex=&t;mtl_sub_begin();copy_t2b(&read);CHECK(mtl_wait(mtl_sub_commit(),5000000000ull),"GPU target readback completed");
+    uint16_t pixel;memcpy(&pixel,mem+131072,2);CHECK(pixel>=16383 && pixel<=16384,"GPU target retains its rendered value after CPU writes");
+    h_nvnTextureFinalize(&tex);h_nvnMemoryPoolFinalize((NVNmemoryPool*)&pool);defer_drain();munmap(mem,len);
+}
 int main(int argc, const char **argv) { @autoreleasepool {
     enum { N = 6442, BASE = 1000 };
     static tex_t t[N];
@@ -128,6 +176,6 @@ int main(int argc, const char **argv) { @autoreleasepool {
     CHECK(mtl_cpu_tex_count() == N - 2, "a texture with no serial is not recorded");
     for (int i=0;i<N;i++) mtl_tex_release(&t[i]);
     retired_classification(); descriptor_replacement();
-    if (argc > 1 && !strcmp(argv[1], "--metal")) { mtl_init(); finalized_upload(0); finalized_upload(1); }
+    if (argc > 1 && !strcmp(argv[1], "--metal")) { mtl_init(); finalized_upload(0); finalized_upload(1); late_uncompressed_fill(); }
     printf("t_cpu_tex: %d checks, %d failed\n", checks, failed); return failed != 0;
 } }

@@ -14,8 +14,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent.parent / 'gfx/tools'
 sys.path.insert(0, str(TOOLS))
-import dmsh_facts, dmsh_chain, dmsh_ampere   # noqa: E402  (DM_GAME picks the profile; dmsh_ampere reads an NVN2 control section's lengths)
+import dmsh_chain, dmsh_ampere   # noqa: E402  (DM_GAME picks the profile; dmsh_ampere reads an NVN2 control section's lengths)
 import dmsv_pad   # noqa: E402  (the SPIR-V side of dmsh_build.py vs_pad: outputs a pixel stage reads that its vertex stage does not write)
+import dmsh_nvn2_mesh, nvn2_mesh   # noqa: E402
+import atlas_glsl   # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument('pkg'); ap.add_argument('out')
@@ -24,13 +26,8 @@ ap.add_argument('--keys', default='')
 ap.add_argument('--dotnet', default=os.environ.get('DOTNET', 'dotnet'))
 ap.add_argument('--capture', help='a folder of shaders captured at run time on the device (<key>.bin)')
 ap.add_argument('--xlate', help="the translator (dmsh_xlate.dll) to run (default: the iOS chain's dm/gfx/tools/dmsh_xlate_bin; the porter builds one from the in-repo source)")
-a = ap.parse_args()
-
-GAME = dmsh_chain.load_game()
-FACTS = dmsh_facts.load()
-MAP = str(GAME.table('shader_map.tsv'))
-XLATE_DLL = a.xlate or str(TOOLS / 'dmsh_xlate_bin/dmsh_xlate.dll')
-STAGES = {'vs': 0, 'ps': 1, 'gs': 2, 'hs': 3, 'ds': 4, 'cs': 5}   # NVN stage numbers
+ap.add_argument('--virtual-atlas', action='store_true', help='opt-in checked 2D-array atlas sampling, including fragment implicit LOD and queries; unsupported accesses fail')
+STAGES = {'vs': 0, 'ps': 1, 'gs': 2, 'hs': 3, 'ds': 4, 'cs': 5, 'ts': 6, 'ms': 7}   # NVN stage numbers
 # Storage buffers are bound from a 256-byte boundary below their address (gfx_vk_exec.c SB_ALIGN, the same number): Vulkan's largest minStorageBufferOffsetAlignment, so a multiple of
 # every device's; the translator offsets every storage access by the address's distance from that boundary (Program.cs QueryHostStorageBufferOffsetAlignment)
 SB_ALIGN = 256
@@ -45,12 +42,17 @@ def captured(d):
     out = {}
     for nm in sorted(os.listdir(d)) if d and os.path.isdir(d) else []:
         if not re.fullmatch(r'[0-9a-f]{16}\.bin', nm): continue
-        b = open(os.path.join(d, nm), 'rb').read()
+        b = Path(d, nm).read_bytes()
         if len(b) < 12 or b[:4] != b'DMSC': print(f'[RED] capture {nm}: not a captured shader', flush=True); continue
         nctl, ncode = struct.unpack_from('<2I', b, 4); ctl, code = b[12:12 + nctl], b[12 + nctl:12 + nctl + ncode]
         if len(code) != ncode or len(ctl) != nctl or ctl[:4] != bytes.fromhex('34127698'): print(f'[RED] capture {nm}: truncated', flush=True); continue
-        if hashlib.sha256(ctl + code).hexdigest()[:16] != nm[:16]: print(f'[RED] capture {nm}: its content does not hash to its name', flush=True); continue
+        key_control = bytearray(ctl[:0x48] if dmsh_ampere.is_nvn2(ctl) else ctl)
+        if dmsh_ampere.is_nvn2(ctl): key_control[0x30:0x34] = bytes(4)
+        if hashlib.sha256(key_control + code).hexdigest()[:16] != nm[:16]: print(f'[RED] capture {nm}: its content does not hash to its name', flush=True); continue
         st = 'cs' if code[:4] == bytes.fromhex('79563412') else SPH_STAGE.get(struct.unpack_from('<I', code, 0x30)[0] >> 10 & 0xf) if code[:4] == bytes.fromhex('78563412') and len(code) > 0x80 else None
+        if dmsh_ampere.is_nvn2(ctl):
+            native = dmsh_nvn2_mesh.metadata(ctl, code)
+            st = 'cs' if native or len(ctl) > 0x56 and ctl[0x56] == 5 else SPH_STAGE.get(struct.unpack_from('<I', code)[0] >> 10 & 0xf) if len(code) >= 4 else None
         if not st: print(f'[RED] capture {nm}: no stage in its code area header', flush=True); continue
         rec = bytearray(b'BTCDBTCD' + bytes(0x30)); struct.pack_into('<2I', rec, 0x28, len(ctl), len(code)); rec += code + ctl
         if rec.find(bytes.fromhex('34127698')) != 0x38 + len(code): print(f'[RED] capture {nm}: the control magic appears in its code area', flush=True); continue   # job_for splits there
@@ -101,9 +103,13 @@ def job_for(key, stage, rec, w):   # dmsh_build.py job_for; transform feedback i
         # arch sm86; the c1 segment is control +0x40..+0x44 and compute lays its driver constants out per shader (the fields dmsh_build.py job_for reads).
         # NVN's transform feedback and vertex pairs are not in an NVN2 control section
         c1 = dmsh_ampere.c1_segment(rec[ci:], code)
+        mesh = dmsh_nvn2_mesh.metadata(rec[ci:], code)
         code = code[:dmsh_ampere.inst_len(rec[ci:])]
         extra['arch'] = 'sm86'
-        if stage == 'cs':
+        if mesh:
+            stage = 'cs'   # translate the stage-buffer body as workgroup IR, then wrap as native EXT task/mesh
+            extra.update(nvn2_mesh=mesh, nvn2_stage=[mesh['kind'], mesh['input_words'], mesh['attr_words'], mesh['map_words']], local=[mesh['threads'], 1, 1], shared=mesh['shared'])
+        elif stage == 'cs':
             extra['nvn2_cs'] = [rec[ci + 0xb1], rec[ci + 0xb2], rec[ci + 0xb3], struct.unpack_from('<H', rec, ci + 0xba)[0], rec[ci + 0xa9] * 4]
         xfb = None
     else:
@@ -114,7 +120,7 @@ def job_for(key, stage, rec, w):   # dmsh_build.py job_for; transform feedback i
         if stage != 'cs': code = code[0x30:]
         elif code[:4] == bytes.fromhex('79563412'): code = code[0x100:]
         xfb = xfb_layout(key, rec[ci:]) if stage == 'vs' else None
-    cp = os.path.join(w, key + '.bin'); open(cp, 'wb').write(code)
+    cp = os.path.join(w, key + '.bin'); Path(cp).write_bytes(code)
     j = {'key': key, 'stage': stage, 'code': cp, 'tex': {}, 'img': {}, 'attr': {}, 'fout': {}, 'c1': c1.hex(), 'debug': False, 'reduced': True, 'sb_align': SB_ALIGN, 'gs_passthrough': False, **({'xfb': xfb} if xfb else {}), **extra}
     if key in FACTS: j.update(FACTS[key])
     else: j['no_facts'] = True
@@ -124,6 +130,34 @@ def job_for(key, stage, rec, w):   # dmsh_build.py job_for; transform feedback i
 OP_NAME, OP_DECORATE, OP_VARIABLE, OP_TYPE_POINTER, OP_TYPE_ARRAY, OP_TYPE_RUNTIME_ARRAY, OP_TYPE_IMAGE, OP_TYPE_SAMPLED_IMAGE, OP_TYPE_SAMPLER, OP_TYPE_STRUCT, OP_CONSTANT, OP_EXECUTION_MODE = 5, 71, 59, 32, 28, 29, 25, 27, 26, 30, 43, 16
 DEC_BINDING, DEC_SET, DEC_BLOCK, DEC_BUFFER_BLOCK, DEC_NONWRITABLE = 33, 34, 2, 3, 24
 SC_UNIFORM_CONSTANT, SC_UNIFORM, SC_STORAGE_BUFFER = 0, 2, 12
+def formatless_image_capabilities(spv):
+    """Declare capabilities required by actual Unknown-format image accesses."""
+    if len(spv)<20 or len(spv)%4: raise ValueError('malformed SPIR-V length')
+    w=list(struct.unpack(f'<{len(spv)//4}I',spv))
+    if w[0]!=0x07230203: raise ValueError('malformed SPIR-V magic')
+    instructions=[];i=5
+    while i<len(w):
+        n,op=w[i]>>16,w[i]&0xffff
+        if not n or i+n>len(w): raise ValueError('malformed SPIR-V instruction')
+        instructions.append((op,w[i:i+n]));i+=n
+    unknown={ins[1] for op,ins in instructions if op==25 and len(ins)>=9 and ins[7]!=1 and ins[8]==0}
+    if not unknown:return spv,[]
+    # Opaque image values can be loaded, passed, selected or copied. Each of
+    # these instructions names its result type explicitly; no pointer guesswork.
+    values={ins[2]:ins[1] for op,ins in instructions if op in (45,46,55,57,61,83,100,169,245,400) and len(ins)>=3}
+    needed=set();present={ins[1] for op,ins in instructions if op==17}
+    for op,ins in instructions:
+        if op not in (98,99):continue
+        image=ins[3] if op==98 else ins[1]
+        if image not in values:raise ValueError('unresolved storage image value')
+        if values[image] in unknown:needed.add(55 if op==98 else 56)
+    added=sorted(needed-present)
+    if not added:return spv,[]
+    end=5
+    while end<len(w) and w[end]&0xffff==17:end+=w[end]>>16
+    w[end:end]=[word for capability in added for word in ((2<<16)|17,capability)]
+    return struct.pack(f'<{len(w)}I',*w),added
+
 def spirv_bindings(spv):
     w = struct.unpack(f'<{len(spv) // 4}I', spv)
     names, deco, types, consts, vars_ = {}, collections.defaultdict(dict), {}, {}, []
@@ -157,7 +191,11 @@ def spirv_bindings(spv):
         elif t and t[0] == 'sampler': dt = 'sampler'
         else: dt = '?'
         img = t if t and t[0] == 'image' else types.get(t[1]) if t and t[0] == 'sampled' else None
-        out.append({'name': names.get(vid, ''), 'set': d.get(DEC_SET, 0), 'binding': d[DEC_BINDING], 'type': dt, 'count': count,
+        name = names.get(vid, '')
+        # spirv-cross names the block cp_c0 and its instance cp_c0_1. The
+        # translator's ABI name belongs to the block after GLSL compilation.
+        if dt in ('ubo', 'ssbo') and re.fullmatch(r'[a-z]+_[cs]\d+|support_buffer', names.get(tid, '')): name = names[tid]
+        out.append({'name': name, 'set': d.get(DEC_SET, 0), 'binding': d[DEC_BINDING], 'type': dt, 'count': count,
                     'dim': img[1] if img else None, 'arrayed': img[3] if img else 0, 'ms': img[4] if img else 0, 'fmt': img[5] if img else 0})
     local = None
     i = 5
@@ -185,13 +223,14 @@ def spirv_bindings(spv):
 
 # Handle decoding: as dmsh_build.py decode_tex / decode_ubo_tex / reflect (names: <stage>_t<type>_cb<slot>_<handle>, <stage>_c<n>, <stage>_s<n>, <stage>_i…)
 TEX_BASE, IMG_BASE, IMG_SLOTS, SEPTEX_BASE, SEPTEX_SLOT0, SAMP_BASE = 0x20, 0x120, 8, 0x168, 128, 0x568
-SSBO = {'vs': 0x110, 'cs': 0x310, 'ps': 0x510}
+SSBO = {'vs': 0x110, 'cs': 0x310, 'ps': 0x510, 'ts': 0x670, 'ms': 0x770}
 def classify(stage, b, res):
     nm = b['name']; e = dict(b)
+    if re.fullmatch(r'dm_atlas_\d+', nm): e.update(kind='atlas_meta', off=int(nm.rsplit('_',1)[1])); return e
     m = re.fullmatch(r'[a-z]+_c(\d+)', nm)
     if m:
         n = int(m.group(1))
-        e.update(kind='cbuf', reg=n - 3) if 3 <= n <= 16 else e.update(kind='c1' if n == 1 else 'drvcb', bank=n); return e
+        e.update(kind='cbuf', reg=n - 3) if 3 <= n < 3 + 16 else e.update(kind='c1' if n == 1 else 'drvcb', bank=n); return e
     if nm == 'support_buffer': e.update(kind='support'); return e
     m = re.fullmatch(r'[a-z]+_s(\d+)', nm)
     if m:
@@ -240,7 +279,7 @@ def classify(stage, b, res):
 # binding: u8 kind, u8 desc (descriptor type), u8 dim (SPIR-V Dim, 0xff none), u8 flags (1 arrayed, 2 multisampled, 4 written), u16 binding, u16 count,
 #          i16 reg, u8 samp (sampler source), u8 fmt (SPIR-V image format), i32 off, i32 samp_arg
 KIND = {'support': 0, 'cbuf': 1, 'c1': 2, 'drvcb': 3, 'sbuf': 4, 'ubo_ptr': 5, 'sbuf_ubo': 6, 'tex': 7, 'tbuf': 8, 'img': 9, 'img_tbuf': 10, 'tex_c2a': 11,
-        'tex_ubo': 12, 'tbuf_ubo': 13, 'img_ubo': 14, '?': 255}
+        'tex_ubo': 12, 'tbuf_ubo': 13, 'img_ubo': 14, 'atlas_meta': 15, '?': 255}
 DESC = {'ubo': 0, 'ssbo': 1, 'sampled': 2, 'storage': 3, 'tbuf': 4, 'storage_tbuf': 5, 'image': 6, 'sampler': 7, '?': 255}
 SAMP_NONE, SAMP_TEX, SAMP_SLOT, SAMP_ID, SAMP_UBO = 0, 1, 2, 3, 4
 kinds_all = collections.Counter()
@@ -256,13 +295,43 @@ def refl_bin(binds, c1, local):
         elif e.get('samp') is not None: samp, sarg = SAMP_SLOT, e['samp']
         elif e.get('samp_id') is not None: samp, sarg = SAMP_ID, e['samp_id']
         elif e.get('samp_ubo'): samp, sarg = SAMP_UBO, e['samp_ubo'][0] | e['samp_ubo'][1] << 8
-        flags = (1 if e.get('arrayed') else 0) | (2 if e.get('ms') else 0) | (4 if e.get('rw') else 0) | (8 if e.get('fetch1d') else 0)
+        flags = (1 if e.get('arrayed') else 0) | (2 if e.get('ms') else 0) | (4 if e.get('rw') else 0) | (8 if e.get('fetch1d') else 0) | (16 if e.get('atlas') else 0)
         out.append(struct.pack('<BBBBHHhBBii', kind, DESC.get(e['type'], 255), 0xff if e.get('dim') is None else e['dim'], flags, e['binding'], e['count'],
                                reg, samp, e.get('fmt') or 0, off, sarg))
     return b''.join(out) + bytes(c1)
 
+def compile_atlas(spv, stage, path, reuse=False):
+    """Compile the same optional sampling ABI used for captured game shaders."""
+    path = Path(path)
+    original = path.with_suffix('.input.spv'); original.write_bytes(spv)
+    source = subprocess.run([str(TOOLS/'spirv_cross_bin/spirv-cross'), str(original), '--vulkan-semantics', '--version', '460'], check=True, capture_output=True, text=True).stdout
+    source, bindings = atlas_glsl.compose(source, stage)
+    if not bindings: return spv, []
+    extension = {'vs':'vert','ps':'frag','gs':'geom','hs':'tesc','ds':'tese','cs':'comp','ts':'task','ms':'mesh'}[stage]
+    glsl = path.with_suffix('.'+extension)
+    # Explicit build reuse: identical generated text and compilation flags in
+    # this work directory. Validate the cached binary before accepting it. The
+    # timestamp also excludes an output left by an earlier failed compile.
+    if reuse and path.exists() and glsl.exists() and path.stat().st_mtime_ns >= glsl.stat().st_mtime_ns and glsl.read_text() == source:
+        subprocess.run(['spirv-val','--target-env','vulkan1.2',str(path)],check=True,capture_output=True)
+        return path.read_bytes(), bindings
+    glsl.write_text(source)
+    # Fragment materials repeat the atlas lookup tree many times: the size pass
+    # expands it by aggressive inlining. Preserve those calls for the device
+    # compiler; other stages retain their checked compilation path.
+    optimization = '-Od' if stage == 'ps' else '-Os'
+    subprocess.run(['glslangValidator','-V','--target-env','vulkan1.2',optimization,'-S',extension,str(glsl),'-o',str(path)],check=True,capture_output=True)
+    subprocess.run(['spirv-val','--target-env','vulkan1.2',str(path)],check=True,capture_output=True)
+    return path.read_bytes(), bindings
+
 def main():
-    pc, loc = {}, {}
+    global a, GAME, FACTS, MAP, XLATE_DLL
+    import dmsh_facts   # reads DM_GAME when the CLI runs; reflection helpers can be imported without a profile
+    a = ap.parse_args()
+    GAME = dmsh_chain.load_game(); FACTS = dmsh_facts.load()
+    MAP = str(GAME.table('shader_map.tsv'))
+    XLATE_DLL = a.xlate or str(TOOLS / 'dmsh_xlate_bin/dmsh_xlate.dll')
+    loc = {}
     for ln in open(MAP, encoding='utf-8'):
         c = ln.rstrip('\n').split('\t')
         if len(c) > 4 and c[0].endswith('.bin'): loc.setdefault(c[3], (c[0], int(c[1])))
@@ -279,6 +348,7 @@ def main():
             if name not in packs: packs[name] = records(open(os.path.join(a.pkg, name), 'rb').read())
             stages[k], rec = name[:2], packs[name][idx]
         jobs[k], c1s[k] = job_for(k, stages[k], rec, w)
+        if 'nvn2_mesh' in jobs[k]: stages[k] = 'ts' if jobs[k]['nvn2_mesh']['kind'] == 6 else 'ms'
     chunks = [keys[i::a.jobs] for i in range(a.jobs) if keys[i::a.jobs]]
     def xl(ch):
         jp = os.path.join(w, f'job_{abs(hash(ch[0]))}.json'); json.dump([jobs[k] for k in ch], open(jp, 'w'))
@@ -290,11 +360,11 @@ def main():
         for ln in r.stderr.splitlines():
             if ln.strip(): errs[ln.strip()[:120]] += 1
     entries, fails = [], collections.Counter()
-    spvs = {}
+    spvs, virtual_bindings = {}, {}
     for k in keys:
         spv_p = os.path.join(w, k + '.spv')
         if not os.path.exists(spv_p): fails['no output'] += 1; continue
-        spvs[k] = open(spv_p, 'rb').read()
+        spvs[k] = formatless_image_capabilities(open(spv_p, 'rb').read())[0]
     # A vertex shader gets the outputs its paired pixel shaders read but it does not write: NVN lets the pixel stage read an unwritten attribute (it reads
     # 0,0,0,1), Vulkan refuses to link the pair. dmsh_build.py vs_pad does the same for the Mac chain on MSL text; here it is the SPIR-V (dm/android/tools/
     # dmsv_pad.py). The pairs are the profile's shader_pairs.tsv, which the split writes from each BNSH variation.
@@ -303,30 +373,58 @@ def main():
         for ln in open(GAME.table('shader_pairs.tsv'), encoding='utf-8'):
             c = ln.split()
             if len(c) >= 2 and not ln.startswith('#'): pairs[c[0]].append(c[1])
+    for k in list(spvs):
+        info = jobs[k].get('nvn2_mesh')
+        if not info: continue
+        if info['kind'] == 7:
+            read_mask = 0
+            for pixel in pairs[k]:
+                if pixel in spvs: read_mask |= spirv_bindings(spvs[pixel])[2][1][0]
+            written = {(x-32)//4 for x in info['vertex_lines'] + info['primitive_lines'] if x >= 32}
+            info['extra_outputs'] = [x for x in range(32) if read_mask >> x & 1 and x not in written]
+        source = subprocess.run([str(TOOLS/'spirv_cross_bin/spirv-cross'), str(Path(w)/(k+'.spv')), '--vulkan-semantics', '--version', '460'], check=True, capture_output=True, text=True).stdout
+        if a.virtual_atlas: source, virtual_bindings[k] = atlas_glsl.compose(source, stages[k])
+        source = nvn2_mesh.compose(source, info, 0 if info['kind'] == 6 else 2)
+        glsl = Path(w)/(k+('.task' if info['kind'] == 6 else '.mesh')); glsl.write_text(source)
+        target = Path(w)/(k+'.native.spv')
+        subprocess.run(['glslangValidator', '-V', '--target-env', 'vulkan1.2', '-Os', '-S', glsl.suffix[1:], str(glsl), '-o', str(target)], check=True, capture_output=True)
+        subprocess.run(['spirv-val', '--target-env', 'vulkan1.2', str(target)], check=True, capture_output=True)
+        spvs[k] = target.read_bytes()
     padded, added, skipped = 0, 0, 0
     for k in list(spvs):
         if stages[k] != 'vs' or k not in pairs: continue
         new, plus, skip = dmsv_pad.pad(spvs[k], [spvs[p] for p in pairs[k] if p in spvs])
         if plus: spvs[k] = new; padded += 1; added += len(plus); skipped += len(skip)
     if padded: print(f'padded {padded} vertex shaders with {added} outputs their pixel stages read ({skipped} locations of a type not padded)', flush=True)
+    if a.virtual_atlas:
+        for k in list(spvs):
+            if 'nvn2_mesh' not in jobs[k] and any(b['type']=='sampled' and b['dim']==1 for b in spirv_bindings(spvs[k])[0]):
+                spvs[k], virtual_bindings[k] = compile_atlas(spvs[k], stages[k], Path(w)/(k+'.atlas.spv'))
     for k in keys:
         if k not in spvs: continue
-        spv = spvs[k]; res_p = os.path.join(w, k + '.res.json')
+        spv = formatless_image_capabilities(spvs[k])[0]; res_p = os.path.join(w, k + '.res.json')
         res = json.load(open(res_p)) if os.path.exists(res_p) else {}
         binds, local, io = spirv_bindings(spv)
         st = stages[k]
         cl = [classify(st, b, res) for b in binds]
+        for binding in cl:
+            if binding['binding'] in virtual_bindings.get(k, []): binding['atlas'] = True
+        if st in ('ts', 'ms') and any(e['kind'] == '?' for e in cl):
+            raise ValueError(f'{k}: unclassified native task/mesh bindings: {cl}')
         for e in cl: kinds_all[e['kind']] += 1
         # header words 2-4: a compute shader's local size; a vertex shader's input locations (all, signed int, unsigned int); a pixel shader's output locations
-        hdr3 = (local or jobs[k].get('local') or [1, 1, 1]) if st == 'cs' else io[1] if st == 'vs' else io[3] if st == 'ps' else [0, 0, 0]
-        entries.append((int(k, 16), STAGES.get(st, 0), spv, refl_bin(cl, c1s[k], hdr3)))
+        hdr3 = (local or jobs[k].get('local') or [1, 1, 1]) if st in ('cs', 'ts', 'ms') else io[1] if st == 'vs' else io[3] if st == 'ps' else [0, 0, 0]
+        info = jobs[k].get('nvn2_mesh')
+        trailer = nvn2_mesh.reflection(info, spv) if info else b''
+        flags = int(bool(info)) | (2 if jobs[k].get('arch') == 'sm86' else 0) | (4 if st == 'ps' and virtual_bindings.get(k) else 0)
+        entries.append((int(k, 16), STAGES[st], spv, refl_bin(cl, c1s[k], hdr3) + trailer, flags))
     entries.sort(key=lambda e: e[0])
     hdr = struct.pack('<4sII', b'DMSV', 1, len(entries)); ent_sz = 32
     off = len(hdr) + ent_sz * len(entries); table, blobs = [], []
-    for key, st, spv, refl in entries:
-        table.append(struct.pack('<QIIIIII', key, st, off, len(spv), off + len(spv), len(refl), 0)); blobs += [spv, refl]; off += len(spv) + len(refl)
+    for key, st, spv, refl, flags in entries:
+        table.append(struct.pack('<QIIIIII', key, st, off, len(spv), off + len(spv), len(refl), flags)); blobs += [spv, refl]; off += len(spv) + len(refl)
     with open(a.out, 'wb') as f: f.write(hdr + b''.join(table) + b''.join(blobs))
     print(f'{len(entries)} of {len(keys)} shaders → {a.out} ({off / 2**20:.1f} MB); failed: {dict(fails)}; binding kinds: {dict(kinds_all)}')
     for e, n in errs.most_common(8): print(f'  translator: {n:5d}  {e}')
 
-main()
+if __name__ == '__main__': main()

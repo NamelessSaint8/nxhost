@@ -63,6 +63,9 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                 SpvInstruction pointerType = context.TypePointer(storage, context.GetType(memory.Type, memory.ArrayLength));
                 SpvInstruction variable = context.Variable(pointerType, storage);
 
+                // The offline Metal task/mesh wrapper moves these arrays across its body/epilogue boundary.
+                if (memory.Name.StartsWith("dm_stage_", StringComparison.Ordinal)) context.Name(variable, memory.Name);
+
                 context.AddGlobalVariable(variable);
 
                 dict.Add(id, variable);

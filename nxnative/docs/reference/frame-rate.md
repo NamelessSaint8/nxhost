@@ -102,11 +102,12 @@ Frame pacing: the host's frame step, engine frame limiters, present intervals an
 
 ### Raw NVN timestamp units
 
-- **Symptom:** GPU time reads 32 times too small when a game converts raw NVN counter timestamps itself.
+- **Symptom:** GPU time reads 32 times too small when a game converts raw NVN counter timestamps itself, or when an Android report reaches the shared conversion API.
 - **Cause:** the host wrote reports in 19.2 MHz CPU ticks, while the raw NVN timestamp field uses 614.4 MHz ticks (384 ticks per 625 ns). Games calling `nvnDeviceGetTimestampInNanoseconds` saw correct time because its inverse conversion had the same wrong rate, but an inline conversion read a 16 ms span as 0.5 ms.
-- **Fix:** `nvn_timestamp.h` shares the 614.4 MHz conversions between all report writes (`gpu_ticks`, `rep_ticks`) and `nvnDeviceGetTimestampInNanoseconds`. Wide integer products preserve long uptimes. The guest clock epoch stays the same; CPU system counters stay at 19.2 MHz (31.25 MHz on the Switch 2: [next entry](#the-switch-2s-system-tick-is-3125-mhz)), and the API still returns nanoseconds.
-- **Found on:** [NieR:Automata The End of YoRHa Edition](../../dm/games/010056B015FE8000/README.md), whose dynamic-resolution controller subtracts two raw report timestamps and converts the difference inline.
-- **Check:** `t_timestamp` checks known vectors, long uptimes, round-trip precision and the game's exact inline arithmetic. `t_nvn` checks the API's known units and bounds a completed report between submit and fence wait.
+- **Android cause:** the Vulkan writer retained the old 19.2 MHz scale after the shared API switched to 614.4 MHz. Both its current timestamp and query-relative offsets therefore converted to one thirty-second of their proper units.
+- **Fix:** `nvn_timestamp.h` shares the 614.4 MHz conversions between all report writes (`gpu_ticks`, `rep_ticks`) and `nvnDeviceGetTimestampInNanoseconds`. The Vulkan current-time and relative-query paths also use this helper. Wide integer products preserve long uptimes. The guest clock epoch stays the same; CPU system counters stay at 19.2 MHz (31.25 MHz on the Switch 2: [next entry](#the-switch-2s-system-tick-is-3125-mhz)), and the API still returns nanoseconds.
+- **Found on:** [NieR:Automata The End of YoRHa Edition](../../dm/games/010056B015FE8000/README.md), whose dynamic-resolution controller subtracts two raw report timestamps and converts the difference inline; [Mario Kart World Android](../../dm/games/0400C3F00006E000/README.md#android-full-game-bring-up-2026-11-10), where the Vulkan writer used the stale scale.
+- **Check:** `t_timestamp` checks known vectors, long uptimes, round-trip precision and the game's exact inline arithmetic. `t_nvn` checks the API's known units and bounds a completed report between submit and fence wait. Android `--timestamps` adds nine checks against independent Vulkan timestamps over 512/1024/2048 MiB of GPU fills and the current guest epoch. The old backend fails six checks with a measured ratio of 0.03125; the corrected backend passes all nine, ratios 0.99991–0.99998, with zero Vulkan validation errors. In-game dynamic-resolution and FPS effects remain under measurement.
 
 ### The Switch 2's system tick is 31.25 MHz
 

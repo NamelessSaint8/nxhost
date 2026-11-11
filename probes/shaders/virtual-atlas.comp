@@ -1,0 +1,31 @@
+#version 450
+layout(local_size_x=32) in;
+layout(binding=0) uniform sampler2DArray physical;
+layout(binding=1,std430) readonly buffer Pages { uint page[]; } pages;
+struct Query { vec2 uv; float lod; uint layer; };
+layout(binding=2,std430) readonly buffer Queries { Query query[]; } queries;
+layout(binding=3,std430) writeonly buffer Results { vec4 color[]; } results;
+uint base(uint mip) {
+    uint offset=0;
+    for(uint m=0;m<mip;m++) {uint tiles=(max(8192u>>m,1u)+127u)/128u;offset+=tiles*tiles*68u;}
+    return offset;
+}
+vec4 fetch(ivec2 pixel,uint mip,uint layer) {
+    int extent=max(8192>>mip,1);
+    pixel=clamp(pixel,ivec2(0),ivec2(extent-1));
+    uint tiles=(uint(extent)+127u)/128u;
+    uint index=base(mip)+(layer*tiles+uint(pixel.y)/128u)*tiles+uint(pixel.x)/128u;
+    return texelFetch(physical,ivec3(pixel%128,int(pages.page[index])),0);
+}
+vec4 bilinear(vec2 uv,uint mip,uint layer) {
+    vec2 pixel=uv*float(max(8192u>>mip,1u))-.5;
+    ivec2 start=ivec2(floor(pixel));vec2 f=fract(pixel);
+    return mix(mix(fetch(start,mip,layer),fetch(start+ivec2(1,0),mip,layer),f.x),
+               mix(fetch(start+ivec2(0,1),mip,layer),fetch(start+ivec2(1,1),mip,layer),f.x),f.y);
+}
+void main() {
+    uint i=gl_GlobalInvocationID.x;if(i>=queries.query.length())return;
+    Query q=queries.query[i];float lod=clamp(q.lod,0,13);
+    uint low=uint(floor(lod)),high=min(low+1u,13u);
+    results.color[i]=mix(bilinear(q.uv,low,q.layer),bilinear(q.uv,high,q.layer),fract(lod));
+}

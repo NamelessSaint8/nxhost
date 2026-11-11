@@ -91,6 +91,27 @@ int main(void) {
       dm_fps_state=NULL;unsetenv("DM_FPS_TARGET");g_present_cap=-1;g_engine_stub=1;nvn_present_config(0,0);
     }
     crash_install();   // the same SIGSEGV / SIGBUS handling as production (the page-fault hook is dispatched from within it)
+    // The diagnostic record walk must retain the parent links if a nested list's
+    // JUMP target has become data (the observed Android crash used 0x3f000000).
+    {
+        _Alignas(8) uint8_t parent[24] = {0}, child[24] = {0}, leaf[16] = {0};
+        const uint8_t *bad = (const uint8_t *)(uintptr_t)0x3f000000;
+        op_hdr call = {OP_CALL, 16}, end = {OP_END, 8}, jump = {OP_JUMP, 16};
+        const uint8_t *child_ptr = child, *leaf_ptr = leaf;
+        memcpy(parent, &call, 8); memcpy(parent + 8, &child_ptr, 8); memcpy(parent + 16, &end, 8);
+        memcpy(child, &call, 8); memcpy(child + 8, &leaf_ptr, 8); memcpy(child + 16, &end, 8);
+        memcpy(leaf, &jump, 8); memcpy(leaf + 8, &bad, 8);
+        rec_diag d = {.root = parent, .why = "test", .pass = "size"};
+        EXPECT("record trace stops before following an unmapped jump", 0, rec_flat(parent, NULL, 0, 0, 0, &d));
+        EXPECT("record trace retains both nested calls and bad link", 1,
+               d.call_at[1] == parent && d.call_to[1] == child &&
+               d.call_at[2] == child && d.call_to[2] == leaf &&
+               d.jump_at[2] == leaf && d.jump_to[2] == bad);
+        uint64_t matrix_word = UINT64_C(0x000000003f800000);
+        memset(&d, 0, sizeof d); d.root = (const uint8_t *)&matrix_word; d.why = "test"; d.pass = "size";
+        EXPECT("record trace rejects data in place of a header", 0,
+               rec_flat((const uint8_t *)&matrix_word, NULL, 0, 0, 0, &d));
+    }
     // 1. Bootstrap address lookup: bootstrap gets GetProcAddress, then uses it to get all the names
     PFNNVNBOOTSTRAPLOADERPROC boot = (PFNNVNBOOTSTRAPLOADERPROC)h_nvnBootstrapLoader;
     gpa = (PFNNVNDEVICEGETPROCADDRESSPROC)boot("nvnDeviceGetProcAddress");
@@ -603,7 +624,17 @@ int main(void) {
     EXPECT("wait after fence = already signaled (0)", 0, P(nvnSyncWait)(&s1, 0));
     NVNtexture sc[2]; NVNtextureBuilder tb; P(nvnTextureBuilderSetDevice)(&tb, &dev); P(nvnTextureBuilderSetDefaults)(&tb);
     P(nvnTextureBuilderSetWidth)(&tb, 1280); P(nvnTextureBuilderSetHeight)(&tb, 720); P(nvnTextureBuilderSetFormat)(&tb, NVN_FORMAT_RGBA8);
-    P(nvnTextureBuilderSetStorage)(&tb, &pool, 0); P(nvnTextureInitialize)(&sc[0], &tb); P(nvnTextureInitialize)(&sc[1], &tb);
+    // The pacing fixtures need real GPU-only swapchain storage. The 1 MiB
+    // command/data pool is too small for even one 1280x720 RGBA texture, and
+    // its later CPU writes must not be interpreted as streamed window pixels.
+    size_t swap_size=P(nvnTextureBuilderGetStorageSize)(&tb);void *swap_mem=NULL;
+    if(posix_memalign(&swap_mem,16384,swap_size*2))abort();memset(swap_mem,0,swap_size*2);
+    NVNmemoryPoolBuilder swap_builder;NVNmemoryPool swap_pool;
+    P(nvnMemoryPoolBuilderSetDefaults)(&swap_builder);P(nvnMemoryPoolBuilderSetStorage)(&swap_builder,swap_mem,swap_size*2);
+    P(nvnMemoryPoolBuilderSetFlags)(&swap_builder,NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS|NVN_MEMORY_POOL_FLAGS_GPU_CACHED);
+    EXPECT("swapchain backing pool initialized",1,P(nvnMemoryPoolInitialize)(&swap_pool,&swap_builder));
+    P(nvnTextureBuilderSetStorage)(&tb,&swap_pool,0);P(nvnTextureInitialize)(&sc[0],&tb);
+    P(nvnTextureBuilderSetStorage)(&tb,&swap_pool,swap_size);P(nvnTextureInitialize)(&sc[1],&tb);
     EXPECT("texture width", 1280, P(nvnTextureGetWidth)(&sc[0]));
     NVNtexture *scp[2] = {&sc[0], &sc[1]};
     NVNwindowBuilder wb; NVNwindow win; P(nvnWindowBuilderSetDevice)(&wb, &dev); P(nvnWindowBuilderSetDefaults)(&wb);
@@ -929,6 +960,34 @@ int main(void) {
         EXPECT("several rows whose alignment would break the wrapped address: refused", 0, nvn_tbuf_rows(20000, 4, 3, &w, &h, &row));
     }
 
+    // A physical interval is reusable only while every virtual page resolves
+    // to consecutive bytes of the same live physical-pool incarnation.
+    {
+        size_t bytes=4*65536;uint8_t *mem=mmap(NULL,bytes,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON,-1,0);
+        pool_t physical,virtual;pool_builder_t pb={.mem=mem,.size=bytes,.flags=0x18c};
+        EXPECT("physical interval pool initializes",1,h_nvnMemoryPoolInitialize((NVNmemoryPool*)&physical,(NVNmemoryPoolBuilder*)&pb));
+        pb=(pool_builder_t){.size=1048576,.flags=0x200};EXPECT("physical interval virtual pool initializes",1,h_nvnMemoryPoolInitialize((NVNmemoryPool*)&virtual,(NVNmemoryPoolBuilder*)&pb));
+        map_req mapping[2]={{.phys=(NVNmemoryPool*)&physical,.poff=0,.voff=65536,.size=4096},{.phys=(NVNmemoryPool*)&physical,.poff=4096,.voff=65536+4096,.size=4096}};
+        EXPECT("physical interval maps separate requests",1,h_nvnMemoryPoolMapVirtual((NVNmemoryPool*)&virtual,2,(NVNmappingRequest*)mapping));
+        const pool_t *resolved=NULL;uint64_t offset=0,address=(uint64_t)(uintptr_t)virtual.mem+65536;
+        EXPECT("physical interval resolves exact pool and byte offset",1,nvn_sparse_contiguous(&virtual,address+127,8192-254,&resolved,&offset) && resolved==&physical && offset==127);
+        EXPECT("physical interval is CPU-readable",1,nvn_sparse_cpu_readable(&virtual,address,8192));
+        mapping[1].poff=8192;h_nvnMemoryPoolMapVirtual((NVNmemoryPool*)&virtual,1,(NVNmappingRequest*)&mapping[1]);
+        EXPECT("physical interval rejects nonconsecutive pages",0,nvn_sparse_contiguous(&virtual,address,8192,&resolved,&offset));
+        mapping[1].phys=NULL;h_nvnMemoryPoolMapVirtual((NVNmemoryPool*)&virtual,1,(NVNmappingRequest*)&mapping[1]);
+        EXPECT("physical interval rejects a hole",0,nvn_sparse_contiguous(&virtual,address,8192,&resolved,&offset));
+        EXPECT("physical interval rejects empty range",0,nvn_sparse_contiguous(&virtual,address,0,&resolved,&offset));
+        EXPECT("physical interval rejects overflowing range",0,nvn_sparse_contiguous(&virtual,address,UINT64_MAX,&resolved,&offset));
+        h_nvnMemoryPoolFinalize((NVNmemoryPool*)&physical);
+        EXPECT("physical interval rejects finalized backing",0,nvn_sparse_contiguous(&virtual,address,4096,&resolved,&offset));
+        EXPECT("physical interval finalized backing is not readable",0,nvn_sparse_cpu_readable(&virtual,address,4096));
+        pb=(pool_builder_t){.mem=mem,.size=bytes,.flags=0x18c};h_nvnMemoryPoolInitialize((NVNmemoryPool*)&physical,(NVNmemoryPoolBuilder*)&pb);
+        EXPECT("physical interval rejects reused object before remap",0,nvn_sparse_contiguous(&virtual,address,4096,&resolved,&offset));
+        h_nvnMemoryPoolMapVirtual((NVNmemoryPool*)&virtual,1,(NVNmappingRequest*)&mapping[0]);
+        EXPECT("physical interval accepts the new incarnation after remap",1,nvn_sparse_contiguous(&virtual,address,4096,&resolved,&offset) && resolved==&physical);
+        h_nvnMemoryPoolFinalize((NVNmemoryPool*)&virtual);h_nvnMemoryPoolFinalize((NVNmemoryPool*)&physical);munmap(mem,bytes);
+    }
+    mtl_present_flush();P(nvnTextureFinalize)(&sc[0]);P(nvnTextureFinalize)(&sc[1]);P(nvnMemoryPoolFinalize)(&swap_pool);free(swap_mem);
     printf("== %d checks, %d failed ==\n", g_n, g_fail);
     return g_fail != 0;
 }

@@ -79,26 +79,28 @@ def pad(vs, pss):
         return nid - 1
 
     decls, consts, decos, stores, iface = [], [], [], [], []
-    scalars = {}
+    # SPIR-V forbids duplicate non-aggregate types. Reuse original types and
+    # share any new scalar/vector/pointer declarations across padded locations.
+    types = {(_op(c), *c[2:]): c[1] for c in chunks
+             if _op(c) in (OP_TYPE_FLOAT, OP_TYPE_INT, OP_TYPE_VECTOR, OP_TYPE_POINTER)}
+    def type_id(op, *args):
+        key = (op, *args)
+        if key not in types:
+            types[key] = new()
+            decls.append([((2+len(args)) << 16) | op, types[key], *args])
+        return types[key]
+
     for loc, t in sorted(want.items()):
         kind, _, comps, signed = t
-        key = (kind, signed)
-        if key not in scalars:
-            scalars[key] = new()
-            sid = scalars[key]
-            decls.append([(3 << 16) | OP_TYPE_FLOAT, sid, 32] if kind == 'float'
-                         else [(4 << 16) | OP_TYPE_INT, sid, 32, 1 if signed else 0])
-        scalar = scalars[key]
-        ty = scalar
-        if comps > 1:
-            ty = new(); decls.append([(4 << 16) | OP_TYPE_VECTOR, ty, scalar, comps])
-        ptr = new(); decls.append([(4 << 16) | OP_TYPE_POINTER, ptr, SC_OUTPUT, ty])
+        scalar = type_id(OP_TYPE_FLOAT, 32) if kind == 'float' else type_id(OP_TYPE_INT, 32, int(signed))
+        ty = type_id(OP_TYPE_VECTOR, scalar, comps) if comps > 1 else scalar
+        ptr = type_id(OP_TYPE_POINTER, SC_OUTPUT, ty)
         zero = new(); consts.append([(4 << 16) | OP_CONSTANT, scalar, zero, 0])
         if comps == 1:
             value = zero
         else:
             parts = [zero] * comps
-            if kind == 'float':                    # (0,0,0,1): the w an unwritten attribute carries
+            if kind == 'float' and comps == 4:     # (0,0,0,1), truncated for shorter inputs
                 parts[-1] = new(); consts.append([(4 << 16) | OP_CONSTANT, scalar, parts[-1], 0x3f800000])
             value = new(); consts.append([((3 + comps) << 16) | OP_CONSTANT_COMPOSITE, ty, value] + parts)
         var = new(); consts.append([(4 << 16) | OP_VARIABLE, ptr, var, SC_OUTPUT])

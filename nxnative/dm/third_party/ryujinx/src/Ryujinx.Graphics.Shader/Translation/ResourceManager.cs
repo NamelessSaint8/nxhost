@@ -45,6 +45,9 @@ namespace Ryujinx.Graphics.Shader.Translation
 
         public int LocalMemoryId { get; private set; }
         public int SharedMemoryId { get; private set; }
+        public int AmpereInputMemoryId { get; private set; } = -1;
+        public int AmpereAttributeMemoryId { get; private set; } = -1;
+        public int AmpereMapMemoryId { get; private set; } = -1;
 
         public int LocalVertexDataMemoryId { get; private set; }
         public int LocalTopologyRemapMemoryId { get; private set; }
@@ -85,6 +88,19 @@ namespace Ryujinx.Graphics.Shader.Translation
 
             LocalMemoryId = -1;
             SharedMemoryId = -1;
+            int[] stageBuffers = gpuAccessor.QueryAmpereStageBuffers();
+            if (stageBuffers != null)
+            {
+                if (stageBuffers.Length != 4 || stageBuffers[0] is not 6 and not 7 ||
+                    stageBuffers[1] <= 0 || stageBuffers[2] <= 0 || stageBuffers[3] <= 0)
+                    throw new ArgumentException("Invalid NVN2 stage-buffer layout");
+                if (stageBuffers[0] == 7)
+                {
+                    AmpereInputMemoryId = Properties.AddSharedMemory(new MemoryDefinition("dm_stage_input", AggregateType.Array | AggregateType.U32, stageBuffers[1]));
+                    AmpereMapMemoryId = Properties.AddSharedMemory(new MemoryDefinition("dm_stage_map", AggregateType.Array | AggregateType.U32, stageBuffers[3]));
+                }
+                AmpereAttributeMemoryId = Properties.AddSharedMemory(new MemoryDefinition("dm_stage_attr", AggregateType.Array | AggregateType.U32, stageBuffers[2]));
+            }
         }
 
         public void SetCurrentLocalMemory(int size, bool isUsed)

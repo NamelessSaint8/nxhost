@@ -387,6 +387,14 @@ The guest address space, heaps, pools, virtual address memory and the allocators
 - **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md): GitHub issue #9 (iPhone 16 Pro Max, handheld), killed in the first shrine. An 8 GB iPhone gives this app about 3.4 GB (resident plus `headroom to the system memory limit` stayed at 3,375 MB); resident memory grew from 2.6 GB at the shrine load until the kill. On the Mac a host without that pool grew 1 MB a frame in the shrine (GPU 3.0 → 4.4 GB in 2,400 frames); with it the shrine stays at 2.7–2.9 GB resident and 1.5–1.7 GB GPU, idle or walking (vmmap at 2.8 GB: about 1.6 GB guest memory, 0.75 GB private textures, 0.17 GB IOAccelerator).
 - **Note:** found on the way: dead texture serials and the fixed-size pool tracking table ([Dead texture serials kept in a ghost table](nvn-objects.md#dead-texture-serials-kept-in-a-ghost-table), [Memory-pool tracking table grows in blocks](nvn-objects.md#memory-pool-tracking-table-grows-in-blocks)).
 
+### Pipeline archive imports retain substantial host file data
+
+- **Symptom:** app footprint remains well above guest memory, with large `NSConcreteData (Bytes Storage)` allocations and many open Metal 4 pipeline archives.
+- **Cause:** the URL archive path retains substantial malloc-backed file data. Fewer live archive handles alone do not establish that the data was freed: a bounded-handle experiment reduced archive objects while leaving almost all of that storage alive. The exact retaining edges in Metal's pipeline/loader object graph remain **open**.
+- **Workaround:** `DM_PSO_ARCHIVE=off` avoids the app's archive imports and capture while retaining normal saved-list preparation and the draw-time pipeline cache. Metal's own compiler cache can still apply. This is an optional memory/startup tradeoff for the platform allocation behavior, not a new default or an eviction fix; it must be measured with the actual shader list, including first-use work beyond that list.
+- **Check:** compare kernel `phys_footprint` and host malloc charges, not just Metal allocation or handle counts; preserve preparation time, synchronous compilation counts, screenshots and frame pacing. An isolated archive-only process does not prove what a gameplay process frees after its pipelines exist.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#found-on-this-game), Mac heap census and normal-preparation RAM experiments. The rejected handle-cache source and the successful compiler-cache run are retained externally with their measurements.
+
 ### Upload staging grows within one rendering submission
 
 - **Symptom:** travelling produces a brief multi-GB footprint spike, then memory returns to its earlier level; periodic memory lines can miss the peak. Upload diagnostics show many swapped-out blocks still alive in one batch.
@@ -411,6 +419,14 @@ The guest address space, heaps, pools, virtual address memory and the allocators
 - **Check:** `make -C dm/gfx/tests GAME=<id> check_t_readback` gates real GPU feedback and exercises both `DM_NVN_FAST_WAKE=1` guest-owned completion and `0` callback-owned completion. It checks literal mirrored pixels and event visibility, delayed-feedback idempotence, then weak readback-buffer destruction after real retirement while the guest outer pool remains open. The lifetime assertion fails without the local pool and passes with it.
 - **Found on:** [Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md#memory), M2 Pro stationary cave route. A bounded paired diagnostic on chain `d1043b780a74` showed footprint growth of 617 MiB over about 86 seconds without the pool versus 1 MiB over about 83 seconds with it. This is route-local memory evidence, not an FPS improvement, complete allocation census or verified fix for an iPhone termination.
 
+### Zero-copy Android pool restoration uses bounded scratch
+
+- **Symptom:** process peak RSS rises during Android memory-pool finalization even after the atlas's private GPU allocations are released; large pools also incur a full-size temporary CPU copy.
+- **Cause:** `gfx_vk_core.c::pool_copy_back` saved the entire imported pool in malloc memory before replacing its dma-buf mapping with anonymous pages. One chunk can be 256 MiB. The old allocation-failure branch still replaced the mapping, silently discarding its contents, and did not check mmap failure.
+- **Fix:** restore one 64 KiB scratch chunk at a time, rounded to the host page size. Each chunk is saved before replacing exactly its pages and copied back before advancing. Allocation and mapping errors stop explicitly. CPU/GPU bytes are preserved while temporary storage is bounded independently of pool size.
+- **Check:** `vknvn2_replay replay.dmsv --restore-check` fills whole pools with CPU patterns, writes a region on the GPU, then compares full SHA256 digests after restoration. Sizes span one page, a partial chunk, exactly one chunk and multiple chunks with a partial final chunk. The measured workload additionally checks every source byte and its GPU-written command/output pool after finalization. CPU preparation, cleanup time, RSS/PSS and process high-water counters are saved by [the measurement probe](../../../probes/README.md#measured-android-atlas-refresh). A lower teardown peak does not establish a lower persistent game working set.
+- **Found on:** [Mario Kart World Android measurements](../../dm/games/0400C3F00006E000/README.md#android-atlas-measurements-2026-11-09), Lenovo TB323FU / Adreno840. The old/new memory-pool restore behavior is retained in the external comparison binaries.
+
 ## A store that cannot land
 
 ### A guest store into a module's own text
@@ -421,3 +437,63 @@ The guest address space, heaps, pools, virtual address memory and the allocators
 - **Found on:** Skyrim (title ID `01000A10041EA000`, profile not yet in `dm/games`), Legion Y700, 1,791 s into a run with screen recording active; the crash ended the run. What corrupted the field is still unknown, so this is a survivable-corruption rule, not a fix.
 - **Check:** `make -C dm/host/tests GAME=<id> text_store` checks the drop (the pc moves on, the page is untouched), that a read fault and a store outside every module are left to the crash handler, that another module's text is handled the same way, and that more distinct sites than the table holds are still dropped. Grep a log for `[RED] a guest store into read-only text was dropped`; if it recurs, watch the field that held the pointer with `DM_PROBE_WATCH`/`DM_PROBE_POLL` to find the writer.
 
+
+
+### Explicit Vulkan allocations counted across aliases
+
+- **Symptom:** placeholder memory counters cannot explain startup growth, and resource totals double-count aliases or suballocations.
+- **Cause:** resource sizes do not identify unique device-memory allocations.
+- **Fix:** track successful Vulkan memory allocations by handle, including their requested bytes, live count and peak. Freeing the allocation removes its single record. Report these counters separately from process RSS/PSS: they overlap and exclude driver-internal allocations.
+- **Check:** seven production GPU checks cover shared buffer aliases, visible GPU writes, free-to-baseline and null frees. The startup runner also records process and system memory; these figures must not be added together.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#android-full-game-bring-up-2026-11-10).
+
+### Vulkan mapping maintenance runs during loading
+
+- **Symptom:** `vkCreateDescriptorPool` returns `VK_ERROR_OUT_OF_HOST_MEMORY` during loading, with free device memory and about 64,500 process mappings. Most are adjacent 4 KiB read-only dma-buf mappings.
+- **Cause:** protecting and releasing a dma-buf splits its mappings, which the kernel does not merge again. Defragmentation counted only single-page write faults, omitting protection and batch-release calls. The Vulkan backend also waited for 300 presents before maintaining mappings; a loading scene exhausted the mapping budget earlier.
+- **Fix:** count protection and batch-release calls in each tracked range. Check for eligible pool compaction after 1,024 protection operations at submission boundaries. Remap the same dma-buf, retaining bytes, protected pages and writable ranges. The existing quiet period excludes recent host writes. Hold range lifetime protection during compaction and roll back acquired page states if another page remains busy.
+- **Check:** `vknvn2_replay --mapping-fragmentation` passes eight device checks. Production submission maintenance reduces 18,536 mappings to 2,156 before any presented frame, preserves every source page and GPU writes, and still detects later CPU and host writes. The CPU dirty-range lookup, lifetime and write-order race tests pass. A complete-game follow-up remains necessary.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#android-full-game-bring-up-2026-11-10), Lenovo TB323FU / Adreno840. The failing run reached 64,531 sampled mappings before descriptor-pool allocation failed.
+
+### Vulkan memory-pool registry grows without moving records
+
+- **Symptom:** Android loading aborts with `too many memory pools` after 4,096 live pool chunks, even though allocations still succeed.
+- **Cause:** the backend used a fixed array for its pool registry. NVN permits more live pools; buffer-binding caches also retain pointers into the registry, so reallocating a flat array would invalidate them.
+- **Fix:** grow an address-sorted index of separately allocated records under the pool lock. Records keep stable addresses and retired records are recycled. Binary lookup retains a full fallback for overlapping ranges. Pool additions and removals still invalidate cached lookups through the registry generation.
+- **Check:** the production device fixture `--pool-registry` passes eight checks with 5,120 reverse-inserted live pools. It checks address ranges, a cached real buffer across growth, overlaps, overflow, removal, record reuse, GPU writes and complete finalization. Sparse sampling, mapping compaction and submission-resource retirement checks also pass.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#android-full-game-bring-up-2026-11-10), Lenovo TB323FU / Adreno840. The fixed registry stopped run36; run37 subsequently reached a rendered title scene with textured road and scenery.
+
+
+### Canonical CPU texture storage can use file backing on Android
+
+- **Symptom:** large GPU_NO_ACCESS physical pools retain anonymous canonical CPU pages alongside GPU image copies, increasing loading memory pressure.
+- **Cause:** converted sparse-image paths read those canonical bytes on the CPU. They cannot bind the source as a direct GPU buffer, but anonymous pages remain backed by RAM or swap.
+- **Fix (experimental):** `DM_VK_CPU_BACKING=file` stores aligned pools of at least 1 MiB in private, unlinked temporary files and maps them shared at their original addresses. Complete checked writes and a sync precede replacing the mapping. Dirty tracking, content and address identity remain intact. The mapping retains the file after descriptor close, including after NVN pool finalization; guest unmapping releases it. The kernel can reclaim file pages and reload them later. Other pools and the default path are unchanged.
+- **Check:** 15 device checks compare every original byte across three sizes up to 64 MiB, host dirty writes, explicit sync/eviction/reload and writes after finalization. No Vulkan allocation is added. The mapped CPU atlas, wide sparse-copy, uncompressed, sparse-depth and workgroup fixtures also pass under API validation. Complete app memory/stall measurements remain necessary before enabling this option in a shipped profile. Initial backing costs 7/11/160ms for 1/3/64 MiB in one device sample; these are initialization timings, not game FPS.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#android-full-game-bring-up-2026-11-10), Lenovo TB323FU / Adreno840. See the Linux [shared mapping and descriptor lifetime rules](https://man7.org/linux/man-pages/man2/mmap.2.html).
+
+### Cached CPU pools allocate GPU buffers at first binding
+
+- **Symptom:** Android retains several GiB of GPU buffers that no draw or dispatch has bound, alongside texture images made from the same source data.
+- **Cause:** registering a CPU_CACHED/GPU_CACHED pool immediately creates a Vulkan buffer or imports an Android hardware buffer. CPU texture sources need canonical bytes but may never need a direct GPU buffer. The binding census distinguishes these pools from pending resource frees.
+- **Fix (experimental):** `DM_VK_LAZY_CACHED_POOLS=1` defers buffers for disjoint cached pools until the first actual GPU binding. Keep canonical CPU storage and dirty tracking throughout. Promotion creates the existing zero-copy or copied representation, publishes initial bytes and enables completion copyback for copied pools. Overlapping registrations promote older deferred pools first. Optional file backing also covers these deferred canonical pools; no source bytes are discarded.
+- **Broader option:** `DM_VK_LAZY_POOLS=1` also defers CPU-uncached and CPU-inaccessible pools with a valid GPU cached/uncached mode. File backing remains limited to CPU-cached storage. This covers buffers used only as texture or command sources; actual GPU bindings still materialize the original representation.
+- **Check:** `--lazy-pools` passes thirteen device checks in both normal and forced-copy modes, including GPU writes in the first materialized submission. `--lazy-all-pools` passes 91 checks per mode across seven flag combinations. Atlas, sparse depth, driver state and copy fixtures pass under Vulkan validation. With file backing and three submissions in flight, a 1,000-frame opening run peaks at 5.5 GiB sampled TOTAL PSS and keeps at least 2.8 GiB system MemAvailable. Swap is separate. A later race reaches its memory guard, so the complete-game budget remains open.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#android-full-game-bring-up-2026-11-10), Lenovo TB323FU / Adreno840. Before deferral, about 2.6 GiB of cached pool buffers remained unbound late in the opening.
+
+### Unbound copied pools do not require GPU completion waits
+
+- **Symptom:** every submission waits for preceding GPU work even though the copied pools have never been bound by a draw, dispatch or transfer.
+- **Cause:** the presence of any copied pool enabled global upload/completion synchronization. CPU-only command sources therefore serialized unrelated GPU work. A late materialized copied pool also uploaded initial bytes without marking them synced, which omitted GPU writes from that first submission's copyback.
+- **Fix:** synchronize copied pools only after an actual GPU binding. Publish initial canonical bytes at first binding, mark that upload synced, and preserve later incremental upload and completion copyback. Keep the shared completion flag atomic.
+- **Check:** six Vulkan-validated checks use a host-signaled timeline semaphore to keep unrelated GPU work pending. An unused copied pool allows the next submission to begin without draining it. GPU readback checks every initial word, first-submission GPU writes and finalization. The forced-copy deferred-pool checks also pass. The first test used an invalid host-event gate; its API errors were corrected before accepting results.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#android-full-game-bring-up-2026-11-10), Lenovo TB323FU / Adreno840. The live census reports 4.92 MiB of copied storage with no GPU binding.
+
+
+### Inactive GPU images retain pixels in private file storage
+
+- **Symptom:** several GiB of completed render or storage images remain allocated after their last use, pushing Android into memory pressure during course transitions.
+- **Cause:** GPU-written pixels can differ from canonical guest storage. Dropping those images would lose data; retaining all device images indefinitely consumes the working set.
+- **Fix (experimental):** `DM_VK_IMAGE_BUDGET_MB` enables a best-effort budget for ordinary resident images. Save eligible GPU-written images unused for 60 presents or five seconds to private unlinked file storage before releasing their completed Vulkan storage. Keep ownership and metadata; restore every mip, array layer, 3D slice and color/depth/stencil aspect before reuse. Checked writes and sync precede release. An 8 MiB staging buffer bounds transfer RAM. GPU-written compressed images and multisampled images stay resident. The setting does not cap atlas, buffer, driver or total process memory.
+- **Check:** `--image-file` passes 30 device checks with Khronos validation active and zero API errors. GPU pixels deliberately differ from canonical CPU bytes. Independent whole-mip hashes cover arrays, large 3D transfers crossing staging chunks, depth/stencil, changed pixels after a second eviction, and pool retirement while file-backed. Resident image requirements fall from 51.03 MiB to zero; separate staging remains counted. Inactive packaged CPU images without GPU writes can release their device copies and reconstruct them from canonical pool bytes. Checks cover color and depth pixels before recreation and after later CPU writes. A real timeline-gated GPU read prevents retirement while its fence is pending; every read pixel remains correct. A five-second idle test retires storage without waiting for 60 presents. Completed image/view storage can be destroyed without waiting for newer unrelated submissions; a second real queue gate verifies that path and exact recreation afterward. Cleanup prefers reconstructable CPU copies before disk-backed GPU images. Current-frame images remain protected, and actual reads/writes refresh use tracking. Cleanup runs each present, with a soft limit of eight images, 32 MiB saved, or 8 ms at an image boundary; one image can exceed that time. Actual-game race measurements remain under review before enabling the setting in the normal profile.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#android-full-game-bring-up-2026-11-10), Lenovo TB323FU / Adreno840.

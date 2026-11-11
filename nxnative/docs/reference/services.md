@@ -54,6 +54,14 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Fix:** `hle_sf.c` takes over the SDK's HIPC client entry points (`InitializeHipcServiceResolution`, `ConnectToHipcService`, `SendSyncRequest`, `CloseClientSessionHandle` and the control requests `QueryPointerBufferSize`, `ConvertSessionToDomain`, `DuplicateSession(Ex)`): a service it serves (`olsc:u`) gets a host session, and every request on it succeeds with zeroed output, which reads as backup off for every user. Any other name is refused with a red line, as `sm` refuses a service nobody registered (`npns` was never connected). `DM_SF_TRACE=1` dumps each request.
 - **Found on:** [Animal Crossing: New Horizons](../../dm/games/01006F8002326000/README.md) (SDK 20.5.4).
 
+### HIPC pointer outputs rejected before dispatch or left untouched
+
+- **Symptom:** `GetRoomInfo` returns `0x11a0b`, then a member loop reads an uninitialized count and crashes. Ordinary inline replies can still succeed.
+- **Cause:** `QueryPointerBufferSize` returned zero. The SDK rejected mandatory pointer outputs before sending the request. The server also ignored C output lists and decoded B outputs without accounting for special headers.
+- **Fix:** advertise a 4 KiB pointer-transfer budget. Decode B descriptors and C lists before replacing the request, including process IDs and handle descriptors. Validate every output range before writing any output, then zero its declared bytes. Accept reserved guest memory and the active native caller stack used by the initial guest main. Manager handles returned by served services retain the same pointer budget.
+- **Check:** `t_sf_buffers` passes 526 descriptor/bounds checks. `t_sf` passes 16 actual dispatch checks, including room-info output, native caller-stack storage, audio-manager C output, short Close messages and invalid destinations. Both run under ASAN/UBSAN. The game's original SDK call subsequently returns success with an empty room.
+- **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#android-full-game-bring-up-2026-11-10). Descriptor layout follows [libnx HIPC](https://github.com/switchbrew/libnx/blob/master/nx/include/switch/sf/hipc.h).
+
 ## SDK names that changed between versions
 
 ### Older SDK names for the same calls

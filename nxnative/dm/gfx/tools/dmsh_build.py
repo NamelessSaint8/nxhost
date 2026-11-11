@@ -9,6 +9,7 @@
 # Environment IOSOUT=dir: the same MSL also goes through dm/ios/tools/ios_metal.compile to produce an iphoneos metallib + reflection (chain_metal records the iOS compile convention)
 # Final summary: success / failure counts and the distribution of reasons; distribution of driver segment read offsets (those outside the range the replay layer can fill are listed separately)
 import inspect, os, re, sys, json, struct, hashlib, shutil, subprocess, tempfile, collections, threading, concurrent.futures as cf
+import dmsh_nvn2_mesh
 import dmsh_geometry, dmsh_atomic, dmsh_abi as abi   # abi: the driver segment layout and the binding kinds the host shares (dm/gfx/nvn/dmsh_abi.h)
 DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')   # Workspace root (game files, build outputs and run artifacts are all under it)
 HOME = os.path.expanduser('~')
@@ -205,7 +206,7 @@ def mac_compile(msl, air, lib):   # same interface as ios_metal.compile
 #   c2 C2_SAMP + 8 r: separate samplers (nvnCommandBufferBindSeparateSampler), slot r < C2_SEP_SLOTS
 #   c0 base + 0x10 r: storage buffer r (64-bit address, 32-bit size), base C0_SSBO_<stage> (the hull / domain stages' bases were never seen)
 TEX_BASE, IMG_BASE, IMG_SLOTS, SEPTEX_BASE, SEPTEX_SLOT0, SAMP_BASE = abi.C2_TEX, abi.C2_IMG, abi.C2_IMG_SLOTS, abi.C2_SEPTEX, abi.SEPTEX_SLOT0, abi.C2_SAMP
-SSBO = {'vs': abi.C0_SSBO_VS, 'cs': abi.C0_SSBO_CS, 'gs': abi.C0_SSBO_GS, 'ps': abi.C0_SSBO_PS}
+SSBO = {'vs': abi.C0_SSBO_VS, 'cs': abi.C0_SSBO_CS, 'gs': abi.C0_SSBO_GS, 'ps': abi.C0_SSBO_PS, 'task': abi.C0_SSBO_TASK, 'mesh': abi.C0_SSBO_MESH}
 
 def records(d):
     r = [m.start() for m in re.finditer(b'BTCDBTCD', d)]
@@ -536,13 +537,17 @@ def job_for(key, name, rec, w):
         # NVN2 (Switch 2): Ampere code (a 0x80-byte SPH for the graphics stages, then the instructions, control +0x38 long), which the translator's Ampere
         # frontend reads (job arch sm86); its c1 segment lies between control +0x40 and +0x44. The NVN control fields the steps below read (VertexA / B,
         # transform feedback, early fragment tests) are not in an NVN2 section
+        mesh = dmsh_nvn2_mesh.metadata(rec[ci:], code)
         c1 = dmsh_ampere.c1_segment(rec[ci:], code)
         code = code[:dmsh_ampere.inst_len(rec[ci:])]
         extra['arch'] = 'sm86'
+        if mesh:
+            stage = 'cs'
+            extra.update(nvn2_mesh=mesh, nvn2_stage=[mesh['kind'], mesh['input_words'], mesh['attr_words'], mesh['map_words']], local=[mesh['threads'],1,1], shared=mesh['shared'])
         # compute lays out its driver constants in c[0] per shader: the control section gives its push constants' words (+0xa9), counts its uniform buffer, storage
         # buffer and texture entries (+0xb1, +0xb2, +0xb3) and gives the size (+0xba); the translator maps them to c[24] and NVN's fixed tables (InstEmitAmpere.cs
         # AMapC0). Graphics keeps NVN's tables
-        if stage == 'cs': extra['nvn2_cs'] = [rec[ci + 0xb1], rec[ci + 0xb2], rec[ci + 0xb3], struct.unpack_from('<H', rec, ci + 0xba)[0], rec[ci + 0xa9] * 4]
+        if stage == 'cs' and not mesh: extra['nvn2_cs'] = [rec[ci + 0xb1], rec[ci + 0xb2], rec[ci + 0xb3], struct.unpack_from('<H', rec, ci + 0xba)[0], rec[ci + 0xa9] * 4]
     else:
         c1o, c1t = struct.unpack_from('<2I', rec, ci + 0x700)   # control segment +0x700: c1 relative to the start of the instruction area, +0x704: total length of the instruction area (c1 = what lies between the two; lengths across the whole library are 0 / 256 / 512 / 768)
         c1 = rec[0x38 + c1o:0x38 + c1t]
@@ -1055,7 +1060,17 @@ def fs_uint(src):
     # (the library stays small): an output from integer bits, or nothing but constants (a clear drawn into an integer target, 35e1865e313f0553 writes 0 into Luigi's Mansion 3's R32Uint target)
     from_int = {nm for nm in cols if re.search(r'\bout\.%s(?:\.\w+)? = as_type<float\d?>\(' % nm, src)}
     writes = [m.group(1) for nm in cols for m in re.finditer(r'\bout\.%s(?:\.\w+)? = ([^;]+);' % nm, src)]
-    if not from_int and not (writes and all(re.fullmatch(r'-?[0-9.]+f?|float\d\([-0-9., ]*\)', w.strip()) for w in writes)): return None, 0
+    # A flat varying may carry integer bits produced by a previous stage. A
+    # passthrough fragment has no local as_type<float> to reveal that origin.
+    flat = {nm for _, nm, at in re.findall(r'\b(\w+)\s+(\w+)\s*(\[\[[^\]]*\]\]);', src) if 'flat' in at}
+    aliases = set()
+    for _ in range(len(src.splitlines())):
+        found = {nm for nm, rhs in re.findall(r'\bfloat\d?\s+(\w+)\s*=\s*([^;]+);', src)
+                 if rhs.strip() in aliases or re.fullmatch(r'\w+\.(?:' + '|'.join(map(re.escape, flat)) + r')(?:\.[xyzwrgba]+)?', rhs.strip())}
+        if found <= aliases: break
+        aliases |= found
+    flat_forward = any(w.strip() in aliases or (flat and re.fullmatch(r'\w+\.(?:' + '|'.join(map(re.escape, flat)) + r')(?:\.[xyzwrgba]+)?', w.strip())) for w in writes)
+    if not from_int and not flat_forward and not (writes and all(re.fullmatch(r'-?[0-9.]+f?|float\d\([-0-9., ]*\)', w.strip()) for w in writes)): return None, 0
     uty = lambda ty: 'u' + ty.replace('float', 'int')   # float4 → uint4, float → uint
     def entry(sfx, as_uint):   # main0 again as main0_<sfx>, returning the outputs in as_uint as the unsigned integer vectors of their bits (dmsh_fetch.py cuts the source at main0_out_u)
         struct = f'struct main0_out_{sfx}\n{{\n' + ''.join(f'    {uty(cols[nm]) if nm in as_uint else ty} {nm} {at};\n' for ty, nm, at in mem) + '};\n\n'
@@ -1203,7 +1218,33 @@ def geometry_finish(key, w, j, c1):
     return 'ok', '', base
 
 
+def nvn2_mesh_finish(key, w, j, c1):
+    info = j['nvn2_mesh']; stage = 'task' if info['kind'] == 6 else 'mesh'
+    spv = os.path.join(w, key + '.spv')
+    dmsh_geometry.flatten_sets(spv)
+    r = subprocess.run([SPIRV_CROSS, *dmsh_atomic.cross_args(XC, spv), spv], capture_output=True, text=True)
+    if r.returncode: return 'mesh MSL failed', r.stderr.strip()[:160], None
+    src = border_emu(pool_arrays(precise(dmsh_atomic.check_msl(r.stdout))))
+    body = src
+    src = dmsh_nvn2_mesh.compose(src, info)
+    msl = os.path.join(w, key + '_nvn2.metal'); open(msl, 'w').write(src)
+    for target, directory in [('mac', out)] + ([('ios', IOSOUT)] if IOSOUT else []):
+        if target in TARGETS: MTL.compile(target, msl, os.path.join(directory, key + '_b.metallib'))
+    clone(msl, os.path.join(out, key + '_b.metal'))
+    refl = {'key': key + '_b', 'route': 'B', 'chain': CHAIN, 'dm_ctl': key,
+            'source': '%s#%s' % loc[key], 'pc_paired': pc_of[key], 'stage': stage,
+            'entry': 'dm_task' if stage == 'task' else 'dm_mesh',
+            **({'entry_z': 'dm_mesh_z'} if stage == 'mesh' else {}),
+            'msl_entry_kind': 'object' if stage == 'task' else 'mesh', 'nvn2_mesh': info,
+            'threadgroup_size': [info['threads'],1,1], 'c1': c1.hex(), 'notes': [],
+            'drv_reads': drv_reads(body), 'drv_unfillable': [],
+            'bindings': reflect(key, stage, body, json.load(open(os.path.join(w,key+'.res.json')))),
+            'vertex_inputs': [], 'raster': {}}
+    write_refl(key, refl)
+    return 'ok', '', refl
+
 def finish(key, w, j, c1):
+    if j.get('nvn2_mesh'): return nvn2_mesh_finish(key, w, j, c1)
     name, k = loc[key]
     msl = os.path.join(w, key + '.metal'); lib = os.path.join(out, key + '_b.metallib')
     if j['stage'] == 'gs':   # keep the layer-only fold; other geometry runs as compute

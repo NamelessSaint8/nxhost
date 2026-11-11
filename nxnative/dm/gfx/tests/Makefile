@@ -31,17 +31,19 @@ MTL_T_SRC=../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c t_host_s
 # runs several ways. A new test needs its source and its build rule; no list to add it to. NOT_RUN: helpers linked into other tests (t_host_stubs, t_present_rescue_focus),
 # a fixture test_image_atomic_bounds.py builds itself (t_atomic_return), t_geometry_primitive_id (the GPU half of test_dmsh_geometry.py, which gives it the directory of
 # its translated fixtures), and t_gpuprof, which CI's CPU subset runs (.github/workflows/tests.yml)
-NOT_RUN = t_host_stubs t_present_rescue_focus t_atomic_return t_geometry_primitive_id t_gpuprof
+NOT_RUN = t_host_stubs t_present_rescue_focus t_atomic_return t_geometry_primitive_id t_nvn2_mesh t_gpuprof
 RUN_TESTS = $(filter-out $(NOT_RUN),$(basename $(sort $(wildcard t_*.c t_*.m))))
 check_t_%: t_%
 	$(RUN_ENV) ./$<
-.PHONY: run check_test_dmsh_pull check_test_tbdr_budget
+.PHONY: run check_test_dmsh_pull check_test_tbdr_budget check_test_android_shaders
 run: $(RUN_TESTS)
-	@$(MAKE) --no-print-directory -j1 $(addprefix check_,$(RUN_TESTS)) check_test_dmsh_pull check_test_tbdr_budget
+	@$(MAKE) --no-print-directory -j1 $(addprefix check_,$(RUN_TESTS)) check_test_dmsh_pull check_test_tbdr_budget check_test_android_shaders
 check_test_dmsh_pull:
 	python3 test_dmsh_pull.py
 check_test_tbdr_budget:
 	DM_GAME=$(GAME) python3 test_tbdr_budget.py
+check_test_android_shaders:
+	DM_GAME=$(GAME) python3 -m unittest test_android_nvn2_mesh.py test_android_atlas.py
 t_transform_feedback: t_transform_feedback.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_transform_feedback.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_transform_feedback
@@ -203,6 +205,8 @@ check_t_vbuf: t_vbuf
 	DM_NVN_VBUF_CACHE=0 MTL_DEBUG_LAYER=1 ./t_vbuf
 t_geometry: t_geometry.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_geometry.m $(MTL_T_SRC) $(FW)
+t_nvn2_mesh: t_nvn2_mesh.m t_geometry.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_nvn2_mesh.m $(MTL_T_SRC) $(FW)
 check_t_geometry: RUN_ENV = MTL_DEBUG_LAYER=1
 t_feedback: t_feedback.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_feedback.m $(MTL_T_SRC) $(FW)
@@ -421,6 +425,8 @@ check_t_sparse_upload: t_sparse_upload
 	DM_NVN_ENC_THREAD=0 $(SPARSE_VALIDATION_ENV) ./t_sparse_upload gpu-copy
 	DM_NVN_ENC_THREAD=1 $(SPARSE_VALIDATION_ENV) ./t_sparse_upload gpu-copy
 	$(SPARSE_VALIDATION_ENV) ./t_sparse_upload upgrade
+	DM_NVN_ENC_THREAD=0 $(SPARSE_VALIDATION_ENV) ./t_sparse_upload share
+	DM_NVN_ENC_THREAD=1 $(SPARSE_VALIDATION_ENV) ./t_sparse_upload share
 t_image_alias: t_image_alias.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_image_alias.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_image_alias

@@ -136,6 +136,7 @@ static void release_pages(range_t *r, uintptr_t p, uintptr_t q, _Atomic uint64_t
         uint8_t st = PG_PROT; int took = i <= q && atomic_compare_exchange_strong(&r->state[i], &st, PG_BUSY);
         if (took) { if (!open) { run = i; open = 1; } continue; }
         if (open) {
+            atomic_fetch_add(&r->nmp, 1);
             mp(r->base + (run << g_shift), (i - run) << g_shift, PROT_READ | PROT_WRITE);
             for (uintptr_t k = run; k < i; k++) { stamp_page(r, k); atomic_store(&r->state[k], PG_NONE); }
             if (count) atomic_fetch_add(count, i - run);
@@ -171,17 +172,21 @@ uint64_t nvn_dirty_released(void) { return atomic_load(&g_released); }
 // streaming) are system calls the kernel fails with EFAULT on a page made read-only under them; Xenoblade Chronicles 3 then inflated a short read and crashed in zlib
 enum { DEFRAG_MP = 4000, DEFRAG_QUIET_MS = 1000 };
 int nvn_dirty_defrag(int (*remap)(void *mem, size_t len)) {
+    pthread_mutex_lock(&g_slot_mu);   // keep ranges live and exclude concurrent protection while remapping
     int done = 0, n = atomic_load(&g_nr);
     for (int i = 0; i < n; i++) {
         range_t *r = rg(i); if (!live_at(i) || atomic_load(&r->nmp) < DEFRAG_MP || r->mem != r->base) continue;   // a pool starting mid-page shares that page: left alone
         if ((mach_absolute_time() - atomic_load(&r->prep)) * g_tb.numer / g_tb.denom < (uint64_t)DEFRAG_QUIET_MS * 1000000ull) continue;
         size_t np = (r->end - r->base) >> g_shift;
         uint8_t *was = malloc(np); if (!was) continue;
+        size_t acquired=0;
         for (size_t p = 0; p < np; p++) {   // every page BUSY; was = its state before
             for (;;) { uint8_t st = atomic_load(&r->state[p]);
                 if (st == PG_BUSY) { if (!busy_wait(r, p)) break; continue; }
-                if (atomic_compare_exchange_strong(&r->state[p], &st, PG_BUSY)) { was[p] = st; break; } }
+                if (atomic_compare_exchange_strong(&r->state[p], &st, PG_BUSY)) { was[p] = st;acquired++;break; } }
+            if(acquired!=p+1)break;
         }
+        if(acquired!=np){for(size_t p=0;p<acquired;p++)atomic_store(&r->state[p],was[p]);free(was);continue;}
         int ok = remap((void *)r->base, r->end - r->base) == 0;
         for (size_t p = 0; ok && p < np; ) {   // the pages that were writable, a run at a time
             if (was[p] != PG_NONE) { p++; continue; }
@@ -195,7 +200,7 @@ int nvn_dirty_defrag(int (*remap)(void *mem, size_t len)) {
         free(was);
         if (ok) { atomic_store(&r->nmp, 0); done++; }
     }
-    return done;
+    pthread_mutex_unlock(&g_slot_mu);return done;
 }
 // Runs of protected pages over every live range: each is a mapping of its own (at most two with the writable pieces around it)
 int nvn_dirty_runs(void) {
@@ -278,7 +283,7 @@ void nvn_dirty_protect(const void *addr, size_t len) {
         uint8_t st = PG_NONE;
         int took = i <= q && atomic_compare_exchange_strong(&r->state[i], &st, PG_BUSY);
         if (took && !open) { run = i; open = 1; }
-        if (!took && open) { mp(r->base + (run << g_shift), (i - run) << g_shift, PROT_READ); for (uintptr_t k = run; k < i; k++) atomic_store(&r->state[k], PG_PROT); open = 0; }
+        if (!took && open) { atomic_fetch_add(&r->nmp,1);mp(r->base + (run << g_shift), (i - run) << g_shift, PROT_READ); for (uintptr_t k = run; k < i; k++) atomic_store(&r->state[k], PG_PROT); open = 0; }
         if (!took && i <= q && st == PG_BUSY && busy_wait(r, i)) i--;   // this page again
     }
     pthread_mutex_unlock(&g_slot_mu);

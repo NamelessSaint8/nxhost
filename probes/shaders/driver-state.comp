@@ -1,0 +1,14 @@
+#version 450
+layout(local_size_x=1,local_size_y=1,local_size_z=1) in;
+layout(binding=0,std140) uniform cp_c24 {uvec4 words[16];} pushed;
+layout(binding=1,std140) uniform cp_c0 {uvec4 words[256];} driver;
+layout(binding=3,std140) uniform cp_c18 {uvec4 value;} high_uniform;
+layout(binding=2,std430) buffer cp_s0 {uvec4 words[];} result;
+void main(){
+    if(any(notEqual(gl_GlobalInvocationID,uvec3(0))))return;
+    result.words[0]=pushed.words[0];result.words[1]=pushed.words[15];
+    result.words[2]=driver.words[0];result.words[3]=driver.words[32];
+    result.words[4]=uvec4(gl_NumWorkGroups,0);
+    result.words[5]=driver.words[33];result.words[6]=driver.words[49];
+    result.words[7]=driver.words[64];result.words[8]=driver.words[48];result.words[8].w=high_uniform.value.x;
+}

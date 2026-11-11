@@ -1,5 +1,9 @@
 # Switch 2 titles
 
+**Current checkpoint (2026-11-10):** Mario Kart World's Android atlas now covers the offset/gather operations found in its shader census: 15,750 GPU checks pass and all 21 real programs convert, validate and load. A Mac attachment trace exposed a missing integer fragment-output adaptation, now fixed and checked with 88 GPU readbacks. Fourteen pipeline checks cover twelve observed attachment contexts, including both possible original depth precisions. See [results and limits](../nxnative/dm/games/0400C3F00006E000/README.md#android-offsetgather-and-attachment-parity-2026-11-10).
+
+The preceding shader storage change saved about 1.26 GiB in a complete shader-subset loading benchmark. Sampling, driver, atlas, captured-terrain and draw regressions still pass. Next build the Android profile and attempt a bounded scene with the overlay. Full-game RAM/FPS and the **9–10 GB target remain open**; the complete Mac renderer is preserved. [Reproduction](../probes/README.md#offset-gather-and-typed-attachments). The shader census and emulator measurements below are historical snapshots.
+
 What a Switch 2 game's files mean for this port, measured on Mario Kart World 1.8.0 (program id `0400C3F00006E000`, dump layout: `exefs/` + `romfs/`).
 The `porter` refuses such a game with `… is a Switch 2 program (its id starts 0400)`, naming this page. Nothing here is emulated or shipped: it says
 what the engine already reads and what a port would still need.

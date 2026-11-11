@@ -28,6 +28,10 @@ static uint64_t watch_now_ns(void) {
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 uint64_t crash_watch_progress_count(void) { return atomic_load(&g_watch_count); }
+void crash_watch_work_completed(void) {
+    uint64_t now=watch_now_ns(),previous=atomic_load(&g_watch_last_ns);
+    while(previous<now && !atomic_compare_exchange_weak(&g_watch_last_ns,&previous,now)) {}
+}
 void crash_watch_progress(uint32_t tick, const char *stage) {
     int next = 1 - atomic_load(&g_watch_stage_idx);
     if (stage && *stage) snprintf(g_watch_stage[next], sizeof g_watch_stage[next], "%s", stage);

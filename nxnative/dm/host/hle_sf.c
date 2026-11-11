@@ -12,6 +12,7 @@
 // then {"SFCI", version, command, token} and the arguments. The response is the same with {u32 objects, 3 × u32} and {"SFCO", version, result, token}
 #include "hle.h"
 #include <pthread.h>
+#include "sf_buffers.h"
 int dm_guest_as_contains(uintptr_t a);   // hle_svc.c: the address lies in the reserved guest address block
 
 #define SF_H0 0xd0000u   // session handles: outside the kernel handle table (0x1000 + slot, 4096 slots, hle_thread.c)
@@ -68,11 +69,16 @@ HLE_FORCE("_ZN2nn2sf4hipc24CloseClientSessionHandleENS_3svc6HandleE", "close a s
     if (i < 0) { LOG("[RED] sf: CloseClientSessionHandle on %#x, not a host session", h); return; }
     pthread_mutex_lock(&g_sf_mu); g_sf[i].used = 0; pthread_mutex_unlock(&g_sf_mu);
 }
-// Control requests: the pointer buffer is the server's receive buffer for X descriptors (none: the host reads them in place), the domain conversion makes the session's object 1, a duplicate
+// The in-process server writes client output lists directly, with a 4 KiB
+// pointer-transfer budget. Reporting zero rejects mandatory HipcPointer outputs
+// in the SDK before any request is sent (result 0x11a0b).
+// Control requests: the domain conversion makes the session's object 1, a duplicate
 // is a new session to the same object
-HLE_FORCE("_ZN2nn2sf4hipc6client22QueryPointerBufferSizeEPtNS_3svc6HandleE", "control request: pointer buffer size of a session → 0 for a host session", Result, h_sf_PtrBuf, uint16_t *out, uint32_t h) {
-    if (sf_slot(h) < 0) { LOG("[RED] sf: QueryPointerBufferSize on %#x, not a host session", h); return RES_FAIL; }
-    *out = 0; return RES_OK;
+HLE_FORCE("_ZN2nn2sf4hipc6client22QueryPointerBufferSizeEPtNS_3svc6HandleE", "control request: in-process server pointer-transfer budget", Result, h_sf_PtrBuf, uint16_t *out, uint32_t h) {
+    int i=sf_slot(h);
+    if(i<0 && h>=SF_OBJ_H0 && h<SF_OBJ_H0+0x1000 && g_obj_name[h-SF_OBJ_H0][0])i=sf_adopt(h);
+    if (i < 0) { LOG("[RED] sf: QueryPointerBufferSize on %#x, not a host session", h); return RES_FAIL; }
+    *out = 4096; return RES_OK;
 }
 HLE_FORCE("_ZN2nn2sf4hipc6client22ConvertSessionToDomainEPNS0_4cmif18CmifDomainObjectIdENS_3svc6HandleE", "control request: convert a session to a domain → the host session's object 1", Result, h_sf_ToDomain,
           uint32_t *out, uint32_t h) {
@@ -90,7 +96,18 @@ HLE_FORCE("_ZN2nn2sf4hipc6client18DuplicateSessionExEPNS_3svc6HandleES4_j", "con
 
 // Shared with svc 0x21: a title that sends through the syscall instead of the API names the same sessions, and dm_sf_new mints one for a service
 // the host answers without a name of its own.
+static int sf_output_valid(uint64_t address,uint64_t bytes,void *context) {
+    (void)context;
+    int ok=bytes && bytes-1<=UINT64_MAX-address && dm_guest_as_contains((uintptr_t)address) && dm_guest_as_contains((uintptr_t)(address+bytes-1));
+    // The initial guest main also runs on the calling native thread's stack.
+    // Admit active caller stack storage, never arbitrary writable host memory.
+    uintptr_t active=(uintptr_t)&ok,top=(uintptr_t)pthread_get_stackaddr_np(pthread_self());
+    if(!ok && bytes && address>=active && address<top && bytes<=top-address)ok=1;
+    if(!ok)LOG("[sf] rejected output address=%#llx bytes=%#llx",(unsigned long long)address,(unsigned long long)bytes);
+    return ok;
+}
 static Result sf_send(uint32_t h, uint32_t *m, uint64_t size) {
+    if(!m || size<8)return 0xe401u;
     int i = sf_slot(h);
     if (i < 0) {
         if (size < 0x40 || (i = sf_adopt(h)) < 0) { LOG("[RED] sf: SendSyncRequest on %#x (%llu bytes) with no room to serve it", h, (unsigned long long)size); return 0xe401u; }
@@ -99,14 +116,18 @@ static Result sf_send(uint32_t h, uint32_t *m, uint64_t size) {
             mod ? mod->name : "?", mod ? (unsigned long long)((uintptr_t)__builtin_return_address(0) - (uintptr_t)mod->base) : 0, m[0], m[1]);
     }
     uint8_t *base = (uint8_t *)m;
+    sf_out_buffer output[28];int noutput=sf_output_buffers(m,(size_t)size,output);
+    if(noutput<0){LOG("[RED] sf: invalid output descriptor layout");return 0xe401u;}
     unsigned type = m[0] & 0xffff, nx = m[0] >> 16 & 15, na = m[0] >> 20 & 15, nb = m[0] >> 24 & 15;
+    if(type==2)return RES_OK; // Close has no CMIF body.
     unsigned nabw = na + nb + (m[0] >> 28 & 15), ndw = m[1] & 0x3ff;
     uint32_t *p = m + 2;
     if (m[1] >> 31) { uint32_t sh = *p++; p += (sh & 1 ? 2 : 0) + (sh >> 1 & 15) + (sh >> 5 & 15); }   // special header: process ID, copy and move handles
     p += nx * 2 + nabw * 3;
     size_t data = (size_t)((uint8_t *)p - base), cm = (data + 15) & ~(size_t)15;
+    if(cm+16>size)return 0xe401u;
     // An adopted session's domain state is not known: the message says it (a domain request puts its header before the CMIF part)
-    int dom = g_sf[i].anon ? (*(uint32_t *)(base + cm) != 0x49434653 && *(uint32_t *)(base + cm + 16) == 0x49434653)
+    int dom = g_sf[i].anon ? (cm+32<=size && *(uint32_t *)(base + cm) != 0x49434653 && *(uint32_t *)(base + cm + 16) == 0x49434653)
                           : (g_sf[i].domain && (type == 4 || type == 6));
     unsigned dtype = dom ? base[cm] : 1, obj = dom ? *(uint32_t *)(base + cm + 4) : 0;
     size_t hin = cm + (dom ? 16 : 0);
@@ -121,14 +142,9 @@ static Result sf_send(uint32_t h, uint32_t *m, uint64_t size) {
     if (type != 4 && type != 6) { LOG("[RED] sf: %s: HIPC message type %u not served", g_sf[i].name, type); return 0xe401u; }
     if (dtype == 2) { memset(base, 0, 16); return RES_OK; }   // a domain object closed: nothing to answer
     if (magic != 0x49434653) { LOG("[RED] sf: %s: request without SFCI (%#x)", g_sf[i].name, magic); return 0xe401u; }
-    // auddmg:u's manager object answers into the caller's B descriptor buffer (the reference port's out_buffer). Capture it before the reply zeroes the
-    // message, whose descriptors are part of it. B follows X (2 words) and A (3 words) descriptors, 3 words each: {size, addr low, addr high bits}.
-    uint64_t baddr = 0, bsize = 0; uint32_t bd[3] = {0, 0, 0};
-    if (g_sf[i].anon && g_sf[i].handle >= 0x20000u && g_sf[i].handle < 0x21000u && nb) {
-        const uint32_t *d = (const uint32_t *)(base + 8 + (nx * 2 + na * 3) * 4); bd[0] = d[0]; bd[1] = d[1]; bd[2] = d[2];
-        baddr = (uint64_t)d[1] | ((uint64_t)((d[2] >> 28) & 0xf) << 32) | ((uint64_t)((d[2] >> 2) & 0x3fffff) << 36);
-        bsize = (uint64_t)d[0] | ((uint64_t)((d[2] >> 24) & 0xf) << 32);
-    }
+    if(!sf_zero_outputs(output,noutput,sf_output_valid,NULL)){LOG("[RED] sf: %s: output buffer is outside the guest address space",g_sf[i].name);return 0xe401u;}
+    // Keep the decoded client output before the reply replaces its descriptors.
+    uint64_t baddr=noutput?output[0].address:0,bsize=noutput?output[0].size:0;
     unsigned key = (obj & 0xff) << 16 | (cmd & 0xffff);   // log each object / command once
     pthread_mutex_lock(&g_sf_mu); int first = g_sf[i].seen != key; g_sf[i].seen = key; pthread_mutex_unlock(&g_sf_mu);
     if (first || trace) LOG("sf: %s object %u command %u (%u data words in): success, zeroed output", g_sf[i].name, obj, cmd, ndw);
@@ -155,12 +171,8 @@ static Result sf_send(uint32_t h, uint32_t *m, uint64_t size) {
     // auddmg:u's manager: answer into the caller's buffer. Command 0 lists virtual output devices (a count, then 0x100 bytes of name each); the rest are
     // not implemented yet and leave the zeroed reply, which is what the title is expected to trip over next.
     if (bsize && baddr && !strncmp(g_sf[i].name, "auddmg:u", 8)) {
-        // Do NOT write yet. This decode gives an address outside the guest block but inside the host's own stack (0x16d991120 in one run), so the packing
-        // below is not the layout this client uses: writing "proved" only that some page exists there, and a mincore test let a write land in host memory.
-        // The reference port resolves these buffers through the CMIF pointer buffer (QueryPointerBufferSize), which this host answers 0 — that is the gap.
-        int in_as = dm_guest_as_contains((uintptr_t)baddr);
-        LOG("sf: auddmg:u manager command %u: descriptor %08x %08x %08x -> %#llx+%#llx%s", cmd, bd[0], bd[1], bd[2], (unsigned long long)baddr,
-            (unsigned long long)bsize, in_as ? "" : " (not a guest address; not written)");
+        int in_as=sf_output_valid(baddr,bsize,NULL);
+        LOG("sf: auddmg:u manager command %u: output %#llx+%#llx%s",cmd,(unsigned long long)baddr,(unsigned long long)bsize,in_as?"":" (not written)");
         if (in_as && cmd == 0 && bsize >= 0x100) {
             static const char name[] = "AudioVirtualOutput0";
             size_t n = bsize < 0x200 ? (size_t)bsize : 0x200;

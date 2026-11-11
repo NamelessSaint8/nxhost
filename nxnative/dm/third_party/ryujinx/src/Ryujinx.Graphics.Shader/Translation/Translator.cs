@@ -41,7 +41,10 @@ namespace Ryujinx.Graphics.Shader.Translation
                 definitions = CreateComputeDefinitions(gpuAccessor);
                 localMemorySize = gpuAccessor.QueryComputeLocalMemorySize();
 
-                program = ampere ? Decoder.DecodeAmpere(definitions, gpuAccessor, address) : Decoder.Decode(definitions, gpuAccessor, address);
+                // Task/mesh bodies use compute IR for their workgroup execution, while keeping
+                // the graphics SPH and original instruction addresses for calls and jump tables.
+                ulong start = address + (ulong)(gpuAccessor.QueryAmpereStageBuffers() != null ? headerSize : 0);
+                program = ampere ? Decoder.DecodeAmpere(definitions, gpuAccessor, start) : Decoder.Decode(definitions, gpuAccessor, start);
             }
             else
             {

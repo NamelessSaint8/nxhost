@@ -1,5 +1,5 @@
 # Mario Kart World (Switch 2, loose dump of update 917504). Direct Mac host runs reach a rendered race; no packaged build or registered
-# version hashes, and no android.tsv. Remaining colour and performance issues are recorded in README.md.
+# version hashes. android.tsv is experimental; remaining colour, memory and performance issues are recorded in README.md.
 # Nintendo EPD's engine (Nin_Ounce: sead / agl / gsys, Phive), NVN2 (Ampere shaders); modules main + sdk + subsdk0 + subsdk1.
 # Shaders: Shader/*.Nin_Ounce_NVN2.bfsha.zs (BNSH), one .sarc.zs holding agl sharcb packs, and the effect set's esetb. See docs/SWITCH2.md.
 
@@ -30,6 +30,9 @@ app_pool	0x260000000
 render_cond	on
 # Packed vertex formats otherwise convert entire bound mesh pools; the race CPU sample is dominated by that repeated conversion.
 vconv_range	on
+# Streamed height/material tiles are filled directly in CPU-cached pool memory after TextureInitialize, without an NVN flush.
+tex_flush_upload	on
+tex_dirty_upload	on
 
 # ---- Shader split (shader_split.py) ----
 shader_groups	/Shader/=shader /Effect/=effect /Layout/=layout /Model/=model /System/=system

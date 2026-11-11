@@ -21,7 +21,7 @@ key-files:
     - nxnative/dm/android/gfx_vk_tex.c
     - nxnative/dm/android/gfx_vk.h
 decisions:
-  - "Code left UNCOMMITTED in the working tree: the four files carry the user's in-progress work and gfx_vk_atlas.c is untracked (orchestrator override of per-task commits)"
+  - "Code left UNCOMMITTED at quick-task close: the four files carried the user's in-progress work and gfx_vk_atlas.c was untracked (orchestrator override of per-task commits)"
   - "DM_VK_ATLAS_NATIVE_FILTER / DM_VK_ATLAS_RESIDENCY now take effect at the next submission instead of the next descriptor"
 metrics:
   duration: "~15 min"
@@ -38,9 +38,9 @@ plan_head_after: 0dca94f1fc92385dee45ae3f4fea0f16cfc5721e
 
 vk_atlas_descriptor no longer calls getenv or vkGetPhysicalDeviceFormatProperties per descriptor. Atlas shaders (Mario Kart World) can now use the per-stage descriptor-set memo as `setmemo 3`, keyed on a new `vk_atlas_version()`.
 
-## Uncommitted code changes (read this first)
+## Code state at quick-task close
 
-**Nothing in this task is committed.** The four edited files hold the user's large uncommitted work, and `nxnative/dm/android/gfx_vk_atlas.c` is untracked, so by the orchestrator's override no code was staged, committed, stashed, checked out, restored or reformatted. The edits are in the working tree only. Pre-edit copies are in `/private/tmp/claude-501/-Volumes-Data-Dev-nxhost/3182d3eb-7ffd-46d1-b7c2-74094192d992/scratchpad/pre/`. The combined diff below is the only durable record (also at `/private/tmp/claude-501/-Volumes-Data-Dev-nxhost/3182d3eb-7ffd-46d1-b7c2-74094192d992/scratchpad/fxs.diff`).
+**At this quick task's close, no code was committed.** The four edited files held the user's large uncommitted work, and `nxnative/dm/android/gfx_vk_atlas.c` was untracked, so by the orchestrator's override no code was staged, committed, stashed, checked out, restored or reformatted. The edits were in the working tree only. Pre-edit copies are in `/private/tmp/claude-501/-Volumes-Data-Dev-nxhost/3182d3eb-7ffd-46d1-b7c2-74094192d992/scratchpad/pre/`. The combined diff below records that task's changes (also at `/private/tmp/claude-501/-Volumes-Data-Dev-nxhost/3182d3eb-7ffd-46d1-b7c2-74094192d992/scratchpad/fxs.diff`).
 
 `git status` after the task: `M gfx_vk.h`, `M gfx_vk_exec.c`, `M gfx_vk_tex.c`, `?? gfx_vk_atlas.c`; `git diff --cached --name-only` is empty.
 
@@ -88,6 +88,8 @@ vk_atlas_descriptor no longer calls getenv or vkGetPhysicalDeviceFormatPropertie
 - STATE.md and ROADMAP.md were not updated or committed; the orchestrator handles that.
 
 ## Device follow-up (the user's next step)
+
+The 2026-11-11 device follow-up and sharpened verifier are recorded in the [MKW game note](../../../nxnative/dm/games/0400C3F00006E000/README.md#android-atlas-binding-cost-2026-11-11). The original and hoisted-helper runs found byte-identical scratch recopy cases; the earlier helper shader `e38a5d4d7d779895` was not sampled again. The steps below are the original plan, retained for context.
 
 1. Build and install a test package per the nx2android-dev skill. Ask before installing, and use a `.test` package beside the user's own app.
 2. Correctness: run with `DM_VK_X_SETVERIFY=1` at the parked Toad's Factory camera for several 600-frame reports. Pass means "memo differences 0" in the "replay per frame (last 600)" line and no "[RED] descriptor set memo" lines. If `[RED]` lines appear only for atlas shaders and only the hash differs (um, im, atlas masks and dynamic offsets the same), it may be the benign metadata re-copy named in the comment. Confirm with a `DM_VK_X_NOSETMEMO=1` A/B screenshot of the same frame before trusting it.

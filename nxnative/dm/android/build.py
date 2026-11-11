@@ -128,9 +128,13 @@ if a.lib:
         nm = subprocess.run([str(bin_ / 'llvm-nm'), '-D', '--defined-only', str(exe)], capture_output=True, text=True).stdout
         defd = {l.split()[-1] for l in nm.splitlines() if len(l.split()) == 3}
         nm = subprocess.run([str(bin_ / 'llvm-nm'), '-D', '--undefined-only', str(exe)], capture_output=True, text=True).stdout
-        und = {l.split()[-1].split('@')[0] for l in nm.splitlines() if len(l.split()) >= 2}
+        # ELF permits absent weak hooks (nm's lowercase w/v), such as the
+        # optional Metal sparse-descriptor invalidation callback. Only strong
+        # undefined project symbols prevent the Android loader from starting.
+        und = {l.split()[-1].split('@')[0] for l in nm.splitlines() if len(l.split()) >= 2 and l.split()[-2] not in ('w', 'v')}
         bad = sorted(n for n in und - defd if _re.match(r'^(mtl_|nvn_|dm_|dmsh_)', n))
         if bad: sys.exit(f'{exe.name}: unresolved project symbols: {" ".join(bad)}')
     if a.release:   # the static symbol table goes too (the dynamic one stays: ANativeActivity_onCreate)
+        shutil.copy2(out / 'libdmhost.so', out / 'libdmhost.unstripped.so')
         subprocess.run([str(bin_ / ('llvm-strip.exe' if os.name == 'nt' else 'llvm-strip')), '--strip-unneeded', str(out / 'libdmhost.so')], check=True)
         print(f'stripped {out / "libdmhost.so"}: {(out / "libdmhost.so").stat().st_size // 1024} KB')
