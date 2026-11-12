@@ -1082,7 +1082,7 @@ typedef struct { vkshader_t *s; uint64_t epoch, bind, ubo, ubd, tex, samp, h, um
     uint16_t nw, ni; memo_write_t dw[MEMO_WRITES]; VkDescriptorImageInfo di[MEMO_IMAGES];
 } set_memo_t;
 static set_memo_t g_smemo[8]; static uint64_t g_bind_gen[8], g_ubo_gen[8];   // a stage's handles or storage buffers changed (bind_handles_rec, OP_BIND_SSBO), its uniform buffers (OP_BIND_UBO)
-uint64_t g_set_memo, g_set_memo_bad;   // memo hits, and differences the verify mode found
+uint64_t g_set_memo, g_set_memo_bad, g_set_memo_atlas;   // memo hits, differences the verify mode found, and hits that had an atlas binding live
 extern uint64_t g_ubd_gen; uint32_t vk_pool_gen(void);
 static int set_memo_ok(vkshader_t *s) {
     if (!s->setmemo) { int ok = 1, ncb = 0, atlas = 0;
@@ -1180,6 +1180,13 @@ static VkDescriptorSet stage_set(int st, vkshader_t *s, uint32_t *dofs) {
     int memo = st < 3 && !g_x_nosetmemo && !g_tracing && !g_var_now && !g_x_nosetc && !g_x_nodrvc && !g_ubolog_key && g_td_off < 0 && set_memo_ok(s), verify = 0;
     uint32_t vd[96]; uint64_t vum = 0, vim = 0,vam=0;   // verify: what the memo gave
     if (memo && set_memo_get(st, s, dofs)) { static unsigned nv; int target = g_x_setverify_shader && s->key == g_x_setverify_shader;
+        // Coverage of the atlas key: setmemo 3 is only exercised where an atlas binding is live, so a run that never sets a mask
+        // bit says nothing about vk_atlas_version() however many hits it reports (g_num_atlas is what set_memo_get restored).
+        if (g_num_atlas) { g_set_memo_atlas++;
+            if (g_x_setverify) { static struct { uint64_t key; int st; } seen[16]; static int ns;
+                int i = 0; while (i < ns && (seen[i].key != s->key || seen[i].st != st)) i++;
+                if (i == ns && ns < 16) { seen[ns].key = s->key; seen[ns++].st = st;
+                    VKLOG("set memo atlas-live: stage %d shader %016llx active atlas bindings %#llx", st, (unsigned long long)s->key, (unsigned long long)g_num_atlas); } } }
         if (!g_x_setverify || (g_x_setverify < 2 && !target && ++nv % 64)) { g_set_memo++; return g_smemo[st].set; }
         if (target) { uint64_t n = ++g_x_setverify_target_checks; if (n == 1 || !(n % 128)) VKLOG("set memo targeted verify: shader %016llx checks %llu", (unsigned long long)s->key, (unsigned long long)n); }
         verify = 1; memcpy(vd, dofs, sizeof *dofs * (size_t)s->ndyn); vum = g_num_um; vim = g_num_im;vam=g_num_atlas; }
