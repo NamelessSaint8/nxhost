@@ -10,6 +10,65 @@ memory use, frame-time stalls and broader rendering validation remain open.
   `Lib/agl/agl_resource.Nin_Ounce_NVN2.release.sarc` (BAHS packs, 3,924 of them), the effect set (`Effect/static.…esetb.byml.zs`, 1,017 compute
   programs) and the UI layouts.
 
+## Android session handoff (2026-11-12)
+
+Where the Android port stands, what is proven, and the one item still open. Written to be read cold.
+
+**What runs now.** The tablet is on the stock 0.24 build with the **original** shader bundle, a warm 895 MB driver cache, and the user's own env (`env.txt` md5 `20a4e6f3…`); the alternate extent bundle sits beside it as `shaders-extent.dmsv` (1,908,184,696 bytes, sha256 `18a55755…`) and is selected by one line in `env.txt`. Nothing below is shipped in an APK.
+
+| what | commit | measured |
+|---|---|---|
+| Extent shader bundle (145 fragment programs, mip extent hoisted) | — (bundle only; source is `atlas_glsl.py`) | main 1248x700 pass **41.74 → 24.52 ms**, all passes **55.29 → 39.89 ms**, **13.15 → 15.31/15.37 FPS** parked; later sessions 13.75 and 16.13 ms on that pass; user's verdict **15–27 FPS, no stuttering** |
+| `dmsv_diff.py` — bundle-to-bundle diff | `c8ac652a` | 145 of 11,603 entries differ, all fragment, no stage/flag/reflection change, **no image op and no constant changed**, −49,826 instructions |
+| `video_scan.py` / `pop_tiles.py` — frame-by-frame artefact scan | `724aff3e`, `3ac997a4` | 75 pops per 60 s driven (extent), 165 (original), **0 parked** |
+| Descriptor-memo verifier (`DM_VK_X_SETVERIFY=2`, `…_SHADER`) | `119bb517` | 129 differences over 20 logs: 127 with no atlas binding live, 2 structural; 0 real |
+| Memo atlas-live coverage counter | `f20149cb` | printed in the per-frame line as `atlas-live hits` |
+
+**The one open item: the artifacts the user reports.** Every property checked so far, and the probe that checked it:
+
+| property | probe | result |
+|---|---|---|
+| the two bundles draw the same picture at a parked spot | 3 stills per arm (`pair-orig-*`, `pair-extent-*`) | identical within camera placement; **0.0 % strongly blue** in all six |
+| nothing changes frame to frame at a fixed view | 60 s parked recording (`artifact-parked.mp4`) | **0 pops**; whole-minute mean-luma range **0.87**; largest single-tile change **2.94** |
+| the pops are not new with the extent bundle | 120 s driven clip per bundle | original **330** pops vs extent 75, first pop frame 9 vs 741 |
+| the pops are camera motion, not defects | parked vs driven, same detector | 0 vs 75/165; hot tiles sit at the frame's left and right edges where apparent velocity peaks |
+| the extent recompile cannot move a sample | `dmsv_diff.py` | no image operation, no constant |
+| the set memo returns the same bindings | `SETVERIFY=2`, 20 logs, 1,408 targeted checks on one shader | 0 real differences; the 2 atlas differences are a structural metadata scratch copy |
+| no stripe structure in either arm | column periodicity | strongest lag 3 at r 0.93–0.95 both, i.e. adjacent-column similarity |
+
+**Pick up here — one capture, no build.** Park where the artifact is visible and record 60 s (recipe below). That is the only test that separates the two shapes still standing:
+
+- **Wrong while still** → a static wrong texture. Attribute it with the existing live switch `DM_VK_ATLAS_MUTE=<stage>:<hex shader>:<binding>` on the suspect shader, and the atlas binding is named in one run.
+- **Clean while still** → motion-dependent. Drive slowly through the spot and look for mip/LOD popping. The candidate cause is the atlas's hand-picked trilinear level over a single physical mip, which would explain why it is bundle-independent; the candidate fix is a dense escape to native mips for fully mapped arrays (the RG16 8192² and R8 16384² arrays, 341 MiB each) rather than an atlas change.
+
+**Run recipe.**
+```
+F=/sdcard/Android/data/org.nx2a.mariokartworld/files
+#   bundle: add or remove this line in $F/env.txt, then restart (env is read at launch)
+#   DM_VK_SHADERS=$F/shaders-extent.dmsv
+adb shell "am force-stop org.nx2a.mariokartworld; am start -n org.nx2a.mariokartworld/android.app.NativeActivity"
+adb shell "grep -ao 'shaders[a-z.-]*\.dmsv' $F/log.txt | sort -u"      # which bundle is live
+adb shell "screenrecord --time-limit 60 --bit-rate 24000000 --size 1920x1200 $F/artifact-x.mp4"
+#   wait until `adb shell pidof screenrecord` is empty, THEN pull, or the file has no moov atom
+adb pull $F/artifact-x.mp4 .
+python3 nxnative/dm/android/tools/pop_tiles.py artifact-x.mp4 [artifact-y.mp4]
+ffmpeg -v error -i artifact-x.mp4 -vf scale=320:200 -fps_mode passthrough -f rawvideo -pix_fmt rgb24 - \
+  | python3 nxnative/dm/android/tools/video_scan.py
+adb shell "grep -a 'passes by GPU time' $F/log.txt | tail -1"           # prove a live 3D scene
+```
+
+**Traps this hunt already paid for.**
+- The **user drives**; scripted taps only ever captured menus. `graphics suspended: in-flight GPU work drained` is the user force-stopping the app, not a screen timeout.
+- Pulling during `screenrecord` gives `moov atom not found`; wait for the process to exit.
+- The big pass **moves index and draw count** between sessions — match on 1248x700 plus draw count, never on `#95`.
+- **Pop counts are motion readings.** Only a parked clip is decisive, and two clips must be resampled to one frame rate before their rates are compared.
+- The memo verifier **re-collects** the set it checks, so a clean `SETVERIFY` run cannot fail from a side effect the memo skips; only `DM_VK_X_NOSETMEMO=1` tests that path.
+- The two atlas memo "differences" are structural: `vk_atlas_descriptor` copies the page table into fresh per-submission scratch on every collection.
+- **zram is not the memory lever** — the tablet already runs 12 GiB of it with 3.9 GiB in use, and the pressure is GPU-pinned and already-compressed data.
+- A detached device script outlives the `adb` call that started it, and `pkill -f` matches its own shell; kill by PID with a bracketed pattern.
+
+**Housekeeping left.** Ten commits on `main` are **unpushed** (`origin/main` is at `81e15fd7`). The tree is clean apart from pre-existing untracked entries (`--romfs-image/`, `.qwen/`, `.wolf/`, a `.planning` cache, `dm/tools/mtl_sparse_probe`). Unrun: `DM_VK_IMAGE_BUDGET_MB=0` as a pager test (moot for the pops, still open for the stall question), and the cache-cleared versus cache-kept bundle swap (deprioritised once the memo's structural explanation landed). Evidence for this session is in `android-fps-20261110/cache-swap-20261111/` on the external volume, with copies in `~/Downloads/mkw-pair-20261112/`.
+
 ## Android full-game bring-up (2026-11-10)
 
 The O2 Android release preview **0.17** completes a three-lap Crown City race and reaches results on Lenovo TB323FU / Adreno 840 / Android 16. Checked captures show road, city scenery, riders and the race HUD without the earlier broad pink cast. Preview 0.14 previously completed Mario Bros. Circuit, then stopped late in its second Grand Prix race after stale command headers and an unsupported sampler binding. The [command-copy ownership fix](../../../docs/reference/nvn-objects.md#copied-command-streams-own-their-recorded-bytes) passes old/shallow/final GPU controls; those failure signatures do not recur in the current direct Crown City run. Different routes and broader renderer limits remain untested. Recurring stalls and the 9–10 GB target remain open. The accepted Mac renderer and overlay are preserved.
