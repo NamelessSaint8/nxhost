@@ -83,7 +83,8 @@ uint64_t vk_replay_ns(void) { return g_vkst.ns_exec; }   // the replay time so f
 // uniform updates land at each cut, DM_VK_X_NOKEEP no pass kept for the same targets, DM_VK_X_NOSHC no shadow reuse
 static int g_fdz = 1;  // DM_VK_FDZ (live): fragment-depth variants for draws on depth written by fragment shaders (pipeline key fdz)
 static int g_x_nosetc, g_x_nodrvc, g_x_landcut, g_x_nokeep, g_x_nobc, g_x_cutany, g_lrz_touch, g_xfb_on = 1, g_x_nogs, g_spv_alt; int g_x_noshc;   // g_xfb_on: DM_VK_XFB=0 captures no transform feedback (A/B)
-static int g_x_nosetmemo, g_x_setverify;   // DM_VK_X_NOSETMEMO=1 (live, A/B): no per-stage set memo; DM_VK_X_SETVERIFY=1 (live): one memo hit in 64 checked (see stage_set)
+static int g_x_nosetmemo, g_x_setverify;   // DM_VK_X_NOSETMEMO=1 (live, A/B): no per-stage set memo; DM_VK_X_SETVERIFY=1 samples 1/64 hits, =2 checks every hit
+static uint64_t g_x_setverify_shader, g_x_setverify_target_checks;   // DM_VK_X_SETVERIFY_SHADER=<hex>: verify every hit for this shader
 static int g_rd_touch = 1, g_x_rdkeep, g_x_nskipvs; static uint64_t g_x_skipvs[8];   // DM_VK_RD_TOUCH, DM_VK_X_RDKEEP, DM_VK_X_SKIPVS (see prepare_draw)
 static char g_x_tracesize[40], g_x_traceframe[40]; static int g_x_traceframe_on;
 // Live, deliberately wrong-picture GPU diagnostic: replace active atlas
@@ -171,6 +172,9 @@ static void x_read(void) { const char *c = getenv("DM_VK_CB_DRAWS"); g_x_cbdraws
     g_lrz_touch = !((e = getenv("DM_VK_LRZ_TOUCH")) && !atoi(e)); g_fdz = !((e = getenv("DM_VK_FDZ")) && !atoi(e)); g_xfb_on = !((e = getenv("DM_VK_XFB")) && !atoi(e));
     g_psplit = (e = getenv("DM_VK_PASS_SPLIT")) ? atoi(e) : 0; g_setsplit = (e = getenv("DM_VK_SETSPLIT")) && atoi(e); g_psplit_depth = (e = getenv("DM_VK_PASS_SPLIT_DEPTH")) && atoi(e);
     g_x_rdkeep = (e = getenv("DM_VK_X_RDKEEP")) && atoi(e); g_x_nosetmemo = (e = getenv("DM_VK_X_NOSETMEMO")) && atoi(e); g_x_setverify = (e = getenv("DM_VK_X_SETVERIFY")) && atoi(e);
+    { uint64_t key = (e = getenv("DM_VK_X_SETVERIFY_SHADER")) ? strtoull(e, NULL, 16) : 0;
+      if (key != g_x_setverify_shader) { g_x_setverify_target_checks = 0; if (key) VKLOG("set memo targeted verify: shader %016llx", (unsigned long long)key); }
+      g_x_setverify_shader = key; }
     { int st = -1; unsigned b = 0; unsigned long long key = 0; const char *m = getenv("DM_VK_ATLAS_MUTE"); int all = m && !strcmp(m, "all");
       if (!all && (!m || sscanf(m, "%d:%llx:%u", &st, &key, &b) != 3 || st < 0 || st >= 8 || b >= 64 || !key)) { st = -1; b = 0; key = 0; }
       int mb = st < 0 ? -1 : (int)b;
@@ -1067,7 +1071,7 @@ static void cbuf_desc(int st, const vkshader_t *s, const dmsv_bind *b, VkDescrip
 // sampler IDs (g_samp_gen), memory pools (vk_pool_gen) and the base instance (the driver segment's c0 + 0x644) are unchanged. Images keep the last_use the
 // first build gave them: the fence it names is the same for the whole submission. Not for compute (its driver segment holds the dispatch size and its storage
 // buffers are marked written), nor for a shader that reads handles or addresses from uniform buffer memory (that memory changes under the same bindings).
-// DM_VK_X_NOSETMEMO=1 (live): always collected. DM_VK_X_SETVERIFY=1 (live): one hit in 64 is collected anyway and compared, [RED] on a difference
+// DM_VK_X_NOSETMEMO=1 (live): always collected. DM_VK_X_SETVERIFY=1 samples 1/64 memo hits, =2 collects every hit; [RED] on a difference
 // Atlas shaders (setmemo 3; Mario Kart World Toad's Factory: 886 of 975 main-pass draws, about 12.7 ms a frame collecting) are also keyed on vk_atlas_version.
 // The memo epoch is the atlas epoch (vk_exec_reset is the only g_set_epoch++, the commit the only ++g_fence), so a submission's first draw collects and marks the
 // cells' fences, used_fence and used_frame; mute/census are re-read there too. A verify hash difference alone can be atlas metadata copied again (as good).
@@ -1175,7 +1179,9 @@ static VkDescriptorSet stage_set(int st, vkshader_t *s, uint32_t *dofs) {
     vk_sparse_cpu_poll();
     int memo = st < 3 && !g_x_nosetmemo && !g_tracing && !g_var_now && !g_x_nosetc && !g_x_nodrvc && !g_ubolog_key && g_td_off < 0 && set_memo_ok(s), verify = 0;
     uint32_t vd[96]; uint64_t vum = 0, vim = 0,vam=0;   // verify: what the memo gave
-    if (memo && set_memo_get(st, s, dofs)) { static unsigned nv; if (!g_x_setverify || ++nv % 64) { g_set_memo++; return g_smemo[st].set; }
+    if (memo && set_memo_get(st, s, dofs)) { static unsigned nv; int target = g_x_setverify_shader && s->key == g_x_setverify_shader;
+        if (!g_x_setverify || (g_x_setverify < 2 && !target && ++nv % 64)) { g_set_memo++; return g_smemo[st].set; }
+        if (target) { uint64_t n = ++g_x_setverify_target_checks; if (n == 1 || !(n % 128)) VKLOG("set memo targeted verify: shader %016llx checks %llu", (unsigned long long)s->key, (unsigned long long)n); }
         verify = 1; memcpy(vd, dofs, sizeof *dofs * (size_t)s->ndyn); vum = g_num_um; vim = g_num_im;vam=g_num_atlas; }
     uint64_t gtex = g_tex_gen, gsamp = __atomic_load_n(&g_samp_gen, __ATOMIC_ACQUIRE), gav = memo && s->setmemo == 3 ? vk_atlas_version() : 0; uint32_t gpool = vk_pool_gen();   // before collecting: a change racing it (game thread) leaves the memo outdated
     VkDescriptorSet set = VK_NULL_HANDLE; memo_dyn_t dp[96]; int nd = 0; uint64_t tb0 = tick();
