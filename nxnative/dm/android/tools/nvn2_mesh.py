@@ -6,10 +6,11 @@ layout decoder as Metal; resources retain their original descriptor bindings.
 """
 import re
 
-# The pipeline builder selects one common payload layout for both stages. The
-# default 2 KiB fits the checked programs (356 words) and the Adreno combined
-# payload/shared limit; callers can choose another size after querying limits.
-PAYLOAD_WORDS = 512
+# The pipeline builder selects one common payload layout for both stages, so
+# every task and task-fed mesh must declare the same one. 4 KiB is the largest
+# any title has needed here (Ocarina of Time's mesh stage buffers take 804
+# words) and stays inside the Adreno combined payload/shared limit.
+PAYLOAD_WORDS = 1024
 
 
 def compose(source, info, descriptor_set=0, payload_words=PAYLOAD_WORDS):

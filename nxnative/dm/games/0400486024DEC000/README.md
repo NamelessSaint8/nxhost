@@ -97,21 +97,51 @@ split and built in the background rather than inline in a probe.
   carries the agl `sharcb` packs for the game's own passes (`FoliageShader.sharcb` among them), plus `Lib/agl/agl_resource…sarc.zs` for the engine's
   common set.
 
+## Android (2026-11-14)
+
+The Android host is built from the same profile (`dm/android/build.py --game 0400486024DEC000`, NDK 28.2) and the four modules are rewritten with
+`DM_TARGET=android` (main 48,889 plain sites, 51,720 slot references). The 25 GB RomFS was streamed to the tablet's `/data/local/tmp` and the host run
+headless over adb.
+
+- **It reaches the same graphics frontier as the Mac and past it.** `SetHeapSize` is accepted (heap 6.70 GB of an 8.50 GB region), the 2560x1440
+  swap chain is created, the Vulkan backend reports Adreno 840, `auddmg:u`'s manager (commands 0, 300, 401) and `audsmx:u`'s user session are served,
+  and the run reaches `WindowCrop 0,0 2048x1152` and the first NVN2 submission.
+- **A surviving run presents at the title/UI at about 60 fps.** With the boot shader set, one run stayed alive, logged `frame time p50 16.63 / p95
+  19.41 ms` over 299 frames, GPU p50 0.77 ms, and then idled at the title; another presented 421 frames. The picture is mostly black with a warm 16:9
+  card in the upper left, because the 1920x1080 AV1 intro decoded no picture at that point.
+- **The same `nn::diag` abort is a race.** In most runs the title aborts at the first frame with **Result 0** and an empty message at `sdk+0xb8fe8`
+  (the Mac's frontier), and in others it presents and idles; the boot and title shader sets both produce both outcomes, so the abort is not tied to a
+  shader. The SDK's real caller is not recovered: the host's "call site" is the abort wrapper's own return address, and the stack scan's
+  `main+0x4dca000` points into the module's data. This is the next wall on both platforms.
+- **AV1 is now built for Android.** `android/movie_av1.c` was a stub; it is now the Mac's dav1d path, and `build.py` compiles `dm/third_party/dav1d`
+  plus its arm64 assembly with the NDK (a small `android/dav1d/config.h` clears the Apple build's symbol prefix). The intro is the first thing to
+  re-test once the race no longer stops the run.
+- **The shader bundle** initially covered the 2,376 keys the boot asked for; the title asks for 23 more (`vs_layout`/`ps_layout`), all in
+  `shader_map.tsv`, and the full 56,339-key bundle is building. Three boot shaders (`TerrainGround`, `Model`) use the NVN2 `_cb0_40000000` texture
+  pool array, which the Android chain does not implement yet: their reflection does not fit the bundle ABI and they are skipped.
+
+Run recipe:
+
+```
+DM_GAME=0400486024DEC000 python nxnative/dm/android/build.py --game 0400486024DEC000 --ndk <NDK 28.2> --out <W>/host --exe --lib
+adb push <W>/host/dmhost /data/local/tmp/oot/
+adb shell 'cd /data/local/tmp/oot && DM_ROOT=$PWD DM_ROMFS=$PWD/RomFS DM_SAVE=$PWD/save DM_TEMP=$PWD/temp DM_VK_SHADERS=$PWD/shaders.dmsv ./dmhost mods'
+```
+
 ## Open
 
-- **`auddmg:u`**: the session, the HIPC close and the manager object work. Command 0 now returns a move handle (`0x20000`), and the client sends its
-  manager requests on it (the host adopts the handle and answers). What is not solved is the manager's **answer buffer**: the descriptor resolves to
-  a host address (`0x16d991120`; the three words are logged, `00000800 6d121110 10000000`, and the address differs every run) — so no device count or
-  name is written. A page-mapped test is not a guest test: trying it let the write land in host memory, and that write is reverted. The gap is the
-  pointer-buffer translation this host does not model (`QueryPointerBufferSize` answers 0). The manager's commands and its 0x228-byte properties block are
-  described in the reference port's note.
-- **A second abort follows, and it is not audio.** Past auddmg the run logs `WindowCrop 0,0 2048x1152`, an unimplemented
-  `nvnCommandBufferSetComputeWorkloadPriority`, and then `nn::diag abort` with **Result 0** and an empty message at `sdk+0xb8fe8`
-  (`bt: sdk+0xba138 sdk+0x7bd670 sdk+0x777f30 main+0x21f0c80`). In the same window the renderer says
-  `[RED] program has no vertex shader (or it is not mapped)`, so a draw with one of the 52 missing task/mesh programs is the leading candidate rather
-  than an auddmg failure. `audsmx:u` is served as an object but its `CreateStream` protocol is unimplemented, so audio is a stand-in at both ends.
-- The full translation build (the rest of the 56,339 programs) and the 845 task/mesh programs, which stay refused until this host has a task/mesh pipeline.
+- **`auddmg:u`**: the session, the HIPC close, the manager object and the manager's answer buffer now work. Command 0 returns a move handle and the
+  client sends on it; when the output descriptor resolves to the active caller's stack, the host admits it and `ListVirtualOutputDevices` writes the
+  name and count (the Android run then sends commands 300 and 401). The general pointer-buffer translation is still not modelled
+  (`QueryPointerBufferSize` answers 0), so a descriptor naming ordinary guest memory outside the caller's stack is not written.
+- **A timing-dependent `nn::diag` abort at the first NVN2 frame.** Past the services the run logs `WindowCrop 0,0 2048x1152` and
+  `nvnCommandBufferSetComputeWorkloadPriority`, then `nn::diag abort` with **Result 0** at `sdk+0xb8fe8`. On Android the same profile sometimes
+  presents at the title at about 60 fps instead, and both the boot and title shader sets produce both outcomes, so this is a race rather than a
+  shader. The SDK's real caller is not recovered: the logged site is the abort wrapper's return address, and the stack scan's `main+0x4dca000` is
+  module data. Finding and closing it is the shared next step on Mac and Android.
+- The full translation build (the rest of the 56,339 keys). The Android Vulkan chain translates the native task/mesh programs as EXT task/mesh, so
+  the 845 refused by the Mac chain are not a wall there; the 3 `_cb0_40000000` pool-array shaders and the 8 Ampere-243 programs are skipped.
 - The 38 unimplemented Ampere instructions (`243`, `f8c`, `3a9`).
 - Memory: the 6.22 GB heap is the measured number; the game's `System/HeapSize` table is still unread, and the 12 GiB console layout the title plans
   from is not modelled.
-- Android: untested, and the 25 GB RomFS is the first question there.
+- Android: the 25 GB RomFS reads from the tablet's data partition; the APK and its data pack are not assembled yet.

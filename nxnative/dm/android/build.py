@@ -59,16 +59,21 @@ GFX = srcs('gfx/*.c', 'gfx/nvn/*.c', 'gfx/tex/*.c')
 PORT = [p for p in srcs('android/compat/*.c', 'android/*.c') if not (p.name == 'gfx_null.c' and a.gfx != 'null') and not (p.name.startswith('gfx_vk') and a.gfx != 'vk')]   # one graphics backend
 ASM = srcs('host/entry.S', 'gfx/nvn/nvn_entry.S', 'gfx/nvn/nvn_thunks.S')
 VPX = srcs('third_party/libvpx/**/*.c')
+# dav1d (dm/third_party/dav1d): the AV1 movie decoder (android/movie_av1.c). The same source list and arm64 assembly the Mac host builds.
+DAV1D = ([p for p in srcs('third_party/dav1d/src/*.c') if not p.name.endswith('_tmpl.c')] + [DM / 'third_party/dav1d/src/arm/cpu.c'] +
+         srcs('third_party/dav1d/config/tmpl/*.c') + [p for p in srcs('third_party/dav1d/src/arm/64/*.S') if not p.name.endswith('_tmpl.S') and p.name != 'util.S'])
+DAV1D_INC = [f'-I{DM / "android/dav1d"}', f'-I{DM / "third_party/dav1d"}', f'-I{DM / "third_party/dav1d/include"}', f'-I{DM / "third_party/dav1d/config"}']
+DAV1D_FLAGS = [TARGET, '-O2'] + DBG + ['-fPIC', '-fvisibility=hidden'] + DAV1D_INC
 
 INC = ['-include', str(DM / 'android/compat/include/darwin_compat.h'), f'-I{DM / "android/compat/include"}', f'-I{DM / "host"}', f'-I{DM / "gfx/nvn"}', f'-I{DM / "gfx/tex"}', f'-I{DM / "gfx/nvn/include"}',
-       f'-I{DM / "third_party/vulkan-headers/include"}', f'-I{gen / a.game}', f'-I{DM / "third_party/libvpx"}', f'-I{DM / "third_party/stb_vorbis"}', f'-I{DM / "android"}']
+       f'-I{DM / "third_party/vulkan-headers/include"}', f'-I{gen / a.game}', f'-I{DM / "third_party/libvpx"}', f'-I{DM / "third_party/dav1d/include"}', f'-I{DM / "third_party/stb_vorbis"}', f'-I{DM / "android"}']
 CFLAGS = [TARGET, f'-O{a.O}'] + DBG + ['-fPIC', '-fno-omit-frame-pointer', '-ffixed-x18', '-Wall', '-Wno-unused-function', '-Wno-unused-variable', '-Wno-unused-but-set-variable',
           '-Wno-format', '-Wno-deprecated-declarations', '-Wno-gnu-folding-constant', '-Werror=implicit-function-declaration', '-Werror=return-type',
           '-Werror=incompatible-pointer-types', '-Werror=int-conversion', '-D_GNU_SOURCE', '-DDM_ANDROID=1', '-fno-strict-aliasing', '-fvisibility=hidden'] + (['-DDM_RELEASE=1'] if a.release else [])
 VPX_FLAGS = [TARGET, '-O2'] + DBG + ['-fPIC', f'-I{DM / "third_party/libvpx"}', f'-I{DM / "third_party/libvpx/config"}', '-w']
 
 import hashlib, shutil
-_stamp = obj / 'flags.stamp'; _flags = hashlib.sha256(repr((CFLAGS, INC, VPX_FLAGS, CC)).encode()).hexdigest()
+_stamp = obj / 'flags.stamp'; _flags = hashlib.sha256(repr((CFLAGS, INC, VPX_FLAGS, DAV1D_FLAGS, CC)).encode()).hexdigest()
 if not _stamp.exists() or _stamp.read_text() != _flags:   # compiler flags changed: every object is rebuilt
     shutil.rmtree(obj, ignore_errors=True); obj.mkdir(parents=True, exist_ok=True); _stamp.write_text(_flags)
 
@@ -85,13 +90,17 @@ def dep_stale(o, d, s):
 def compile_one(s):
     rel = s.relative_to(DM); o = obj / (str(rel).replace(os.sep, '_').replace('/', '_') + '.o'); d = o.with_suffix('.d')
     src = s
-    if s.suffix == '.S':   # Mach-O assembly → ELF
+    rels = str(rel).replace(os.sep, '/')
+    if s.suffix == '.S' and 'third_party/dav1d/' not in rels:   # Mach-O assembly → ELF (dav1d's arm64 assembly is already ELF)
         src = gen / (s.stem + '.elf.S')
         conv = DM / 'android/tools/darwin2elf.py'
         if not src.exists() or max(s.stat().st_mtime, conv.stat().st_mtime) > src.stat().st_mtime:
             subprocess.run([sys.executable, str(conv), str(s), str(src)], check=True)
     if not dep_stale(o, d, src): return s, o, 0, ''
-    flags = VPX_FLAGS if 'third_party/libvpx' in str(rel).replace(os.sep, '/') else [TARGET] + DBG if s.suffix == '.S' else CFLAGS + INC
+    if 'third_party/dav1d/' in rels: flags = DAV1D_FLAGS
+    elif 'third_party/libvpx' in rels: flags = VPX_FLAGS
+    elif s.suffix == '.S': flags = [TARGET] + DBG
+    else: flags = CFLAGS + INC
     r = subprocess.run([CC] + flags + ['-MMD', '-MF', str(d), '-c', str(src), '-o', str(o)], capture_output=True, text=True, errors='replace')
     return s, o, r.returncode, r.stderr
 
@@ -104,7 +113,7 @@ def build(files):
             elif err.strip() and '--verbose' in sys.argv: print(err, file=sys.stderr)
     return objs, failed
 
-all_files = HOST + GFX + PORT + ASM
+all_files = HOST + GFX + PORT + ASM + DAV1D
 objs, failed = build(all_files)
 vobjs, vfailed = build(VPX)
 failed += vfailed

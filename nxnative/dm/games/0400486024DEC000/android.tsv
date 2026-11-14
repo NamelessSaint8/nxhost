@@ -1,0 +1,12 @@
+# Bring-up profile: boots on the Mac host to nnMain and the first NVN2 setup, no frame yet.
+# Android is the target; the Mac stays the instrument for finding walls.
+status	experimental
+tested	0.1-bringup Lenovo TB323FU / Adreno 840 / Android 16: first boot under test
+package	org.nx2a.ocarinaoftime
+orientation	landscape
+requires	bcn
+setting	overlay=1
+setting	fps=1
+setting	docked=0
+env	DM_VK_METRICS=1
+env	DM_VK_NOPREWARM=1

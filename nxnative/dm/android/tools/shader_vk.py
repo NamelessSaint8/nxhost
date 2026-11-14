@@ -341,14 +341,21 @@ def main():
     packs = {}
     w = tempfile.mkdtemp(prefix='shvk_', dir=os.environ.get('WORK'))
     jobs, c1s, stages = {}, {}, {}
+    unparseable = collections.Counter()
     for k in keys:
         if k in cap: stages[k], rec = cap[k]
         else:
             name, idx = loc[k]
             if name not in packs: packs[name] = records(open(os.path.join(a.pkg, name), 'rb').read())
             stages[k], rec = name[:2], packs[name][idx]
-        jobs[k], c1s[k] = job_for(k, stages[k], rec, w)
+        try:
+            jobs[k], c1s[k] = job_for(k, stages[k], rec, w)
+        except ValueError as e:
+            unparseable[f'{e}'] += 1
+            print(f'[RED] {k}: {e}', flush=True)
+            continue
         if 'nvn2_mesh' in jobs[k]: stages[k] = 'ts' if jobs[k]['nvn2_mesh']['kind'] == 6 else 'ms'
+    keys = [k for k in keys if k in jobs]
     chunks = [keys[i::a.jobs] for i in range(a.jobs) if keys[i::a.jobs]]
     def xl(ch):
         jp = os.path.join(w, f'job_{abs(hash(ch[0]))}.json'); json.dump([jobs[k] for k in ch], open(jp, 'w'))
@@ -373,23 +380,39 @@ def main():
         for ln in open(GAME.table('shader_pairs.tsv'), encoding='utf-8'):
             c = ln.split()
             if len(c) >= 2 and not ln.startswith('#'): pairs[c[0]].append(c[1])
-    for k in list(spvs):
+    def wrap_mesh(k):
+        """Compose and compile one native task/mesh program. Independent per key, and slow (glslang optimizes the whole body), so the caller runs these in parallel."""
         info = jobs[k].get('nvn2_mesh')
-        if not info: continue
         if info['kind'] == 7:
             read_mask = 0
             for pixel in pairs[k]:
                 if pixel in spvs: read_mask |= spirv_bindings(spvs[pixel])[2][1][0]
             written = {(x-32)//4 for x in info['vertex_lines'] + info['primitive_lines'] if x >= 32}
             info['extra_outputs'] = [x for x in range(32) if read_mask >> x & 1 and x not in written]
-        source = subprocess.run([str(TOOLS/'spirv_cross_bin/spirv-cross'), str(Path(w)/(k+'.spv')), '--vulkan-semantics', '--version', '460'], check=True, capture_output=True, text=True).stdout
-        if a.virtual_atlas: source, virtual_bindings[k] = atlas_glsl.compose(source, stages[k])
-        source = nvn2_mesh.compose(source, info, 0 if info['kind'] == 6 else 2)
-        glsl = Path(w)/(k+('.task' if info['kind'] == 6 else '.mesh')); glsl.write_text(source)
-        target = Path(w)/(k+'.native.spv')
-        subprocess.run(['glslangValidator', '-V', '--target-env', 'vulkan1.2', '-Os', '-S', glsl.suffix[1:], str(glsl), '-o', str(target)], check=True, capture_output=True)
-        subprocess.run(['spirv-val', '--target-env', 'vulkan1.2', str(target)], check=True, capture_output=True)
-        spvs[k] = target.read_bytes()
+        try:
+            source = subprocess.run([str(TOOLS/'spirv_cross_bin/spirv-cross'), str(Path(w)/(k+'.spv')), '--vulkan-semantics', '--version', '460'], check=True, capture_output=True, text=True).stdout
+            if a.virtual_atlas: source, virtual_bindings[k] = atlas_glsl.compose(source, stages[k])
+            source = nvn2_mesh.compose(source, info, 0 if info['kind'] == 6 else 2)
+            glsl = Path(w)/(k+('.task' if info['kind'] == 6 else '.mesh')); glsl.write_text(source)
+            target = Path(w)/(k+'.native.spv')
+            subprocess.run(['glslangValidator', '-V', '--target-env', 'vulkan1.2', '-Os', '-S', glsl.suffix[1:], str(glsl), '-o', str(target)], check=True, capture_output=True)
+            subprocess.run(['spirv-val', '--target-env', 'vulkan1.2', str(target)], check=True, capture_output=True)
+            return k, target.read_bytes()
+        except (subprocess.CalledProcessError, ValueError, OSError) as e:
+            fails[f'mesh wrap: {e}'] += 1
+            print(f'[RED] {k}: native task/mesh wrap failed ({e})', flush=True)
+            return k, None
+    mesh_keys = [k for k in spvs if 'nvn2_mesh' in jobs[k]]
+    if a.virtual_atlas or len(mesh_keys) < 2:
+        for k in mesh_keys:
+            k, data = wrap_mesh(k)
+            if data is None: spvs.pop(k, None)
+            else: spvs[k] = data
+    else:
+        with cf.ThreadPoolExecutor(min(a.jobs, len(mesh_keys))) as ex:
+            for k, data in ex.map(wrap_mesh, mesh_keys):
+                if data is None: spvs.pop(k, None)
+                else: spvs[k] = data
     padded, added, skipped = 0, 0, 0
     for k in list(spvs):
         if stages[k] != 'vs' or k not in pairs: continue
@@ -417,14 +440,20 @@ def main():
         info = jobs[k].get('nvn2_mesh')
         trailer = nvn2_mesh.reflection(info, spv) if info else b''
         flags = int(bool(info)) | (2 if jobs[k].get('arch') == 'sm86' else 0) | (4 if st == 'ps' and virtual_bindings.get(k) else 0)
-        entries.append((int(k, 16), STAGES[st], spv, refl_bin(cl, c1s[k], hdr3) + trailer, flags))
+        try:
+            refl = refl_bin(cl, c1s[k], hdr3) + trailer
+        except struct.error as e:
+            fails[f'reflection does not fit the bundle ABI: {e}'] += 1
+            print(f'[RED] {k}: reflection does not fit the bundle ABI ({e})', flush=True)
+            continue
+        entries.append((int(k, 16), STAGES[st], spv, refl, flags))
     entries.sort(key=lambda e: e[0])
     hdr = struct.pack('<4sII', b'DMSV', 1, len(entries)); ent_sz = 32
     off = len(hdr) + ent_sz * len(entries); table, blobs = [], []
     for key, st, spv, refl, flags in entries:
         table.append(struct.pack('<QIIIIII', key, st, off, len(spv), off + len(spv), len(refl), flags)); blobs += [spv, refl]; off += len(spv) + len(refl)
     with open(a.out, 'wb') as f: f.write(hdr + b''.join(table) + b''.join(blobs))
-    print(f'{len(entries)} of {len(keys)} shaders → {a.out} ({off / 2**20:.1f} MB); failed: {dict(fails)}; binding kinds: {dict(kinds_all)}')
+    print(f'{len(entries)} of {len(keys)} shaders → {a.out} ({off / 2**20:.1f} MB); failed: {dict(fails)}; unparseable: {dict(unparseable)}; binding kinds: {dict(kinds_all)}')
     for e, n in errs.most_common(8): print(f'  translator: {n:5d}  {e}')
 
 if __name__ == '__main__': main()

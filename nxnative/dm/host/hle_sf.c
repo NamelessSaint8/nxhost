@@ -17,17 +17,24 @@ int dm_guest_as_contains(uintptr_t a);   // hle_svc.c: the address lies in the r
 
 #define SF_H0 0xd0000u   // session handles: outside the kernel handle table (0x1000 + slot, 4096 slots, hle_thread.c)
 #define SF_MAX 64
-static struct { char name[16]; int used, domain, anon; uint32_t handle; unsigned seen; } g_sf[SF_MAX];
+static struct { char name[16]; int used, domain, anon; uint32_t handle; unsigned seen, next_obj; } g_sf[SF_MAX];
 static pthread_mutex_t g_sf_mu = PTHREAD_MUTEX_INITIALIZER;
 static const char *const sf_served[] = {"olsc:u", "chat:u", "auddmg:u", "audsmx:u"};
 // Services whose command 0 opens an object (a manager or a user session the guest then sends on): the reply must carry a handle, not zeros.
 static int sf_opens_object(const char *n) { return !strncmp(n, "auddmg:u", 8) || !strncmp(n, "audsmx:u", 8); }
 #define SF_OBJ_H0 0x20000u    // object handles: outside the kernel table (0x1000+slot) and the host's session handles (0xd0000+slot)
 static char g_obj_name[0x1000][10];   // handle - SF_OBJ_H0 → the service whose command 0 returned it, so an adopted session keeps its identity
+static unsigned g_obj_n;              // objects handed out so far: a handle is never reused while its name is here (a title holds several at once)
+static uint32_t sf_obj_new(const char *name) {
+    while (g_obj_n < 0x1000 && g_obj_name[g_obj_n][0]) g_obj_n++;
+    if (g_obj_n == 0x1000) die("sf: more than 4096 service objects");
+    snprintf(g_obj_name[g_obj_n], sizeof g_obj_name[0], "%.8s", name);
+    return SF_OBJ_H0 + g_obj_n++;
+}
 
 static int sf_slot(uint32_t h) {
     unsigned i = h - SF_H0;
-    if (i < SF_MAX && g_sf[i].used && !g_sf[i].anon) return (int)i;   // the handles the host issued: slot = handle - SF_H0
+    if (i < SF_MAX && g_sf[i].used && !g_sf[i].anon && g_sf[i].handle == h) return (int)i;   // the handles the host issued: slot = handle - SF_H0
     for (unsigned k = 0; k < SF_MAX; k++) if (g_sf[k].used && g_sf[k].anon && g_sf[k].handle == h) return (int)k;   // adopted ones, by the handle they came in on
     return -1;
 }
@@ -41,7 +48,7 @@ static int sf_adopt(uint32_t h) {
         snprintf(g_sf[i].name, sizeof g_sf[i].name, "%.8s-mgr", g_obj_name[h - SF_OBJ_H0]);   // an object a service handed out keeps its origin
     else snprintf(g_sf[i].name, sizeof g_sf[i].name, "svc:%#x", h);
     g_sf[i].used = 1; g_sf[i].domain = 0; g_sf[i].anon = 1; g_sf[i].handle = h;
-    g_sf[i].seen = 0;
+    g_sf[i].seen = 0; g_sf[i].next_obj = 2;
     pthread_mutex_unlock(&g_sf_mu);
     return (int)i;
 }
@@ -50,7 +57,7 @@ static uint32_t sf_new(const char *name, int domain) {
     unsigned i = 0; while (i < SF_MAX && g_sf[i].used) i++;
     if (i == SF_MAX) die("sf: more than %d host service sessions", SF_MAX);
     strlcpy(g_sf[i].name, name, sizeof g_sf[i].name); g_sf[i].used = 1; g_sf[i].domain = domain; g_sf[i].anon = 0;
-    g_sf[i].handle = SF_H0 + i; g_sf[i].seen = 0;
+    g_sf[i].handle = SF_H0 + i; g_sf[i].seen = 0; g_sf[i].next_obj = 2;
     pthread_mutex_unlock(&g_sf_mu);
     return SF_H0 + i;
 }
@@ -155,8 +162,17 @@ static Result sf_send(uint32_t h, uint32_t *m, uint64_t size) {
     // no handle leaves the client's object null and it dereferences it (SIGSEGV at sdk+0x2abf00, inside its abort path). The handle is outside the kernel
     // handle table and the host's session handles, and sf_adopt serves it generically once the client sends on it.
     if (!g_sf[i].anon && sf_opens_object(g_sf[i].name) && cmd == 0) {   // the service session opens the object; the object's own command 0 is its first request
-        uint32_t handle = SF_OBJ_H0 + (uint32_t)i;
-        memcpy(g_obj_name[i], g_sf[i].name, 8);
+        // A domain session (audsmx:u's user session is one) returns a domain object: the out-object count in the domain header, then its id in
+        // the first CMIF output word. A move handle here is a different reply shape and leaves the client's object null.
+        if (dom) {
+            uint32_t id = g_sf[i].next_obj++;
+            m[1] = (uint32_t)((end - 8) / 4 < 0x3ff ? (end - 8) / 4 : 0x3ff);
+            *(uint32_t *)(base + 0x10) = 1;
+            uint32_t *oh = (uint32_t *)(base + 0x20); oh[0] = 0x4f434653; oh[1] = ver; oh[2] = RES_OK; oh[3] = 0; oh[4] = id;
+            LOG("sf: %.8s command 0: domain object %u", g_sf[i].name, id);
+            return RES_OK;
+        }
+        uint32_t handle = sf_obj_new(g_sf[i].name);
         m[1] = 0x80000000u | (uint32_t)((end - 8) / 4 < 0x3ff ? (end - 8) / 4 : 0x3ff);   // a special header follows
         uint32_t *sp = (uint32_t *)(base + 8);
         sp[0] = 1u << 5;   // one move handle, no process id
