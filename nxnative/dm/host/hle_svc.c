@@ -592,10 +592,24 @@ static void obs_oom(uint64_t *r, int param) {
     char chain[400]; fp_chain(r[29], chain, sizeof chain);
     LOG("[obs] throw object %#llx type %#llx | %s", (unsigned long long)r[0], (unsigned long long)r[1], chain);
 }
+// The sdk's abort(), whose body is sdk+0x778080 (the dynsym's 0x7780a0 is an interior of the stub cluster): it flushes, then calls the host's bionic abort through
+// the GOT slot at 0xe8f/0xea0 — which is why a guest abort's crash report shows pc=abort+0xa0 and names no guest frame. The gate reads the caller out of the gate
+// block's saved x30 (regs[99] + 8, the address site_obs pushed before entering the gate).
+static void obs_abort_call(uint64_t *r, int param) {
+    (void)param;
+    char chain[400], caller[64];
+    uint64_t sp = r[99];
+    mod_where(sp ? *(const uint64_t *)(uintptr_t)(sp + 8) : 0, caller, sizeof caller);
+    fp_chain(r[29], chain, sizeof chain);
+    LOG("[obs] abort() from %s, x0 %#llx | %s", caller, (unsigned long long)r[0], chain);
+    // The same bargain as the nn::diag park: a background thread that aborts no longer ends the run. The guest's stack and locks stay as they were.
+    if (getenv("DM_ABORT_CONT")) { LOG("[obs] DM_ABORT_CONT: the aborting thread parks here, the rest of the process continues"); for (;;) pause(); }
+}
 __attribute__((constructor)) static void regions_attach(void) {
     gate_obs_set(OBS_REGION_ASK, region_ask); gate_obs_set(OBS_REGION_GOT, region_got); gate_obs_set(OBS_REGION_FREE, region_free);
     gate_obs_set(OBS_STDALLOC_INIT, stdalloc_init); gate_obs_set(OBS_UE_REGION, ue_region);
     gate_obs_set(OBS_OOM, obs_oom);
+    gate_obs_set(OBS_ABORT_CALL, obs_abort_call);
     gate_obs_set(OBS_ARGS, obs_args);
     gate_obs_set(OBS_SDK_ABORT, obs_abort);
 }

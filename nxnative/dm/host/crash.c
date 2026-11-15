@@ -185,6 +185,10 @@ static void on_crash(int sig, siginfo_t *si, void *uc_) {
         }
         fputc('\n', stderr); }
     if (g_dump_hook) g_dump_hook();
+    // DM_ABORT_CONT=1: park this thread after the dump instead of ending the process — the same bargain the nn::diag park makes, applied to a fatal signal, because a
+    // guest that gives up does not always pass a hook the host can see. Ocarina of Time's SIGABRT arrives as the host's own bionic abort on a guest thread whose stack
+    // lives in the guest heap, with no guest frame to gate. This thread's state is whatever it held; crash_gate's alarm(15) is cancelled so it is not killed later.
+    if (getenv("DM_ABORT_CONT")) { alarm(0); fprintf(stderr, "[dm] DM_ABORT_CONT: sig %d parks this thread, the rest of the process continues\n", sig); fflush(stderr); for (;;) pause(); }
     _exit(128 + sig);
 }
 // The signal alternate stack is per thread: every guest thread must call this when it starts running (only then can the crash state be printed on the alternate stack on a stack overflow)
