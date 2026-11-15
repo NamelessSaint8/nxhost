@@ -325,10 +325,23 @@ static void guest_frame_walk(void *hle_frame) {
     }
 }
 // Abort: report the call site (module + offset) and the guest backtrace, then exit
+static void sdk_resolver_report(void) {
+    for (int k = 0; k < g_nmod; k++) if (!strcmp(g_mod[k].name, "sdk")) {
+        uint8_t *b = (uint8_t *)g_mod[k].base;
+        uint64_t r = *(uint64_t *)(b + 0x1055100), c = *(uint64_t *)(b + 0x1055148);
+        uint64_t lo = r & 0xffffffffull; module_t *rm = NULL; uint64_t off = 0;
+        for (int j = 0; j < g_nmod; j++) { uint64_t bl = (uint64_t)(uintptr_t)g_mod[j].base & 0xffffffffull;
+            if (lo >= bl && lo < bl + g_mod[j].size) { rm = &g_mod[j]; off = lo - bl; break; } }
+        LOG("[diag] sdk+0x1055100 resolver = %#llx (%s+%#llx); sdk+0x1055148 SetFlags cache = %#llx",
+            (unsigned long long)r, rm ? rm->name : "?", (unsigned long long)off, (unsigned long long)c);
+        if (rm) { uint32_t w[4]; memcpy(w, (uint8_t *)(uintptr_t)rm->base + off, sizeof w); LOG("[diag] resolver words: %08x %08x %08x %08x", w[0], w[1], w[2], w[3]); }
+    }
+}
 static void diag_abort(uint32_t res, void *lr) {
     module_t *m = module_of(lr);
     LOG("game called nn::diag abort: Result %#x, call site %s+%#llx", res, m ? m->name : "?", m ? (unsigned long long)((uint8_t *)lr - m->base) : (unsigned long long)(uintptr_t)lr);
     guest_frame_walk(__builtin_frame_address(1));
+    sdk_resolver_report();
     dm_backtrace((uint64_t)__builtin_frame_address(1));
     die("game aborted");
 }
