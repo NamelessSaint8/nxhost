@@ -131,6 +131,15 @@ headless over adb.
   `1.15 s`, `0.45 s`, `0.42 s`, then `45.9 s`, `13.9 s` and `2.3 s` — a run spends a minute in the driver before it can go on, and a second
   run pays the same numbers again even though `vk_pipeline_cache.bin` was saved (174 KB). Whether the driver ignores its cache for these
   pipelines or the creation cost is not caching at all is open.
+- **Skipping the dispatches is not what makes the picture black** (measured 2026-11-14, `DM_VK_CSKIP=1`). With every dispatch skipped the run
+  is fast and complete: `frame time p50 16.67 / p95 17.49 ms`, GPU p50 2.09 ms, **`draws 1119, skipped (no program 0, no target 0, no pipeline
+  0)`** — the capture-merged bundle closed the shader gap entirely — and `dispatches 6874 (skipped 6874)`. Every presented frame is
+  **0.00 % lit**. A pass dump of present 400 shows the frame is three passes, `2048x1152` twice and the `2560x1440` present target, and **all
+  three read 0.00 % lit**, so nothing is lost in a composite: the passes are empty of content themselves.
+- **With only the three expensive pipelines skipped, the game dies of `std::bad_alloc`.** `DM_VK_CSKIP=e6be82d835fbe4d3,9442573ee4ace011,
+  0a56002cdc7e1fce` lets the other eight compute programs run (`1.08 s`, `0.44 s`, `0.42 s` of compile) and the run reaches the audio callback
+  at 6,000 frames (about 25 s), then `libc++abi: terminating due to uncaught exception of type St9bad_alloc` and SIGABRT. That message is not
+  routed through `nn::diag`, so `DM_ABORT_CONT` cannot park it: a guest allocation fails and the C++ runtime ends the process.
 - **AV1 is now built for Android and decodes.** `android/movie_av1.c` was a stub; it is now the Mac's dav1d path, and `build.py` compiles
   `dm/third_party/dav1d` plus its arm64 assembly with the NDK (a small `android/dav1d/config.h` clears the Apple build's symbol prefix). A run
   reports `AV1: dav1d 1.5.4 decoding` and `decoder 1: first picture 1920x1080 into buffer 0`.
@@ -175,8 +184,13 @@ the run ends about three seconds in.
   caches compute pipelines at all, and whether those three are being asked for with the local size their NVN2 control section declares.
 - **The host's crash gate.** `crash_gate`'s `none == me` test never `_exit`s on the same thread, so a crashing process can keep presenting
   instead of failing cleanly. `DM_ABORT_CONT` is a deliberate park, not a substitute: the gate itself still needs fixing.
-- **The picture.** Every drawn frame so far is black: with the bundle complete the draws are no longer skipped, but the intro (AV1 + compute)
-  has not yet been followed to the title. The next capture past the compute compiles is what says whether the world draws.
+- **The picture.** Every frame is black and no draw is skipped, so the empty picture is not the shader bundle and not a composite: the frame is
+  three passes (two `2048x1152`, one `2560x1440` present target) and each measures 0.00 % lit on its own. Two candidates remain, and a pass dump
+  with `DM_VK_PASSDUMP=400` plus the per-pass draws (`DM_VK_TRACE_PASS`) tells them apart: the passes draw nothing because the game has nothing to
+  draw yet (it is still loading, and the compute results it needs were skipped), or they draw with a texture or uniform that reads zero.
+- **A guest `std::bad_alloc` ends runs that do real compute.** It arrives through libc++abi, not `nn::diag`, so nothing parks it; the allocation
+  that fails is not named. Raising the heap or catching the throw point is the next memory-side probe (the title plans from a 12 GiB console
+  layout and the host grants 6.70 GB of an 8.50 GB region).
 - The full translation build (the rest of the 56,339 keys). The Android Vulkan chain translates the native task/mesh programs as EXT task/mesh, so
   the 845 refused by the Mac chain are not a wall there; the 3 `_cb0_40000000` pool-array shaders and the 8 Ampere-243 programs are skipped.
 - The 38 unimplemented Ampere instructions (`243`, `f8c`, `3a9`).
