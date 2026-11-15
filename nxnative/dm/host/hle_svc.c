@@ -614,13 +614,20 @@ static void obs_new_fail(uint64_t *r, int param) {
     char chain[400], caller[64];
     uint64_t sp = r[99];
     mod_where(sp ? *(const uint64_t *)(uintptr_t)(sp + 8) : 0, caller, sizeof caller);
-    if (param == 2) {
+    // 2, 4, 5 are entry gates on an allocator: the request is in x0, logged only from 64 MiB up so the log is a list of absurd sizes, not a trace
+    if (param == 2 || param == 4 || param == 5) {
         if (r[0] < (64u << 20)) return;
         fp_chain(r[29], chain, sizeof chain);
-        LOG("[obs] sdk operator new asked for %llu bytes, from %s | %s", (unsigned long long)r[0], caller, chain);
+        LOG("[obs] %s asked for %llu bytes, from %s | %s",
+            param == 2 ? "sdk operator new (aligned)" : param == 4 ? "malloc" : "operator new[]",
+            (unsigned long long)r[0], caller, chain);
         return;
     }
     fp_chain(r[29], chain, sizeof chain);
+    if (param == 3) {                              // main's malloc sets errno = ENOMEM and returns null; the size is already gone from x1 here
+        LOG("[obs] malloc failed (errno path), from %s | %s", caller, chain);
+        return;
+    }
     if (param == 1)
         LOG("[obs] sdk operator new (aligned) failed: align %llu, size %llu, from %s | %s",
             (unsigned long long)r[19], (unsigned long long)r[20], caller, chain);

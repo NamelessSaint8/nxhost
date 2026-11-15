@@ -15,7 +15,13 @@
 #   sdk+0xba124    the message-less nn::diag abort entry: the x29 chain plus a stack scan names the code that gave up.
 OBS = {
     'e0f3ccfaf50065ae4ea01eb5aeb13b1a': [   # main, update 1.1.1 (main.fixups.tsv)
-        (0xf2722c, 29, 'aa1303e1', "operator new failed: x19 is the requested size, the caller is the gate's saved x30"),
+        # main's malloc (main+0x14c6c90): 0x14c6cc8 is its failure path — it sets errno = 0xc (ENOMEM) and returns null — and 0x14c6ca8
+        # is the normal path with the size still in x0. main's operator new[] (main+0xf204a0) is five instructions that move the size
+        # from x0 to x1 before tail-calling 0x3ea70, so 0xf204a4 is its entry with the request in x0.
+        (0x14c6cc8, 29 | 3 << 8, '52800189', 'malloc failure: errno = ENOMEM, returns null'),
+        (0x14c6ca8, 29 | 4 << 8, 'aa0003e1', 'malloc entry: x0 is the requested size'),
+        (0xf204a4, 29 | 5 << 8, 'aa0003e1', 'operator new[] entry: x0 is the requested size'),
+        (0xf2722c, 29, 'aa1303e1', "operator new: x19 is the requested size, the caller is the gate's saved x30"),
         (0x21f09b4, 19, 'aa1503e0', 'creator lookup: x21 is the name it wants, x0.. the name it compares with'),
     ],
     '1643a838814f9c10c696f930ed681e7f': [   # sdk, update 1.1.1 (sdk.fixups.tsv)
