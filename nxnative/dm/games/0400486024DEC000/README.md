@@ -183,3 +183,23 @@ the run ends about three seconds in.
 - Memory: the 6.22 GB heap is the measured number; the game's `System/HeapSize` table is still unread, and the 12 GiB console layout the title plans
   from is not modelled.
 - Android: the 25 GB RomFS reads from the tablet's data partition; the APK and its data pack are not assembled yet.
+
+## Handoff (2026-11-14, Android)
+
+What runs on the Y700 today: `dmhost` built from this profile with the four rewritten modules, the 2,398-shader bundle
+(`android/shaders_world.dmsv`, 168.8 MB) and `DM_ABORT_CONT=1`, reaching 1,500+ presents at p50 16.66 ms with the AV1
+intro decoding and no missing shader. The picture is still black.
+
+The one open item: the three compute pipelines that cost 45.9 s, 13.9 s and 2.3 s to create on every run, which keep a
+35 s run from ever reaching a frame worth capturing. Their bundle keys are not the `shader=%016llx` values the host logs
+(those are the translated module's own key), so the next step is to find how `gfx_vk_exec.c` names them and read their
+local size against the NVN2 control section — or to skip the dispatch behind an opt-in switch and see what the title
+draws without them.
+
+Pick up with this run and read `[vk] replay up to present … skipped (no program N)` plus the `compute pipeline end` lines:
+
+```
+adb shell 'cd /data/local/tmp/oot && DM_ROOT=$PWD DM_ROMFS=$PWD/RomFS DM_SAVE=$PWD/save2 DM_TEMP=$PWD/temp \
+  DM_VK_SHADERS=$PWD/shaders.dmsv DM_ABORT_CONT=1 DM_VK_METRICS=1 DM_VK_SHOT=300,1200 DM_VK_SHOT_DIR=$PWD/shots \
+  timeout 150 ./dmhost mods > log.txt 2>&1'
+```
