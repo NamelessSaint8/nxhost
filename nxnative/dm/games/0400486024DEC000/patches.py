@@ -19,6 +19,10 @@ OBS = {
         (0x21f09b4, 19, 'aa1503e0', 'creator lookup: x21 is the name it wants, x0.. the name it compares with'),
     ],
     '1643a838814f9c10c696f930ed681e7f': [   # sdk, update 1.1.1 (sdk.fixups.tsv)
+        # The sdk's aligned operator new (sdk+0x84f260): 0x84f2d4 is where it gives up (x19 alignment, x20 size after rounding); 0x84f270 is its
+        # entry, logged only when the request is 64 MiB or more. The dynsym's _Znwm value 0x84f2e0 is inside this function's cold block.
+        (0x84f2d4, 29 | 1 << 8, '52800100', 'sdk operator new aligned: give-up path, x19 align, x20 size'),
+        (0x84f270, 29 | 2 << 8, 'f100041f', 'sdk operator new aligned: entry, x0 is the requested size'),
         (0x7780a4, 28, '2a1303e0', "the sdk's abort(): the entry the loader binds is 0x7780a0, so the gate sits inside it"),
         (0x84f668, 27, 'aa0103f4', '__cxa_throw: x1 is the type_info, filtered to the allocation failure'),
         (0xba124, 20, '2a1f03e3', 'nn::diag abort without a message: the call site is in the stack scan'),

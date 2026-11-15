@@ -605,16 +605,27 @@ static void obs_abort_call(uint64_t *r, int param) {
     // The same bargain as the nn::diag park: a background thread that aborts no longer ends the run. The guest's stack and locks stay as they were.
     if (getenv("DM_ABORT_CONT")) { LOG("[obs] DM_ABORT_CONT: the aborting thread parks here, the rest of the process continues"); for (;;) pause(); }
 }
-// main's operator new (_Znwm, main+0xf271c0) gives up at main+0xf2722c, where the requested size is still in x19 and the next instructions tail-call the SDK's
-// exception allocation with w0 = 16 (sizeof(std::bad_alloc)). This is the only place the size that could not be satisfied is readable: the throw itself carries an
-// empty bad_alloc, and the abort it leads to names neither the size nor the caller.
+// An operator new that gives up. The requested size is readable only at the give-up path: the throw carries an empty bad_alloc and the abort that follows names
+// neither the size nor the caller. Three sites, told apart by the gate's parameter:
+//   0  main+0xf2722c  main's _Znwm (main+0xf271c0), where x19 is the request and the next instructions tail-call the exception allocation with w0 = 16
+//   1  sdk+0x84f2d4   the sdk's aligned _Znwm (sdk+0x84f260), where x19 is the alignment and x20 the size after rounding up
+//   2  sdk+0x84f270   that same entry, for every call: logged only when the request is 64 MiB or more, which catches an absurd size without flooding the log
 static void obs_new_fail(uint64_t *r, int param) {
-    (void)param;
     char chain[400], caller[64];
     uint64_t sp = r[99];
     mod_where(sp ? *(const uint64_t *)(uintptr_t)(sp + 8) : 0, caller, sizeof caller);
+    if (param == 2) {
+        if (r[0] < (64u << 20)) return;
+        fp_chain(r[29], chain, sizeof chain);
+        LOG("[obs] sdk operator new asked for %llu bytes, from %s | %s", (unsigned long long)r[0], caller, chain);
+        return;
+    }
     fp_chain(r[29], chain, sizeof chain);
-    LOG("[obs] operator new failed: %llu bytes (%#llx), called from %s | %s", (unsigned long long)r[19], (unsigned long long)r[19], caller, chain);
+    if (param == 1)
+        LOG("[obs] sdk operator new (aligned) failed: align %llu, size %llu, from %s | %s",
+            (unsigned long long)r[19], (unsigned long long)r[20], caller, chain);
+    else
+        LOG("[obs] operator new failed: %llu bytes (%#llx), from %s | %s", (unsigned long long)r[19], (unsigned long long)r[19], caller, chain);
 }
 __attribute__((constructor)) static void regions_attach(void) {
     gate_obs_set(OBS_REGION_ASK, region_ask); gate_obs_set(OBS_REGION_GOT, region_got); gate_obs_set(OBS_REGION_FREE, region_free);
