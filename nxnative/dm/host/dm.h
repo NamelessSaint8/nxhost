@@ -128,7 +128,9 @@ module_t *module_of(const void *p);
 uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs);
 // Observation gates (rewriter OBS tables in the profiles' patches.py, applied by patch_nso.py; numbering matches): read-only callbacks, called on a gate hit once attached
 // IDs 19 / 20 belonged to the removed movie request-ring workaround. Old rewritten modules may still contain them; without callbacks those gates are harmless passes through.
-enum { OBS_UE_MALLOC = 21,                                       // Unreal's FMallocBinned3 constructor call, cut: the object in the register its upper bits name (patch_nso.py, hle_uemalloc.c)
+enum { OBS_ARGS = 19,                                            // a register dump at any gate: x0–x4 and x19–x23 as guest strings, and the x29 chain (hle_svc.c)
+       OBS_SDK_ABORT = 20,                                       // the message-less abort stub next to it: x30 the call site (hle_svc.c)
+       OBS_UE_MALLOC = 21,                                       // Unreal's FMallocBinned3 constructor call, cut: the object in the register its upper bits name (patch_nso.py, hle_uemalloc.c)
        OBS_REGION_ASK = 22, OBS_REGION_GOT = 23, OBS_REGION_FREE = 24,   // the SDK's address regions, gates the rewriter places by symbol in every sdk (patch_nso.py "Address regions", hle_svc.c)
        OBS_STDALLOC_INIT = 25,                                         // StandardAllocator::Initialize's entry, the same way: its callback writes the size (hle_svc.c)
        OBS_UE_REGION = 26,                                             // the store of Unreal's engine region size before nninitStartup reserves it: the register its upper bits name (dm/tools/ue_region.py, hle_svc.c)

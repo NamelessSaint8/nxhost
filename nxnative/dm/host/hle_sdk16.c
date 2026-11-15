@@ -343,6 +343,10 @@ static void diag_abort(uint32_t res, void *lr) {
     guest_frame_walk(__builtin_frame_address(1));
     sdk_resolver_report();
     dm_backtrace((uint64_t)__builtin_frame_address(1));
+    // DM_ABORT_CONT=1 parks this thread here instead of ending the run. A diagnostic, not what the console does: the aborting thread's state is whatever it held
+    // (a lock, a half-built object), so other threads can deadlock behind it. It exists because a title can lose a background thread to std::terminate and still
+    // have a graphics stack worth measuring; Ocarina of Time loses one to a gRPC poll-strategy lookup about three seconds in.
+    if (getenv("DM_ABORT_CONT")) { LOG("[diag] DM_ABORT_CONT: this thread parks at the abort, the rest of the process continues"); for (;;) pause(); }
     die("game aborted");
 }
 HLE_FORCE("_ZN2nn4diag6detail9AbortImplEv", "game aborted", void, h_diag_Abort0, void) { diag_abort(0, __builtin_return_address(0)); }

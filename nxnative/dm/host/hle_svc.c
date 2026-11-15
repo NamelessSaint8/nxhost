@@ -486,9 +486,97 @@ static void ue_region(uint64_t *r, int param) {
     LOG("[mem] Unreal's engine region: %.2f GB asked, %.2f GB of address space, what the alias region has room for", r[param] / 1073741824.0, cap / 1073741824.0);
     r[param] = r[1] = cap;
 }
+// Where a guest address lives, for an observation gate: "sdk+0x6b0f50", or the raw address when no module holds it
+static void mod_where(uint64_t v, char *out, size_t n) {
+    uint64_t lo = v & 0xffffffffull;
+    for (int k = 0; k < g_nmod; k++) {
+        uint64_t bl = (uint64_t)(uintptr_t)g_mod[k].base & 0xffffffffull;
+        if (lo >= bl && lo < bl + g_mod[k].size) { snprintf(out, n, "%s+%#llx", g_mod[k].name, (unsigned long long)(lo - bl)); return; }
+    }
+    snprintf(out, n, "%#llx", (unsigned long long)v);
+}
+// A guest value for an observation gate: the string it points at when a module holds it, otherwise the number
+static void guest_arg(uint64_t v, char *out, size_t n) {
+    uint64_t lo = v & 0xffffffffull;
+    for (int k = 0; v && k < g_nmod; k++) {
+        uint64_t bl = (uint64_t)(uintptr_t)g_mod[k].base & 0xffffffffull;
+        if (lo >= bl && lo < bl + g_mod[k].size) { snprintf(out, n, "\"%.150s\"", (const char *)(uintptr_t)v); return; }
+    }
+    snprintf(out, n, "%#llx", (unsigned long long)v);
+}
+// The guest's x29 chain from a gate: the gate keeps the guest's frame pointer in regs[29], so the call sites that led here can be named without the host's abort report
+static void fp_chain(uint64_t fp, char *out, size_t n) {
+    size_t o = 0;
+    for (int i = 0; i < 8 && fp && !(fp & 7) && fp < (1ull << 48) && o + 40 < n; i++) {
+        uint64_t lr = *(const uint64_t *)(uintptr_t)(fp + 8), nf = *(const uint64_t *)(uintptr_t)fp;
+        char w[48]; mod_where(lr, w, sizeof w);
+        o += (size_t)snprintf(out + o, n - o, "%s%s", i ? " ← " : "", w);
+        if (nf <= fp) break;
+        fp = nf;
+    }
+}
+// Whether a guest address is mapped, so that a gate can read it: the alias region through its page bitmap, the heap through its commit, the stack by its range. A gate
+// that dereferenced a guest pointer without this check took the host down (the alias region is reserved whole, and only the bitmap says which pages hold anything).
+static int guest_readable(uint64_t a, uint64_t n) {
+    if (!a || !n || a + n < a) return 0;
+    uint64_t ab = (uint64_t)(uintptr_t)g_alias;
+    if (g_alias && a >= ab && a + n <= ab + g_alias_cap) {
+        uint64_t base = 0, size = 0; int mapped = 0;
+        alias_query(a, &base, &size, &mapped);
+        return mapped && memory_contains(base, size, a, n);
+    }
+    if (g_heap && dm_guest_heap_readable(a, (size_t)n)) return 1;
+    uint64_t sb = (uint64_t)(uintptr_t)g_stack;
+    return g_stack && a >= sb && a + n <= sb + g_stack_cap;
+}
+// A guest pointer's first words and the text they hold: a registry entry is a {data, length} pair on the heap, which no module-relative lookup follows
+static void guest_words(uint64_t v, char *out, size_t n) {
+    char t[56];
+    if (!guest_readable(v, 32)) { snprintf(out, n, "%#llx", (unsigned long long)v); return; }
+    const uint64_t *w = (const uint64_t *)(uintptr_t)v;
+    uint64_t txt = 0;
+    if (guest_readable(v, 40) && (size_t)snprintf(t, sizeof t, "%.40s", (const char *)(uintptr_t)v) >= 3) txt = v;
+    else if (guest_readable(w[0], 40) && (size_t)snprintf(t, sizeof t, "%.40s", (const char *)(uintptr_t)w[0]) >= 3) txt = w[0];
+    snprintf(out, n, "%#llx[%#llx %#llx %#llx]%s", (unsigned long long)v, (unsigned long long)w[0], (unsigned long long)w[1],
+             (unsigned long long)w[2], txt ? t : "");
+}
+// A generic register dump: the arguments and the object registers as the strings they point at, when a module holds them, plus the first words of what the object
+// registers point at. Only mapped guest memory is read (guest_readable). Placed with the profile's patches.py, which says what the site means.
+static void obs_args(uint64_t *r, int param) {
+    (void)param;
+    char a[5][160], o[5][220], chain[400];
+    for (int k = 0; k < 5; k++) guest_arg(r[k], a[k], sizeof a[k]);
+    for (int k = 0; k < 5; k++) guest_words(r[19 + k], o[k], sizeof o[k]);
+    fp_chain(r[29], chain, sizeof chain);
+    LOG("[obs] args x0..x4 %s %s %s %s %s | x19..x23 %s %s %s %s %s | %s", a[0], a[1], a[2], a[3], a[4], o[0], o[1], o[2], o[3], o[4], chain);
+}
+// A scan of the guest stack for code addresses, which does not depend on frame pointers: the SDK forwards its abort through two-instruction stubs that keep the caller's
+// lr, and the abort entry itself ends in a bare udf, so the x29 chain names the stubs rather than the code that gave up
+static void stack_scan(uint64_t sp, char *out, size_t n) {
+    size_t o = 0;
+    if (!sp) return;
+    for (int i = 0; i < 2048 && o + 44 < n; i++) {
+        uint64_t v = *(const uint64_t *)(uintptr_t)(sp + 8 * (uint64_t)i), lo = v & 0xffffffffull;
+        for (int k = 0; k < g_nmod; k++) {
+            uint64_t bl = (uint64_t)(uintptr_t)g_mod[k].base & 0xffffffffull;
+            if (lo > bl && lo < bl + g_mod[k].size) {
+                o += (size_t)snprintf(out + o, n - o, "%s%s+%#llx", i ? " " : "", g_mod[k].name, (unsigned long long)(lo - bl));
+                break;
+            }
+        }
+    }
+}
+// The message-less abort stub beside it (sdk+0xba110), which is where the SDK's abort() lands: the stack scan is the only evidence of who called it
+static void obs_abort(uint64_t *r, int param) {
+    (void)param;
+    char chain[600], scan[600]; fp_chain(r[29], chain, sizeof chain); stack_scan(r[99], scan, sizeof scan);
+    LOG("[obs] diag abort (no message): fp %s | stack %s", chain, scan);
+}
 __attribute__((constructor)) static void regions_attach(void) {
     gate_obs_set(OBS_REGION_ASK, region_ask); gate_obs_set(OBS_REGION_GOT, region_got); gate_obs_set(OBS_REGION_FREE, region_free);
     gate_obs_set(OBS_STDALLOC_INIT, stdalloc_init); gate_obs_set(OBS_UE_REGION, ue_region);
+    gate_obs_set(OBS_ARGS, obs_args);
+    gate_obs_set(OBS_SDK_ABORT, obs_abort);
 }
 // Pages set in a bitmap's bits [lo, hi), a word at a time: a 62 GB region is 16 million pages, counted under g_map_lock, which every MapPhysicalMemory takes
 static uint64_t bits_set(_Atomic uint64_t *b, uint64_t lo, uint64_t hi) {
