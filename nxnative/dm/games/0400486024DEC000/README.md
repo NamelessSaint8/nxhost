@@ -144,10 +144,10 @@ adb shell 'cd /data/local/tmp/oot && DM_ROOT=$PWD DM_ROMFS=$PWD/RomFS DM_SAVE=$P
   `main+0x21f0c80 → sdk+0x777f30 → sdk+0x7bd670 → sdk+0xba138`, and the name string at `sdk` rodata `0xbc0bce` is
   `nvnTextureBuilderSetFlags` (`0xbc0be8` is the next name, `nvnTextureBuilderSetStorage`). The client is a lazy NVN resolver at
   `sdk+0x6b0d20`: it asks the function pointer in SDK global `0x1055100` for the name, caches the result at `0x1055148`, and asserts on a null
-  (`0x6b11f8`) or on a different cached pointer (`0x6b1204`). The host's `nvnDeviceGetProcAddress` returns a non-null thunk
-  (`0x5ed5d63818` in the traced run) but is called from `main+0x129f77c`, not from the client, so the client's resolver is a guest function
-  returning 0. The next probe is where global `0x1055100` is set (the `0x877d60("nvnDeviceGetProcAddress")` at `0x6b0d5c`) and why that
-  resolver lacks the name. `sdk+0x7bd670` also shows the assertion's stdio lock failing on a null mutex, which is why file and line never print.
+  (`0x6b11f8`) or on a different cached pointer (`0x6b1204`). At the abort `0x1055100` and the SetFlags cache `0x1055148` both read 0, so the client
+  was called with a resolver in `x20` and skipped its own fetch/store. The host's `nvnDeviceGetProcAddress` is called from `main+0x129f77c`, which
+  disassembles as the game's NVN table filler (`mov x0,x20; blr x19; str x0,[table]`), not from the client. The next probe is the resolver passed
+  in `x20` by the client's caller, reached through the factory at `[0x4d33000+0xf8]` (`main+0x21f0b90`).
   The host's crash gate must also be fixed: it lets a post-assert process keep presenting instead of exiting, which is useful for this hunt but
   is not a clean failure.
 - The full translation build (the rest of the 56,339 keys). The Android Vulkan chain translates the native task/mesh programs as EXT task/mesh, so
