@@ -242,22 +242,78 @@ the run ends about three seconds in.
   from is not modelled.
 - Android: the 25 GB RomFS reads from the tablet's data partition; the APK and its data pack are not assembled yet.
 
-## Handoff (2026-11-14, Android)
+## Handoff (2026-11-15, Android)
 
-What runs on the Y700 today: `dmhost` built from this profile with the four rewritten modules, the 2,398-shader bundle
-(`android/shaders_world.dmsv`, 168.8 MB) and `DM_ABORT_CONT=1`, reaching 1,500+ presents at p50 16.66 ms with the AV1
-intro decoding and no missing shader. The picture is still black.
+### What runs now
 
-The one open item: the three compute pipelines that cost 45.9 s, 13.9 s and 2.3 s to create on every run, which keep a
-35 s run from ever reaching a frame worth capturing. Their bundle keys are not the `shader=%016llx` values the host logs
-(those are the translated module's own key), so the next step is to find how `gfx_vk_exec.c` names them and read their
-local size against the NVN2 control section — or to skip the dispatch behind an opt-in switch and see what the title
-draws without them.
+`dmhost` built from this profile, the four rewritten modules, `android/shaders_world.dmsv` (2,398 of 2,409 shaders,
+168.8 MB) and `DM_ABORT_CONT=1`, on the Legion Y700 (TB323FU, Adreno 840).
 
-Pick up with this run and read `[vk] replay up to present … skipped (no program N)` plus the `compute pipeline end` lines:
+| What | Measured | Commit |
+|---|---|---|
+| Title runs to 1,500+ presents, vsync-bound | `frame time p50 16.66–16.67 / p95 17.5 ms`, `GPU p50 1.6–3.1 ms` | `9353d726` |
+| No draw lacks a program any more | `draws 1119, skipped (no program 0, no target 0, no pipeline 0)` per 600 presents | `9353d726` |
+| Bundle covers what the game asks for | 35 keys captured on device, 11 of them absent (all compute); `shader_vk.py --capture` rebuild | `9353d726` |
+| Heap sized as on hardware | reporting the console's 12 GiB makes the game ask more: `[mem] heap 9.20 GB (heap region 15.50 GB)`, was 6.70 GB | `517e1ade` |
+| The ~3 s abort is named and survivable | gRPC creator lookup for `"all"` → `std::terminate`; `DM_ABORT_CONT` parks that thread | `eb4fa63e` |
+| The `bad_alloc` is survivable too | `DM_ABORT_CONT` parks at the fatal **signal**; that run's audio thread then reports 24,000 callbacks | `21852d32` |
+| Compute dispatch can be skipped, all or by key | `DM_VK_CSKIP=1` or a key list; replay summary reports the skipped count | `9353d726` |
+| Both memory refusals are visible | `AllocateAddressRegion` vs `alias_room()`, and `MapPhysicalMemory` past the pool even where `mem_map_limit` is off | `7a4a4087` |
+
+### The one open item: the picture is black, and nothing attributes it
+
+Every presented frame measures 0.00 % lit, and so does each of a frame's three passes (`2048x1152` twice, then the
+`2560x1440` present target) — so nothing is lost in a composite. Everything measurable behind it has been ruled out:
+
+| Property | Verified by | Result |
+|---|---|---|
+| draws are not skipped | `replay up to present … skipped (no program N)` | 0 |
+| no shader is missing from the bundle | host `is not in the bundle` lines | 0 |
+| the three expensive compute programs compile | `compute pipeline end ms=` | 45.9–60.3 s, 13.4–14.5 s, 2.3 s |
+| … and the cheap ones too | same | 1.1 / 0.44 / 0.42 s |
+| the driver cache does not help | `vk_pipeline_cache.bin` 174 KB, same numbers on the next run | — |
+| allocators never fail | gates at `main+0xf2722c`, `sdk+0x84f2d4`, `sdk+0x84f270`, `main+0x14c6cc8`, `main+0x14c6ca8`, `main+0xf204a4` | all silent |
+| no C++ throw passes the sdk | gate at `sdk+0x84f668` (`__cxa_throw`) | silent |
+| the guest is not refused memory | region refusal + pool-crossing reports | 0 of 0; 7 regions, largest 0.30 GB of 16 GB; 0.75 GB of a 12.00 GB pool |
+
+So the black frame is not shaders, not skipping, not the heap, not a refusal and not a throw the host can see.
+
+### Pick up here — one run, no build
+
+`DM_VK_CSKIP` with only the three expensive keys, so the cheap compute runs and the run reaches frames in ~10 s:
 
 ```
 adb shell 'cd /data/local/tmp/oot && DM_ROOT=$PWD DM_ROMFS=$PWD/RomFS DM_SAVE=$PWD/save2 DM_TEMP=$PWD/temp \
-  DM_VK_SHADERS=$PWD/shaders.dmsv DM_ABORT_CONT=1 DM_VK_METRICS=1 DM_VK_SHOT=300,1200 DM_VK_SHOT_DIR=$PWD/shots \
-  timeout 150 ./dmhost mods > log.txt 2>&1'
+  DM_VK_SHADERS=$PWD/shaders.dmsv DM_VK_NOPREWARM=1 DM_ABORT_CONT=1 \
+  DM_VK_CSKIP=e6be82d835fbe4d3,9442573ee4ace011,0a56002cdc7e1fce \
+  DM_VK_METRICS=1 DM_VK_PASSDUMP=400 DM_VK_SHOT=200,600 DM_VK_SHOT_DIR=$PWD/shots \
+  timeout 90 ./dmhost mods > log.txt 2>&1'
 ```
+
+Read `pass_00..02.ppm` luma and the `replay` line. Two branches:
+
+- **Passes still 0.00 % lit** → the draws themselves produce nothing. Take `DM_VK_TRACE_PASS` on one frame to name the
+  programs and their textures, then a `texraw` of what the present pass samples; a zero texture or an identity transform
+  would be visible there.
+- **Passes now have content** → compute is required for the picture, and the work is making the three pipelines compile
+  *once* (a prebuilt/persistent driver cache, or a prewarm pass) rather than per run.
+
+### Traps this hunt already paid for
+
+- `nvnTextureBuilderSetFlags` was **not** the abort: its lazy client (`sdk+0x6b0d20`) is never entered (`eb4fa63e`, `13b50e8a`).
+- A dynsym **value is not an entry point**: `_ZSt17__throw_bad_allocv` `0x7d8f20` is a thunk (body `0x7d91a0`), `_Znwm`
+  `0x84f2e0` lies inside a cold block, `abort` `0x7780a0` is the bound entry of a 16-byte stub (`9b8c742d`, `10e9f99c`).
+- `main` has **no** `__throw_bad_alloc`; it imports `__cxa_throw` and defines `_Znwm`/`malloc` (`9b8c742d`, `eb539566`).
+- A guest abort can arrive as the **host's own bionic abort** on a heap-stacked guest thread, where no patched gate sees it
+  — hence the park at the signal (`21852d32`).
+- `shader_vk.py --keys` also filters the **`--capture`** keys out, so a capture-merged rebuild must pass the union.
+- 48 GiB is `0xc00000000`, not 12 GiB (`0x300000000`); the wrong constant made the game ask for `0xb4ce00000` (`517e1ade`).
+- `mem_map_limit` is off for this profile, so `MapPhysicalMemory` refusals were never enforced *or* logged (`7a4a4087`).
+
+### Housekeeping left
+
+- The `bad_alloc` itself is unnamed: it is intermittent (absent from an 85 s run, present in others) and its throw is not
+  reached by any host-visible gate.
+- `crash_gate`'s `none == me` bug is still there; `DM_ABORT_CONT` is a deliberate park, not a substitute.
+- The three expensive pipelines are not cached between runs (174 KB cache, no effect).
+- `nxnative/dm/games/0400C3F00006E000/README.md` has local edits that are not part of this work.
