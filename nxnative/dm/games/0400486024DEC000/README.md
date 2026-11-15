@@ -154,10 +154,15 @@ headless over adb.
   the body is `sdk+0x7d91a0`, which is why the gate never fired. The live gate is now on `sdk+0x84f668` — `__cxa_throw`'s `mov x20,x1`,
   where `x1` is the `type_info` and its `+8` names the type — filtered to `*St9bad_alloc` so every other exception stays silent, and it
   prints the x29 chain of the code that threw.
-- **The `bad_alloc` is intermittent, and the run that follows is a different death.** A 120 s run with all three expensive pipelines
-  compiled (`45.7 / 13.9 / 2.3 s`) produced **no throw at all** through the gate and no `bad_alloc` message: it ends in a bare
-  `abort()` (host bionic, `pc=abort+0xa0`) about 40 s in. `abort` is defined by the `sdk` (`0x7780a0`, again an interior of a stub
-  cluster) and imported by `main`, so that path needs a hook of its own.
+- **The `bad_alloc` is intermittent, and now survivable.** It does not reproduce every run: one 120 s run with all three expensive
+  pipelines compiled (`45.7 / 13.9 / 2.3 s`) threw nothing at all, while the next reached `libc++abi: terminating due to uncaught
+  exception of type St9bad_alloc` again. `DM_ABORT_CONT` now also parks at a fatal **signal** (crash.c, after the dump, with
+  `crash_gate`'s 15 s alarm cancelled), and the bad_alloc run then carries on: `DM_ABORT_CONT: sig 6 parks this thread, the rest of the
+  process continues`, and its audio thread reports 24,000 callbacks, 19,708 of them not silent, after the park.
+- **That abort never passes a hook the host can gate.** It arrives as the host's own bionic `abort` (`pc=abort+0xa0`, `lr=abort+0x7c`)
+  on a guest thread whose stack is inside the guest heap, and neither the gate on `sdk+0x84f668` (`__cxa_throw`) nor the one on
+  `sdk+0x7780a4` (inside the entry the loader binds for `abort`, `0x7780a0` — the `0x778080` prologue before it belongs to a different
+  function) fires for it. So the signal park is the catch, not a guest-side hook.
 - **AV1 is now built for Android and decodes.** `android/movie_av1.c` was a stub; it is now the Mac's dav1d path, and `build.py` compiles
   `dm/third_party/dav1d` plus its arm64 assembly with the NDK (a small `android/dav1d/config.h` clears the Apple build's symbol prefix). A run
   reports `AV1: dav1d 1.5.4 decoding` and `decoder 1: first picture 1920x1080 into buffer 0`.
