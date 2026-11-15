@@ -140,12 +140,16 @@ adb shell 'cd /data/local/tmp/oot && DM_ROOT=$PWD DM_ROMFS=$PWD/RomFS DM_SAVE=$P
   client sends on it; when the output descriptor resolves to the active caller's stack, the host admits it and `ListVirtualOutputDevices` writes the
   name and count (the Android run then sends commands 300 and 401). The general pointer-buffer translation is still not modelled
   (`QueryPointerBufferSize` answers 0), so a descriptor naming ordinary guest memory outside the caller's stack is not written.
-- **The SDK's `nvnTextureBuilderSetFlags` assertion at the first NVN2 frame.** The guest frame walk in `hle_sdk16.c` resolves
-  `main+0x21f0c80 → sdk+0x777f30 → sdk+0x7bd670 → sdk+0xba138`, and the expression string at `sdk` rodata `0xbc0be8` is
-  `nvnTextureBuilderSetFlags`. The host's setter is called 1,660 times, so the failing branch is the SDK client's own check of its function
-  pointer or its builder's device, not the setter's work; `sdk+0x7bd670` also shows the assertion's stdio lock failing on a null mutex, which is
-  why the file and line are lost. The next probe is the SDK client's builder/device layout. The host's crash gate must also be fixed: it lets a
-  post-assert process keep presenting instead of exiting, which is useful for this hunt but is not a clean failure.
+- **The SDK's `nvnTextureBuilderSetFlags` assertion at the first NVN2 frame.** The guest frame walk resolves
+  `main+0x21f0c80 → sdk+0x777f30 → sdk+0x7bd670 → sdk+0xba138`, and the name string at `sdk` rodata `0xbc0bce` is
+  `nvnTextureBuilderSetFlags` (`0xbc0be8` is the next name, `nvnTextureBuilderSetStorage`). The client is a lazy NVN resolver at
+  `sdk+0x6b0d20`: it asks the function pointer in SDK global `0x1055100` for the name, caches the result at `0x1055148`, and asserts on a null
+  (`0x6b11f8`) or on a different cached pointer (`0x6b1204`). The host's `nvnDeviceGetProcAddress` returns a non-null thunk
+  (`0x5ed5d63818` in the traced run) but is called from `main+0x129f77c`, not from the client, so the client's resolver is a guest function
+  returning 0. The next probe is where global `0x1055100` is set (the `0x877d60("nvnDeviceGetProcAddress")` at `0x6b0d5c`) and why that
+  resolver lacks the name. `sdk+0x7bd670` also shows the assertion's stdio lock failing on a null mutex, which is why file and line never print.
+  The host's crash gate must also be fixed: it lets a post-assert process keep presenting instead of exiting, which is useful for this hunt but
+  is not a clean failure.
 - The full translation build (the rest of the 56,339 keys). The Android Vulkan chain translates the native task/mesh programs as EXT task/mesh, so
   the 845 refused by the Mac chain are not a wall there; the 3 `_cb0_40000000` pool-array shaders and the 8 Ampere-243 programs are skipped.
 - The 38 unimplemented Ampere instructions (`243`, `f8c`, `3a9`).
