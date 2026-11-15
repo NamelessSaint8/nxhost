@@ -420,9 +420,22 @@ static void guest_caller(const uint64_t *r, char *buf, size_t n, uint64_t *via) 
     if (m) snprintf(buf, n, "%s+%#llx", m->name, (unsigned long long)(lr - (uint64_t)(uintptr_t)m->base));
     else snprintf(buf, n, "%#llx", (unsigned long long)lr);
 }
+static uint64_t alias_room(void);   // below: what the alias region has room for in one more region
+// The SDK's VammManager asks for an address region before it can fail; this is where a region that cannot be placed is named, with the size and the room left. The
+// guest's own failure for it surfaces only later, as whatever the caller does with a null region (a bad_alloc, an abort), so the request itself is the evidence.
+static void region_refused_report(uint64_t size) {
+    static _Atomic int n;
+    int k = atomic_fetch_add(&n, 1);
+    if (k < 8 || k % 64 == 0) {
+        uint64_t room = alias_room();
+        LOG("[mem] AllocateAddressRegion refused: %.2f GB asked, %.2f GB of the alias region has room (request #%d)", size / 1073741824.0, room / 1073741824.0, k + 1);
+    }
+}
 static void region_ask(uint64_t *r, int param) {
     (void)param;
     t_rgn_size = r[2]; guest_caller(r, t_rgn_who, sizeof t_rgn_who, &t_rgn_via);
+    uint64_t size = t_rgn_size;
+    if (size >= 0x100000 && size > alias_room()) region_refused_report(size);
 }
 static void region_got(uint64_t *r, int param) {
     mem_init();
@@ -860,13 +873,22 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         // and maps new ones for later allocations, until a map fails: then it unmaps the cached block and retries (measured on the Mac: the refused 4 MB map at +0x43e2c000 was followed by
         // UnmapPhysicalMemory of the 3.15 GB block and the same map again). Without the limit the mapped total went past the pool in the first minute and the freed block stayed mapped.
         // Off by default: Ace Attorney Investigations Collection maps a little more than the 1 GB pool its profile reports
-        if (DM_GAME_MEM_MAP_LIMIT && num == 0x2C) {
+        if (num == 0x2C) {
             int64_t room = (int64_t)APP_POOL - (int64_t)(g_heap_cur + DM_GAME_MEM_USED + big_bss_bytes()) - atomic_load(&g_alias_mapped);
             if (need && need > room) {
-                pthread_mutex_unlock(&g_map_lock);
-                static _Atomic int nref; if (atomic_fetch_add(&nref, 1) < 8) LOG("[mem] MapPhysicalMemory +%#zx refused: %.2f GB mapped, the application pool is full (ResultLimitReached, the SDK frees cached pages and retries)",
-                                                                       size, atomic_load(&g_alias_mapped) / 1073741824.0);
-                regs[0] = 0x10801; return 0;
+                static _Atomic int nref; int k = atomic_fetch_add(&nref, 1);
+                int loud = k < 8 || k % 64 == 0;
+                if (DM_GAME_MEM_MAP_LIMIT) {
+                    // The pool is enforced: refuse, as on hardware, and name the map and the numbers
+                    pthread_mutex_unlock(&g_map_lock);
+                    if (loud) LOG("[mem] MapPhysicalMemory +%#zx refused: %.2f GB mapped, the application pool is full (ResultLimitReached, the SDK frees cached pages and retries) (#%d)",
+                                  size, atomic_load(&g_alias_mapped) / 1073741824.0, k + 1);
+                    regs[0] = 0x10801; return 0;
+                }
+                // The pool is not enforced for this profile, so the map is granted: report it anyway, because this is exactly the point where hardware
+                // refuses and the SDK then frees cached pages or the caller fails. Silence here means the game never asked past the pool at all.
+                if (loud) LOG("[mem] MapPhysicalMemory +%#zx would exceed the application pool (%.2f mapped, %.2f of room): granted, hardware refuses here (#%d)",
+                              size, atomic_load(&g_alias_mapped) / 1073741824.0, room / 1073741824.0, k + 1);
             }
         }
         // Host pages are 16 KB, Horizon pages 4 KB: a map is rounded out to host pages (the extra neighboring 4K pages are inside the alias region and merely become writable early, harmless);
