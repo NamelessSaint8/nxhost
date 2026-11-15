@@ -169,13 +169,13 @@ headless over adb.
   nothing, which rules `main`'s `operator new` out. The `sdk` defines `_Znwm` as well — `sdk+0x84f260` is the **aligned** variant (`x0` size,
   `x1` alignment) and it gives up at `0x84f2d4` with `x19` the alignment and `x20` the size after rounding; the dynsym's value `0x84f2e0`
   is inside that function's cold block, not a separate function.
-- **Two sdk gates are installed, exercised and silent.** They sit on `sdk+0x84f2d4` (the give-up path) and `sdk+0x84f270` (the entry,
-  logged only at 64 MiB and above), numbered `29 | 1<<8` and `29 | 2<<8` so one callback serves all three sites; `sdk.obs.tsv` lists
-  them. A completed 85 s run reached all three expensive compiles (`60.3 / 13.6 / 2.3 s`) and produced neither a give-up line nor a
-  request of 64 MiB or more, and no `bad_alloc` at all that time — the failure is intermittent, so this run neither confirms nor clears
-  the sdk's `operator new`. One caveat on the run before it: the tablet dropped off USB mid-run and returned about two minutes later
-  (`adb devices` empty, then `HA2M2W71` again after a server restart), so a transient link fault — or a reset under the 12 GiB layout
-  with every compute program enabled — is unconfirmed either way.
+- **Five allocator gates are installed and all silent.** One callback (id 29) serves them by parameter: `main+0xf2722c` (`29`),
+  `sdk+0x84f2d4` (`1<<8`), `sdk+0x84f270` (`2<<8`), `main+0x14c6cc8` (`3<<8`, `malloc`'s ENOMEM path), `main+0x14c6ca8` (`4<<8`,
+  `malloc` entry) and `main+0xf204a4` (`5<<8`, `operator new[]` entry) — the entry gates log only from 64 MiB up. `main.obs.tsv` and
+  `sdk.obs.tsv` list them. Two completed runs fired none of them: an 85 s one that reached all three expensive compiles
+  (`60.3 / 13.6 / 2.3 s`) and had no `bad_alloc` at all, and a 95 s one that did abort — but with no `bad_alloc` message, so nothing in
+  it is attributable to an allocation. `malloc`'s own failure path is the strongest of the five: if the heap were simply exhausted, that
+  gate would fire, and it has not.
 - **AV1 is now built for Android and decodes.** `android/movie_av1.c` was a stub; it is now the Mac's dav1d path, and `build.py` compiles
   `dm/third_party/dav1d` plus its arm64 assembly with the NDK (a small `android/dav1d/config.h` clears the Apple build's symbol prefix). A run
   reports `AV1: dav1d 1.5.4 decoding` and `decoder 1: first picture 1920x1080 into buffer 0`.
