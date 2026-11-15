@@ -166,9 +166,14 @@ headless over adb.
 - **The failing size is still unnamed, and it is not `main`'s `operator new`.** `main+0xf2722c` is where `_Znwm` (`main+0xf271c0`) gives
   up with no new handler installed — `x19` still holds the requested size there, and the next instructions tail-call the SDK's exception
   allocation with `w0 = 16` — so a gate sits there (id 29, `main.obs.tsv`). A run that *does* reproduce the `bad_alloc` fired it for
-  nothing, which rules `main`'s `operator new` out. The `sdk` defines `_Znwm` too (`0x84f2e0`, a forwarder whose body is behind the
-  `0x87dxxx` thunks), and `main`'s `_Znam` (`0xf204a0`) and `malloc` (`0x14c6c90`) paths are not gated, so those are the next three
-  candidates.
+  nothing, which rules `main`'s `operator new` out. The `sdk` defines `_Znwm` as well — `sdk+0x84f260` is the **aligned** variant (`x0` size,
+  `x1` alignment) and it gives up at `0x84f2d4` with `x19` the alignment and `x20` the size after rounding; the dynsym's value `0x84f2e0`
+  is inside that function's cold block, not a separate function.
+- **Two sdk gates are installed and unread.** They sit on `sdk+0x84f2d4` (the give-up path) and `sdk+0x84f270` (the entry, logged only at
+  64 MiB and above), numbered `29 | 1<<8` and `29 | 2<<8` so one callback serves all three sites; `sdk.obs.tsv` lists them. The first run
+  with them was cut short when the tablet dropped off USB — `adb devices` is empty even after `adb kill-server`/`start-server` — so there
+  is no reading yet. Note the run that preceded it is the first with both the 12 GiB layout (9.20 GB heap) and every compute program
+  enabled, so a device reset under that footprint is a candidate explanation and worth checking on the tablet itself.
 - **AV1 is now built for Android and decodes.** `android/movie_av1.c` was a stub; it is now the Mac's dav1d path, and `build.py` compiles
   `dm/third_party/dav1d` plus its arm64 assembly with the NDK (a small `android/dav1d/config.h` clears the Apple build's symbol prefix). A run
   reports `AV1: dav1d 1.5.4 decoding` and `decoder 1: first picture 1920x1080 into buffer 0`.
