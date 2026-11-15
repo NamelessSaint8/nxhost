@@ -163,6 +163,12 @@ headless over adb.
   on a guest thread whose stack is inside the guest heap, and neither the gate on `sdk+0x84f668` (`__cxa_throw`) nor the one on
   `sdk+0x7780a4` (inside the entry the loader binds for `abort`, `0x7780a0` — the `0x778080` prologue before it belongs to a different
   function) fires for it. So the signal park is the catch, not a guest-side hook.
+- **The failing size is still unnamed, and it is not `main`'s `operator new`.** `main+0xf2722c` is where `_Znwm` (`main+0xf271c0`) gives
+  up with no new handler installed — `x19` still holds the requested size there, and the next instructions tail-call the SDK's exception
+  allocation with `w0 = 16` — so a gate sits there (id 29, `main.obs.tsv`). A run that *does* reproduce the `bad_alloc` fired it for
+  nothing, which rules `main`'s `operator new` out. The `sdk` defines `_Znwm` too (`0x84f2e0`, a forwarder whose body is behind the
+  `0x87dxxx` thunks), and `main`'s `_Znam` (`0xf204a0`) and `malloc` (`0x14c6c90`) paths are not gated, so those are the next three
+  candidates.
 - **AV1 is now built for Android and decodes.** `android/movie_av1.c` was a stub; it is now the Mac's dav1d path, and `build.py` compiles
   `dm/third_party/dav1d` plus its arm64 assembly with the NDK (a small `android/dav1d/config.h` clears the Apple build's symbol prefix). A run
   reports `AV1: dav1d 1.5.4 decoding` and `decoder 1: first picture 1920x1080 into buffer 0`.
