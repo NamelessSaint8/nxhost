@@ -133,7 +133,13 @@ NVN(nvnDeviceInitialize, NVNboolean, NVNdevice *d, const NVNdeviceBuilder *b) {
 }
 NVN(nvnDeviceFinalize, void, NVNdevice *d) { ((dev_t_ *)d)->magic = 0; }
 NVN(nvnDeviceGetProcAddress, PFNNVNGENERICFUNCPTRPROC, const NVNdevice *d, const char *name) {
-    (void)d; return (PFNNVNGENERICFUNCPTRPROC)nvn_lookup(name);
+    (void)d; void *p = nvn_lookup(name);
+    if (name && !strcmp(name, "nvnTextureBuilderSetFlags")) {
+        module_t *m = module_of(__builtin_return_address(0));
+        LOG("[nvn] GetProcAddress %s -> %p from %s+%#llx", name, p, m ? m->name : "?",
+            m ? (unsigned long long)((uint8_t *)__builtin_return_address(0) - m->base) : (unsigned long long)(uintptr_t)__builtin_return_address(0));
+    }
+    return (PFNNVNGENERICFUNCPTRPROC)p;
 }
 
 // Device properties: values measured on Tegra X1 (nnheaders nvn_DeviceConstantsNX.h, obtained by calling nvnDeviceGetInteger item by item on SMO)
