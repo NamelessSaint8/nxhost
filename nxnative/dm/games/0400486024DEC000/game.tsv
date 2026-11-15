@@ -23,11 +23,15 @@ romfs_marker	System/GameRomConfig/NormalProduct.game__RomConfig.bgyml
 # ---- Memory (provisional: reservations, none measured on this title yet) ----
 # The NPDM declares 48 MB of system resource, so virtual address memory is on (unlike Donkey Kong Bananza). The first boot asked SetHeapSize for
 # 0x18ce00000 (6.22 GB) and the Splatoon Raiders split left only 0x130000000 (4.75 GB), so these are Mario Kart World's reservations, measured on
-# this host: 25 GB reserve less 16 GB alias, 256 MB stack and a 256 MB gap leaves 8.5 GB of heap.
-mem_reserve	0x640000000
+# this host: 25 GB reserve less 16 GB alias, 256 MB stack and a 256 MB gap leaves 8.5 GB of heap. The reserve is now 34 GB (17.5 GB of heap region) so that
+# a heap sized from a 12 GiB total can be granted; like every guest region it is reserved, not committed.
+mem_reserve	0x800000000
 mem_alias	0x400000000
 mem_stack	0x10000000
-app_pool	0x260000000
+# 12 GiB (0x300000000), the console layout this title plans from — titles size their heap from the reported total. At 9.5 GiB the game asked
+# SetHeapSize for 6.66 GB and later died of an uncaught std::bad_alloc with the alias pool only 0.75 GB used; at 48 GiB (a slip: 0xc00000000) it asked
+# for 0xb4ce00000 and died when the host refused. The request tracks the reported total, so the number matters.
+app_pool	0x300000000
 sys_resource	0x3000000
 
 # ---- Shader split (shader_split.py) ----
