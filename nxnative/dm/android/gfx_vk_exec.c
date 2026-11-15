@@ -63,7 +63,7 @@ static int g_psplit, g_psplit_depth, g_psplit_now, g_ord_parts, g_setsplit;   //
 static int g_var_now;   // the bisection's change for the draw being recorded (see g_bis_var)
 static int g_tracing;   // the draw being recorded is the one the bisection found (its descriptors are logged)
 // replay counters, printed by gfx_vk_present.c every 600 presents (draws done and skipped by reason, passes, clears folded into load ops, dispatches)
-struct { uint64_t draws, skip_prog, skip_rt, skip_pipe, passes, folded, dispatches, pipes_built, rt_kept, ns_exec, ns_desc, ns_pipe, max_pass_draws; } g_vkst; static uint64_t g_pass_draws;   // ns_*: time in the replay, its descriptor sets, its pipeline keys and lookups
+struct { uint64_t draws, skip_prog, skip_rt, skip_pipe, passes, folded, dispatches, pipes_built, rt_kept, ns_exec, ns_desc, ns_pipe, max_pass_draws, skip_cs; } g_vkst; static uint64_t g_pass_draws;   // ns_*: time in the replay, its descriptor sets, its pipeline keys and lookups
 static inline uint64_t tnow(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec; }
 // The per-draw timers (about 10 a draw, ~3,000 draws a frame): the arm64 counter register read directly, a few ns against clock_gettime's ~20-40, in ns
 static inline uint64_t tick(void) {
@@ -1778,6 +1778,23 @@ static void dispatch(const p_dispatch *d) {
     if(d->ind){VkBuffer b;VkDeviceSize o;if(!vk_buf_at(d->ind,12,&b,&o) || o%4)die("[RED] [vk] indirect dispatch arguments outside a valid aligned buffer");}
     else if(d->x<0 || d->y<0 || d->z<0 || (uint32_t)d->x>V.props.limits.maxComputeWorkGroupCount[0] || (uint32_t)d->y>V.props.limits.maxComputeWorkGroupCount[1] || (uint32_t)d->z>V.props.limits.maxComputeWorkGroupCount[2])die("[RED] [vk] dispatch group count exceeds device limits");
     g_vkst.dispatches++;
+    // DM_VK_CSKIP skips compute dispatches: 1 (or "all") skips every one, otherwise a comma list of shader keys skips just those. A title's compute
+    // pipelines cost the Adreno driver up to a minute each to create (Ocarina of Time: 45.9 s for one), which a run cannot pay before the draws behind
+    // it can be looked at. The buffers a skipped dispatch would have filled keep whatever they held, so the picture is a diagnostic, not a frame.
+    static char cskip[512] = {0}; static int cskip_on = -1;
+    if (cskip_on < 0) { const char *e = getenv("DM_VK_CSKIP"); cskip_on = e && *e && strcmp(e, "0"); if (cskip_on) snprintf(cskip, sizeof cskip, "%s", e); }
+    if (cskip_on) {
+        int match = !strcmp(cskip, "1") || !strcmp(cskip, "all");
+        if (!match) { char k[20]; snprintf(k, sizeof k, "%016llx", (unsigned long long)cs->key);
+            for (const char *f = cskip; !match && f && *f;) { const char *c = strchr(f, ','); size_t n = c ? (size_t)(c - f) : strlen(f);
+                match = n == 16 && !strncmp(f, k, 16); f = c ? c + 1 : NULL; } }
+        if (match) {
+            g_vkst.skip_cs++;
+            static _Atomic int shown;
+            if (atomic_fetch_add(&shown, 1) < 12) VKLOG("dispatch %016llx %dx%dx%d%s skipped (DM_VK_CSKIP)", (unsigned long long)cs->key, d->x, d->y, d->z, d->ind ? " (indirect)" : "");
+            return;
+        }
+    }
     vk_end_pass_land();
     VkDescriptorSetLayout dsl[5] = {cs->dsl}; VkPipelineLayout layout = vk_pipeline_layout(dsl, 1, 0);
     g_dispatch_ind=d->ind;g_dispatch[0]=(uint32_t)d->x;g_dispatch[1]=(uint32_t)d->y;g_dispatch[2]=(uint32_t)d->z;
