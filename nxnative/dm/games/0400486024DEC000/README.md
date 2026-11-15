@@ -106,19 +106,34 @@ headless over adb.
 - **It reaches the same graphics frontier as the Mac and past it.** `SetHeapSize` is accepted (heap 6.70 GB of an 8.50 GB region), the 2560x1440
   swap chain is created, the Vulkan backend reports Adreno 840, `auddmg:u`'s manager (commands 0, 300, 401) and `audsmx:u`'s user session are served,
   and the run reaches `WindowCrop 0,0 2048x1152` and the first NVN2 submission.
-- **A post-assert run presents at the title/UI at about 60 fps.** The process continues after the first-frame assertion below (the host's crash gate
-  does not exit on the same thread), and one such run logged `frame time p50 16.63 / p95 19.41 ms` over 299 frames, GPU p50 0.77 ms; another
-  presented 421 frames. The picture is mostly black with a warm 16:9 card in the upper left, because the 1920x1080 AV1 intro decoded no picture at
-  that point.
-- **The first frame is a deterministic SDK assertion, not a race.** The `nn::diag` abort at `sdk+0xb8fe8` is the SDK's own
-  `nvnTextureBuilderSetFlags` check: the host's new guest frame walk resolves `main+0x21f0c80 → sdk+0x777f30 → sdk+0x7bd670 → sdk+0xba138`, and
-  the SDK's expression string at `sdk` rodata `0xbc0be8` is `nvnTextureBuilderSetFlags`. The host's setter is called **1,660 times**, so the
-  failing path is the SDK client's check of its own function pointer or its builder's device, not the setter's work. The process sometimes
-  `_exit`s and sometimes keeps presenting; that difference is the host crash gate (`crash_gate`'s `none == me` test never exits on the same
-  thread), not the game.
-- **AV1 is now built for Android.** `android/movie_av1.c` was a stub; it is now the Mac's dav1d path, and `build.py` compiles `dm/third_party/dav1d`
-  plus its arm64 assembly with the NDK (a small `android/dav1d/config.h` clears the Apple build's symbol prefix). The intro is the first thing to
-  re-test once the texture-builder assertion is understood.
+- **The title presents at 60 fps once the abort is parked** (numbers under the abort entry below). Earlier post-assert runs that kept presenting
+  did so through the host crash gate's `none == me` miss, not by design.
+- **The abort is `std::terminate` from a name lookup, not an NVN check** (measured 2026-11-14, correcting the first reading). The `nn::diag`
+  abort carries no message at all — `VAbortImpl` gets empty `fn`/`expr`/`file`/`fmt` — and the guest frame chain names only the SDK's
+  forwarding stubs (`sdk+0xba138 ← sdk+0x7bd670 ← sdk+0x777f30`), because each stub keeps the caller's `lr`. The SDK's
+  `nvnTextureBuilderSetFlags` client at `sdk+0x6b0d20` never runs in this frame: gates on its boss block and on the SetFlags slot
+  (`sdk+0x6b0f50`) never fire, and `sdk+0x1055100` / `sdk+0x1055148` are simply still zero because the client was never entered.
+  Two gates do fire: `sdk+0xba124` (the message-less abort entry, with a stack scan of the guest's stack) and `main+0x21f09b4` (a register
+  dump inside the lookup). Together they place it: `main+0x21f0c7c` calls the SDK's terminate wrapper, guarded by `cbz x8` on a creator
+  looked up at `main+0x21f0c9x` eleven instructions earlier; the registry at `main+0x4d330a0..f8` holds exactly two filled entries, `"poll"`
+  (`main+0x21f1280`) and `"none"` (`main+0x21f0fb0`), the rest are sentinels with a null creator, and the name the game asks for is **`"all"`**
+  (a `std::string` on the alias heap, three characters, whose `strcmp` matches nothing). The call chain is `main+0x21e3c30 → main+0x21eaa50
+  → the lookup → terminate`; the surrounding strings (`grpc_poll_strategy`, `grpc.so_reuseport`, `rpc.experimental.tcp_max_read_chunk_size`)
+  put it in the game's gRPC init, i.e. a background thread, not the render thread.
+- **`DM_ABORT_CONT=1` parks the aborting thread and the title runs** (a diagnostic, not the console's behaviour: the parked thread may hold
+  a lock). With it the run reaches **1,500+ presents**: `frame time p50 16.66 / p95 17.5 ms`, frame work p50 16.6 ms, GPU p50 1.6–3.1 ms —
+  vsync-bound at 60 fps, so the 20–30 fps target is met on everything this title draws so far.
+- **The picture is black because the draws have no program, not because of the abort.** One 600-present window reported
+  `draws 1229, skipped (no program 1092)`. The host captured each missing key into `captured_shaders/` (35 files, 384 KB); 24 of them were
+  already in the package and **11 were not — all compute**. `shader_vk.py … --capture captured_shaders` with a key list that includes them
+  builds **2,398 of 2,409 shaders (168.8 MB)**, and the `is not in the bundle` errors are gone.
+- **The new wall is Adreno compute pipeline creation.** With those 11 compute shaders present, the first dispatch of each compiles for
+  `1.15 s`, `0.45 s`, `0.42 s`, then `45.9 s`, `13.9 s` and `2.3 s` — a run spends a minute in the driver before it can go on, and a second
+  run pays the same numbers again even though `vk_pipeline_cache.bin` was saved (174 KB). Whether the driver ignores its cache for these
+  pipelines or the creation cost is not caching at all is open.
+- **AV1 is now built for Android and decodes.** `android/movie_av1.c` was a stub; it is now the Mac's dav1d path, and `build.py` compiles
+  `dm/third_party/dav1d` plus its arm64 assembly with the NDK (a small `android/dav1d/config.h` clears the Apple build's symbol prefix). A run
+  reports `AV1: dav1d 1.5.4 decoding` and `decoder 1: first picture 1920x1080 into buffer 0`.
 - **The shader bundle** covered the 2,376 keys the boot asked for; the title asks for 23 more (`vs_layout`/`ps_layout`), all in `shader_map.tsv`,
   and a title bundle with them loads (2,386 of 2,397). The full 56,339-key build reached the end of translation but the process died while wrapping
   the 847 task/mesh programs with every SPIR-V resident (the temp directory held 169,093 files / 5.8 GB); 13 of the first 94 mesh programs also
@@ -130,9 +145,16 @@ Run recipe:
 
 ```
 DM_GAME=0400486024DEC000 python nxnative/dm/android/build.py --game 0400486024DEC000 --ndk <NDK 28.2> --out <W>/host --exe --lib
-adb push <W>/host/dmhost /data/local/tmp/oot/
-adb shell 'cd /data/local/tmp/oot && DM_ROOT=$PWD DM_ROMFS=$PWD/RomFS DM_SAVE=$PWD/save DM_TEMP=$PWD/temp DM_VK_SHADERS=$PWD/shaders.dmsv ./dmhost mods'
+DM_GAME=0400486024DEC000 python nxnative/dm/android/tools/shader_vk.py <W>/shader/pkg <W>/android/shaders_world.dmsv \
+    --keys "$(cat <W>/android/keys_world.txt)" --capture <W>/android/captured_shaders
+adb push <W>/host/dmhost <W>/android/shaders_world.dmsv /data/local/tmp/oot/
+adb shell 'cd /data/local/tmp/oot && DM_ROOT=$PWD DM_ROMFS=$PWD/RomFS DM_SAVE=$PWD/save DM_TEMP=$PWD/temp DM_VK_SHADERS=$PWD/shaders.dmsv \
+    DM_ABORT_CONT=1 DM_VK_METRICS=1 ./dmhost mods'
 ```
+
+`keys_world.txt` is `keys_title.txt` union the captured keys: `--keys` filters, and it filters the captures out too, so a bundle built with the
+title list alone silently leaves out the very programs a run just captured. `DM_ABORT_CONT` parks the gRPC `std::terminate` thread; without it
+the run ends about three seconds in.
 
 ## Open
 
@@ -140,16 +162,21 @@ adb shell 'cd /data/local/tmp/oot && DM_ROOT=$PWD DM_ROMFS=$PWD/RomFS DM_SAVE=$P
   client sends on it; when the output descriptor resolves to the active caller's stack, the host admits it and `ListVirtualOutputDevices` writes the
   name and count (the Android run then sends commands 300 and 401). The general pointer-buffer translation is still not modelled
   (`QueryPointerBufferSize` answers 0), so a descriptor naming ordinary guest memory outside the caller's stack is not written.
-- **The SDK's `nvnTextureBuilderSetFlags` assertion at the first NVN2 frame.** The guest frame walk resolves
-  `main+0x21f0c80 → sdk+0x777f30 → sdk+0x7bd670 → sdk+0xba138`, and the name string at `sdk` rodata `0xbc0bce` is
-  `nvnTextureBuilderSetFlags` (`0xbc0be8` is the next name, `nvnTextureBuilderSetStorage`). The client is a lazy NVN resolver at
-  `sdk+0x6b0d20`: it asks the function pointer in SDK global `0x1055100` for the name, caches the result at `0x1055148`, and asserts on a null
-  (`0x6b11f8`) or on a different cached pointer (`0x6b1204`). At the abort `0x1055100` and the SetFlags cache `0x1055148` both read 0, so the client
-  was called with a resolver in `x20` and skipped its own fetch/store. The host's `nvnDeviceGetProcAddress` is called from `main+0x129f77c`, which
-  disassembles as the game's NVN table filler (`mov x0,x20; blr x19; str x0,[table]`), not from the client. The next probe is the resolver passed
-  in `x20` by the client's caller, reached through the factory at `[0x4d33000+0xf8]` (`main+0x21f0b90`).
-  The host's crash gate must also be fixed: it lets a post-assert process keep presenting instead of exiting, which is useful for this hunt but
-  is not a clean failure.
+- **The `"all"` creator lookup.** The abort is understood as far as its call site (`main+0x21f0c7c` → the SDK's terminate wrapper) and its
+  trigger (a null creator for the name `"all"` in the registry at `main+0x4d330a0..f8`, which holds only `"poll"` and `"none"`). What is not
+  understood is why the game asks for `"all"` in a registry with those two entries: on the console the same code must find something, so either
+  the registry is populated differently there (four of its six slots hold a `"tail_custom"` sentinel in this build) or the name comes from
+  configuration the host does not serve. The strings around it are gRPC's (`grpc_poll_strategy`, `grpc.so_reuseport`), and gRPC's poll-strategy
+  names in tree are `epoll1` / `epoll` / `epollex` / `poll` / `none` — `"all"` is not one of them, so the naming deserves a second look before
+  any more of the chain is read.
+- **Adreno compute pipeline creation: a minute a run.** The 11 captured compute programs compile once each, and three of them take `45.9 s`,
+  `13.9 s` and `2.3 s` — on a second run too, with `vk_pipeline_cache.bin` (174 KB) loaded and re-saved. A run therefore spends most of a minute
+  in the driver before the title can continue, which is why no capture has yet been taken past the intro. Worth checking whether the driver
+  caches compute pipelines at all, and whether those three are being asked for with the local size their NVN2 control section declares.
+- **The host's crash gate.** `crash_gate`'s `none == me` test never `_exit`s on the same thread, so a crashing process can keep presenting
+  instead of failing cleanly. `DM_ABORT_CONT` is a deliberate park, not a substitute: the gate itself still needs fixing.
+- **The picture.** Every drawn frame so far is black: with the bundle complete the draws are no longer skipped, but the intro (AV1 + compute)
+  has not yet been followed to the title. The next capture past the compute compiles is what says whether the world draws.
 - The full translation build (the rest of the 56,339 keys). The Android Vulkan chain translates the native task/mesh programs as EXT task/mesh, so
   the 845 refused by the Mac chain are not a wall there; the 3 `_cb0_40000000` pool-array shaders and the 8 Ampere-243 programs are skipped.
 - The 38 unimplemented Ampere instructions (`243`, `f8c`, `3a9`).
