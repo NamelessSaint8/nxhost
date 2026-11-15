@@ -309,10 +309,26 @@ HLE_FORCE("_ZN2nn2vi39SetLayerNextHdrAdjustableBezierMetadataEPNS0_5LayerEfff", 
 HLE_FORCE("_ZN2nn4diag6detail7PutImplERKNS0_11LogMetaDataEPKcm", "game log → host log", void, h_diag_Put, const void *meta, const char *s, size_t n) {
     (void)meta; while (n && (s[n - 1] == '\n' || s[n - 1] == '\0')) n--; if (n) LOG("[game] %.*s", (int)n, s);
 }
+// Walk the guest's frame chain from the x29 the HLE entry saved: the SDK's bare Abort() is reached through a function pointer, so the
+// host's return address names only the abort wrapper. A frame shows the SDK function that called it and, above that, the game's caller.
+static void guest_frame_walk(void *hle_frame) {
+    uint64_t fp = *(uint64_t *)hle_frame;
+    for (int i = 0; i < 24 && fp > 0x100000000ull && !(fp & 7); i++) {
+        uint64_t lr = *(uint64_t *)(fp + 8), next = *(uint64_t *)fp;
+        uint64_t lo = lr & 0xffffffffull;   // a PAC-signed return address keeps the low 32 bits (the module window) intact; the tag replaces the high half
+        module_t *m = NULL; uint64_t off = 0;
+        for (int k = 0; k < g_nmod; k++) { uint64_t bl = (uint64_t)(uintptr_t)g_mod[k].base & 0xffffffffull;
+            if (lo >= bl && lo < bl + g_mod[k].size) { m = &g_mod[k]; off = lo - bl; break; } }
+        LOG("  guest frame %d: %s+%#llx (fp %#llx)", i, m ? m->name : "?", m ? (unsigned long long)off : (unsigned long long)lo, (unsigned long long)fp);
+        if (next <= fp || next - fp > 0x100000) break;
+        fp = next;
+    }
+}
 // Abort: report the call site (module + offset) and the guest backtrace, then exit
 static void diag_abort(uint32_t res, void *lr) {
     module_t *m = module_of(lr);
     LOG("game called nn::diag abort: Result %#x, call site %s+%#llx", res, m ? m->name : "?", m ? (unsigned long long)((uint8_t *)lr - m->base) : (unsigned long long)(uintptr_t)lr);
+    guest_frame_walk(__builtin_frame_address(1));
     dm_backtrace((uint64_t)__builtin_frame_address(1));
     die("game aborted");
 }
