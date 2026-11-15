@@ -119,9 +119,12 @@ headless over adb.
 - **AV1 is now built for Android.** `android/movie_av1.c` was a stub; it is now the Mac's dav1d path, and `build.py` compiles `dm/third_party/dav1d`
   plus its arm64 assembly with the NDK (a small `android/dav1d/config.h` clears the Apple build's symbol prefix). The intro is the first thing to
   re-test once the texture-builder assertion is understood.
-- **The shader bundle** initially covered the 2,376 keys the boot asked for; the title asks for 23 more (`vs_layout`/`ps_layout`), all in
-  `shader_map.tsv`, and the full 56,339-key bundle is building. Three boot shaders (`TerrainGround`, `Model`) use the NVN2 `_cb0_40000000` texture
-  pool array, which the Android chain does not implement yet: their reflection does not fit the bundle ABI and they are skipped.
+- **The shader bundle** covered the 2,376 keys the boot asked for; the title asks for 23 more (`vs_layout`/`ps_layout`), all in `shader_map.tsv`,
+  and a title bundle with them loads (2,386 of 2,397). The full 56,339-key build reached the end of translation but the process died while wrapping
+  the 847 task/mesh programs with every SPIR-V resident (the temp directory held 169,093 files / 5.8 GB); 13 of the first 94 mesh programs also
+  failed `glslangValidator` with exit 2. The practical path is the boot+title bundle plus the keys the game captures at run time; a full build needs
+  a streaming writer and those failures keyed. Three boot shaders (`TerrainGround`, `Model`) use the NVN2 `_cb0_40000000` texture pool array,
+  which the Android chain does not implement yet: their reflection does not fit the bundle ABI and they are skipped.
 
 Run recipe:
 
