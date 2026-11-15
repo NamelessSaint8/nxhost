@@ -145,9 +145,19 @@ headless over adb.
   then aborts with no message at all. Letting **all** compute run, the same 9.20 GB heap reaches the three 45.9 / 13.4 / 2.3 s compiles and
   then `libc++abi: terminating due to uncaught exception of type St9bad_alloc` at about 40 s. So the failing allocation follows those three
   shaders — they are the ones this port added from run-time captures — and more heap does not move it.
-- **The thrower is in `main`, not the `sdk`.** A gate on `sdk+0x7d8f44` (`std::__throw_bad_alloc`'s `mov x19,x0`) never fires, and `main`
-  exports its own `_ZTISt9bad_alloc`, so `main` carries its own libc++ copy; the gate needs `main`'s throw site, which is not a dynamic
-  symbol. `bad_alloc` also never passes through `nn::diag`, so `DM_ABORT_CONT` cannot park it.
+- **`main` has no `__throw_bad_alloc` of its own** (measured 2026-11-14). Its dynamic table *imports* `__cxa_throw` and *defines*
+  `_Znwm` (`main+0xf271c0`, 132 bytes) and `malloc` (`main+0x14c6c90`), so an allocation failure in `main` tails into the **sdk's**
+  `__cxa_throw` — that is where the throw is, not in a local `__throw_bad_alloc`. `_ZTISt9bad_alloc` and `_ZTSSt9bad_alloc` are `main`'s
+  (`0x4958438`, `0x3ed3339`) and the `sdk` binds to them, but no `adrp`/relocation in `main` refers to the typeinfo, which is what
+  pointed away from a local thrower in the first place.
+- **The gate on `sdk+0x7d8f44` was on the wrong address.** The dynsym's `_ZSt17__throw_bad_allocv` value `0x7d8f20` is a thunk cluster;
+  the body is `sdk+0x7d91a0`, which is why the gate never fired. The live gate is now on `sdk+0x84f668` — `__cxa_throw`'s `mov x20,x1`,
+  where `x1` is the `type_info` and its `+8` names the type — filtered to `*St9bad_alloc` so every other exception stays silent, and it
+  prints the x29 chain of the code that threw.
+- **The `bad_alloc` is intermittent, and the run that follows is a different death.** A 120 s run with all three expensive pipelines
+  compiled (`45.7 / 13.9 / 2.3 s`) produced **no throw at all** through the gate and no `bad_alloc` message: it ends in a bare
+  `abort()` (host bionic, `pc=abort+0xa0`) about 40 s in. `abort` is defined by the `sdk` (`0x7780a0`, again an interior of a stub
+  cluster) and imported by `main`, so that path needs a hook of its own.
 - **AV1 is now built for Android and decodes.** `android/movie_av1.c` was a stub; it is now the Mac's dav1d path, and `build.py` compiles
   `dm/third_party/dav1d` plus its arm64 assembly with the NDK (a small `android/dav1d/config.h` clears the Apple build's symbol prefix). A run
   reports `AV1: dav1d 1.5.4 decoding` and `decoder 1: first picture 1920x1080 into buffer 0`.
