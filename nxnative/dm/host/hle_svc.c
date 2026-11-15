@@ -572,16 +572,25 @@ static void obs_abort(uint64_t *r, int param) {
     char chain[600], scan[600]; fp_chain(r[29], chain, sizeof chain); stack_scan(r[99], scan, sizeof scan);
     LOG("[obs] diag abort (no message): fp %s | stack %s", chain, scan);
 }
-// std::__throw_bad_alloc (sdk+0x7d8f30), gated on the `mov x19,x0` after its prologue: x0 is the exception object's slot, and the registers and frame the caller
-// left behind hold the size that could not be satisfied. A guest allocation failure otherwise reaches the host only as "terminating due to uncaught exception of
-// type St9bad_alloc", which names neither the size nor the caller.
+// __cxa_throw(object, type_info, destructor) — every C++ throw in the process, which is why the callback filters on the type name and stays silent otherwise. An
+// allocation failure reaches the host only as "terminating due to uncaught exception of type St9bad_alloc", which names neither the size nor the caller; here the
+// type_info's +8 is its mangled name ("*St9bad_alloc") and the x29 chain gives the code that gave up.
 static void obs_oom(uint64_t *r, int param) {
     (void)param;
-    char chain[400], a[5][160], o[3][160];
-    fp_chain(r[29], chain, sizeof chain);
-    for (int k = 0; k < 5; k++) guest_arg(r[k], a[k], sizeof a[k]);
-    for (int k = 0; k < 3; k++) guest_arg(r[19 + k], o[k], sizeof o[k]);
-    LOG("[obs] bad_alloc: x0..x4 %s %s %s %s %s | x19..x21 %s %s %s | %s", a[0], a[1], a[2], a[3], a[4], o[0], o[1], o[2], chain);
+    if (guest_readable(r[1], 16)) {
+        uint64_t nm = *(const uint64_t *)(uintptr_t)(r[1] + 8);
+        if (guest_readable(nm, 24)) {
+            const char *s = (const char *)(uintptr_t)nm;
+            int hit = 0;
+            for (int i = 0; i < 16 && !hit; i++) if (s[i] == 'b' && !memcmp(s + i, "bad_alloc", 9)) hit = 1;
+            if (!hit) return;                       // every other exception: silent, this gate is on the hot path of all of them
+            char chain[400]; fp_chain(r[29], chain, sizeof chain);
+            LOG("[obs] bad_alloc thrown: object %#llx, type \"%.24s\" | %s", (unsigned long long)r[0], s, chain);
+            return;
+        }
+    }
+    char chain[400]; fp_chain(r[29], chain, sizeof chain);
+    LOG("[obs] throw object %#llx type %#llx | %s", (unsigned long long)r[0], (unsigned long long)r[1], chain);
 }
 __attribute__((constructor)) static void regions_attach(void) {
     gate_obs_set(OBS_REGION_ASK, region_ask); gate_obs_set(OBS_REGION_GOT, region_got); gate_obs_set(OBS_REGION_FREE, region_free);
