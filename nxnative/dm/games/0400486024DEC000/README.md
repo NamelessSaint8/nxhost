@@ -106,16 +106,19 @@ headless over adb.
 - **It reaches the same graphics frontier as the Mac and past it.** `SetHeapSize` is accepted (heap 6.70 GB of an 8.50 GB region), the 2560x1440
   swap chain is created, the Vulkan backend reports Adreno 840, `auddmg:u`'s manager (commands 0, 300, 401) and `audsmx:u`'s user session are served,
   and the run reaches `WindowCrop 0,0 2048x1152` and the first NVN2 submission.
-- **A surviving run presents at the title/UI at about 60 fps.** With the boot shader set, one run stayed alive, logged `frame time p50 16.63 / p95
-  19.41 ms` over 299 frames, GPU p50 0.77 ms, and then idled at the title; another presented 421 frames. The picture is mostly black with a warm 16:9
-  card in the upper left, because the 1920x1080 AV1 intro decoded no picture at that point.
-- **The same `nn::diag` abort is a race.** In most runs the title aborts at the first frame with **Result 0** and an empty message at `sdk+0xb8fe8`
-  (the Mac's frontier), and in others it presents and idles; the boot and title shader sets both produce both outcomes, so the abort is not tied to a
-  shader. The SDK's real caller is not recovered: the host's "call site" is the abort wrapper's own return address, and the stack scan's
-  `main+0x4dca000` points into the module's data. This is the next wall on both platforms.
+- **A post-assert run presents at the title/UI at about 60 fps.** The process continues after the first-frame assertion below (the host's crash gate
+  does not exit on the same thread), and one such run logged `frame time p50 16.63 / p95 19.41 ms` over 299 frames, GPU p50 0.77 ms; another
+  presented 421 frames. The picture is mostly black with a warm 16:9 card in the upper left, because the 1920x1080 AV1 intro decoded no picture at
+  that point.
+- **The first frame is a deterministic SDK assertion, not a race.** The `nn::diag` abort at `sdk+0xb8fe8` is the SDK's own
+  `nvnTextureBuilderSetFlags` check: the host's new guest frame walk resolves `main+0x21f0c80 → sdk+0x777f30 → sdk+0x7bd670 → sdk+0xba138`, and
+  the SDK's expression string at `sdk` rodata `0xbc0be8` is `nvnTextureBuilderSetFlags`. The host's setter is called **1,660 times**, so the
+  failing path is the SDK client's check of its own function pointer or its builder's device, not the setter's work. The process sometimes
+  `_exit`s and sometimes keeps presenting; that difference is the host crash gate (`crash_gate`'s `none == me` test never exits on the same
+  thread), not the game.
 - **AV1 is now built for Android.** `android/movie_av1.c` was a stub; it is now the Mac's dav1d path, and `build.py` compiles `dm/third_party/dav1d`
   plus its arm64 assembly with the NDK (a small `android/dav1d/config.h` clears the Apple build's symbol prefix). The intro is the first thing to
-  re-test once the race no longer stops the run.
+  re-test once the texture-builder assertion is understood.
 - **The shader bundle** initially covered the 2,376 keys the boot asked for; the title asks for 23 more (`vs_layout`/`ps_layout`), all in
   `shader_map.tsv`, and the full 56,339-key bundle is building. Three boot shaders (`TerrainGround`, `Model`) use the NVN2 `_cb0_40000000` texture
   pool array, which the Android chain does not implement yet: their reflection does not fit the bundle ABI and they are skipped.
@@ -134,11 +137,12 @@ adb shell 'cd /data/local/tmp/oot && DM_ROOT=$PWD DM_ROMFS=$PWD/RomFS DM_SAVE=$P
   client sends on it; when the output descriptor resolves to the active caller's stack, the host admits it and `ListVirtualOutputDevices` writes the
   name and count (the Android run then sends commands 300 and 401). The general pointer-buffer translation is still not modelled
   (`QueryPointerBufferSize` answers 0), so a descriptor naming ordinary guest memory outside the caller's stack is not written.
-- **A timing-dependent `nn::diag` abort at the first NVN2 frame.** Past the services the run logs `WindowCrop 0,0 2048x1152` and
-  `nvnCommandBufferSetComputeWorkloadPriority`, then `nn::diag abort` with **Result 0** at `sdk+0xb8fe8`. On Android the same profile sometimes
-  presents at the title at about 60 fps instead, and both the boot and title shader sets produce both outcomes, so this is a race rather than a
-  shader. The SDK's real caller is not recovered: the logged site is the abort wrapper's return address, and the stack scan's `main+0x4dca000` is
-  module data. Finding and closing it is the shared next step on Mac and Android.
+- **The SDK's `nvnTextureBuilderSetFlags` assertion at the first NVN2 frame.** The guest frame walk in `hle_sdk16.c` resolves
+  `main+0x21f0c80 → sdk+0x777f30 → sdk+0x7bd670 → sdk+0xba138`, and the expression string at `sdk` rodata `0xbc0be8` is
+  `nvnTextureBuilderSetFlags`. The host's setter is called 1,660 times, so the failing branch is the SDK client's own check of its function
+  pointer or its builder's device, not the setter's work; `sdk+0x7bd670` also shows the assertion's stdio lock failing on a null mutex, which is
+  why the file and line are lost. The next probe is the SDK client's builder/device layout. The host's crash gate must also be fixed: it lets a
+  post-assert process keep presenting instead of exiting, which is useful for this hunt but is not a clean failure.
 - The full translation build (the rest of the 56,339 keys). The Android Vulkan chain translates the native task/mesh programs as EXT task/mesh, so
   the 845 refused by the Mac chain are not a wall there; the 3 `_cb0_40000000` pool-array shaders and the 8 Ampere-243 programs are skipped.
 - The 38 unimplemented Ampere instructions (`243`, `f8c`, `3a9`).
