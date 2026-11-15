@@ -136,10 +136,18 @@ headless over adb.
   0)`** — the capture-merged bundle closed the shader gap entirely — and `dispatches 6874 (skipped 6874)`. Every presented frame is
   **0.00 % lit**. A pass dump of present 400 shows the frame is three passes, `2048x1152` twice and the `2560x1440` present target, and **all
   three read 0.00 % lit**, so nothing is lost in a composite: the passes are empty of content themselves.
-- **With only the three expensive pipelines skipped, the game dies of `std::bad_alloc`.** `DM_VK_CSKIP=e6be82d835fbe4d3,9442573ee4ace011,
-  0a56002cdc7e1fce` lets the other eight compute programs run (`1.08 s`, `0.44 s`, `0.42 s` of compile) and the run reaches the audio callback
-  at 6,000 frames (about 25 s), then `libc++abi: terminating due to uncaught exception of type St9bad_alloc` and SIGABRT. That message is not
-  routed through `nn::diag`, so `DM_ABORT_CONT` cannot park it: a guest allocation fails and the C++ runtime ends the process.
+- **The heap is sized from the reported total, and 9.20 GB still is not enough** (measured 2026-11-14). With `app_pool` at the console's 12 GiB
+  (`0x300000000`, `mem_reserve` 34 GB) the game asks for a bigger heap and the host grants `[mem] heap 9.20 GB (heap region 15.50 GB)` — up
+  from 6.70 GB at a 9.5 GiB total. The request tracks the reported number, so the constant matters: at 48 GiB (`0xc00000000`, a slip made once)
+  the game asked for `0xb4ce00000` and died when the host refused.
+- **The `std::bad_alloc` belongs to the three expensive compute programs, not to the heap.** Skipping exactly those three
+  (`DM_VK_CSKIP=e6be82d835fbe4d3,9442573ee4ace011,0a56002cdc7e1fce`) and letting the other eight run, a 9.20 GB run gets to about 17 s and
+  then aborts with no message at all. Letting **all** compute run, the same 9.20 GB heap reaches the three 45.9 / 13.4 / 2.3 s compiles and
+  then `libc++abi: terminating due to uncaught exception of type St9bad_alloc` at about 40 s. So the failing allocation follows those three
+  shaders — they are the ones this port added from run-time captures — and more heap does not move it.
+- **The thrower is in `main`, not the `sdk`.** A gate on `sdk+0x7d8f44` (`std::__throw_bad_alloc`'s `mov x19,x0`) never fires, and `main`
+  exports its own `_ZTISt9bad_alloc`, so `main` carries its own libc++ copy; the gate needs `main`'s throw site, which is not a dynamic
+  symbol. `bad_alloc` also never passes through `nn::diag`, so `DM_ABORT_CONT` cannot park it.
 - **AV1 is now built for Android and decodes.** `android/movie_av1.c` was a stub; it is now the Mac's dav1d path, and `build.py` compiles
   `dm/third_party/dav1d` plus its arm64 assembly with the NDK (a small `android/dav1d/config.h` clears the Apple build's symbol prefix). A run
   reports `AV1: dav1d 1.5.4 decoding` and `decoder 1: first picture 1920x1080 into buffer 0`.
@@ -188,9 +196,11 @@ the run ends about three seconds in.
   three passes (two `2048x1152`, one `2560x1440` present target) and each measures 0.00 % lit on its own. Two candidates remain, and a pass dump
   with `DM_VK_PASSDUMP=400` plus the per-pass draws (`DM_VK_TRACE_PASS`) tells them apart: the passes draw nothing because the game has nothing to
   draw yet (it is still loading, and the compute results it needs were skipped), or they draw with a texture or uniform that reads zero.
-- **A guest `std::bad_alloc` ends runs that do real compute.** It arrives through libc++abi, not `nn::diag`, so nothing parks it; the allocation
-  that fails is not named. Raising the heap or catching the throw point is the next memory-side probe (the title plans from a 12 GiB console
-  layout and the host grants 6.70 GB of an 8.50 GB region).
+- **The `std::bad_alloc` that follows the three expensive compute programs.** The heap is now the console's 12 GiB layout (9.20 GB granted), so
+  a flat shortage is ruled out: it does not happen when those three are skipped and does when they run, which points at what they compute or
+  at their translation — they are three of the eleven programs this port added from run-time captures. The next probes are a gate on `main`'s
+  own `__throw_bad_alloc` (not a dynamic symbol; find it by the `_ZTISt9bad_alloc` reference, which is in `main`'s data at `0x4958438`) and a
+  picture from a run with only those three skipped, where the other eight compute programs do run.
 - The full translation build (the rest of the 56,339 keys). The Android Vulkan chain translates the native task/mesh programs as EXT task/mesh, so
   the 845 refused by the Mac chain are not a wall there; the 3 `_cb0_40000000` pool-array shaders and the 8 Ampere-243 programs are skipped.
 - The 38 unimplemented Ampere instructions (`243`, `f8c`, `3a9`).
