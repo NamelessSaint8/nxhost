@@ -169,11 +169,13 @@ headless over adb.
   nothing, which rules `main`'s `operator new` out. The `sdk` defines `_Znwm` as well — `sdk+0x84f260` is the **aligned** variant (`x0` size,
   `x1` alignment) and it gives up at `0x84f2d4` with `x19` the alignment and `x20` the size after rounding; the dynsym's value `0x84f2e0`
   is inside that function's cold block, not a separate function.
-- **Two sdk gates are installed and unread.** They sit on `sdk+0x84f2d4` (the give-up path) and `sdk+0x84f270` (the entry, logged only at
-  64 MiB and above), numbered `29 | 1<<8` and `29 | 2<<8` so one callback serves all three sites; `sdk.obs.tsv` lists them. The first run
-  with them was cut short when the tablet dropped off USB — `adb devices` is empty even after `adb kill-server`/`start-server` — so there
-  is no reading yet. Note the run that preceded it is the first with both the 12 GiB layout (9.20 GB heap) and every compute program
-  enabled, so a device reset under that footprint is a candidate explanation and worth checking on the tablet itself.
+- **Two sdk gates are installed, exercised and silent.** They sit on `sdk+0x84f2d4` (the give-up path) and `sdk+0x84f270` (the entry,
+  logged only at 64 MiB and above), numbered `29 | 1<<8` and `29 | 2<<8` so one callback serves all three sites; `sdk.obs.tsv` lists
+  them. A completed 85 s run reached all three expensive compiles (`60.3 / 13.6 / 2.3 s`) and produced neither a give-up line nor a
+  request of 64 MiB or more, and no `bad_alloc` at all that time — the failure is intermittent, so this run neither confirms nor clears
+  the sdk's `operator new`. One caveat on the run before it: the tablet dropped off USB mid-run and returned about two minutes later
+  (`adb devices` empty, then `HA2M2W71` again after a server restart), so a transient link fault — or a reset under the 12 GiB layout
+  with every compute program enabled — is unconfirmed either way.
 - **AV1 is now built for Android and decodes.** `android/movie_av1.c` was a stub; it is now the Mac's dav1d path, and `build.py` compiles
   `dm/third_party/dav1d` plus its arm64 assembly with the NDK (a small `android/dav1d/config.h` clears the Apple build's symbol prefix). A run
   reports `AV1: dav1d 1.5.4 decoding` and `decoder 1: first picture 1920x1080 into buffer 0`.
