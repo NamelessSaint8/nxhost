@@ -169,6 +169,12 @@ headless over adb.
   nothing, which rules `main`'s `operator new` out. The `sdk` defines `_Znwm` as well — `sdk+0x84f260` is the **aligned** variant (`x0` size,
   `x1` alignment) and it gives up at `0x84f2d4` with `x19` the alignment and `x20` the size after rounding; the dynsym's value `0x84f2e0`
   is inside that function's cold block, not a separate function.
+- **Neither memory refusal happens, now that both are reported.** `AllocateAddressRegion` is decided inside the guest (VammManager), so
+  the host only ever saw the regions that succeeded; the ask gate now compares each request against `alias_room()` and names one that
+  cannot be placed. `MapPhysicalMemory`'s refusal only existed behind `mem_map_limit`, which this profile does not set — the host was
+  granting maps past the application pool in silence — so the condition is now reported either way, as a refusal when the limit is
+  enforced and as a grant hardware would have refused when it is not. A 70 s run with every compute program enabled hit **neither**: 7
+  address regions recorded (largest 0.30 GB of a 16 GB alias region) and 0.75 GB mapped of a 12.00 GB pool.
 - **Five allocator gates are installed and all silent.** One callback (id 29) serves them by parameter: `main+0xf2722c` (`29`),
   `sdk+0x84f2d4` (`1<<8`), `sdk+0x84f270` (`2<<8`), `main+0x14c6cc8` (`3<<8`, `malloc`'s ENOMEM path), `main+0x14c6ca8` (`4<<8`,
   `malloc` entry) and `main+0xf204a4` (`5<<8`, `operator new[]` entry) — the entry gates log only from 64 MiB up. `main.obs.tsv` and
