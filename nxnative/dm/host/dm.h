@@ -135,8 +135,9 @@ enum { OBS_ARGS = 19,                                            // a register d
        OBS_STDALLOC_INIT = 25,                                         // StandardAllocator::Initialize's entry, the same way: its callback writes the size (hle_svc.c)
        OBS_UE_REGION = 26,                                             // the store of Unreal's engine region size before nninitStartup reserves it: the register its upper bits name (dm/tools/ue_region.py, hle_svc.c)
        OBS_OOM = 27,                                                   // __cxa_throw: x1 is the type_info, so the callback can name the exception (hle_svc.c)
-       OBS_ABORT_CALL = 28,                                            // the sdk's abort() body, which reaches the host's bionic abort through a GOT slot (hle_svc.c)
-       OBS_MAX = 29 };
+       OBS_ABORT_CALL = 28,                                            // the sdk's abort() entry the loader binds, which reaches the host's bionic abort through a GOT slot (hle_svc.c)
+       OBS_NEW_FAIL = 29,                                              // main's operator new failure path, where x19 still holds the requested size (hle_svc.c)
+       OBS_MAX = 30 };
 // A gate number's bits from 8 up are a parameter for its callback (OBS_REGION_GOT: the register that holds the address). Callbacks read the registers; a write to x0–x29 takes
 // effect when the gate returns (entry.S restores them from the frame), which OBS_STDALLOC_INIT and OBS_UE_REGION do
 void gate_obs_set(int id, void (*fn)(uint64_t *regs, int param));

@@ -605,11 +605,23 @@ static void obs_abort_call(uint64_t *r, int param) {
     // The same bargain as the nn::diag park: a background thread that aborts no longer ends the run. The guest's stack and locks stay as they were.
     if (getenv("DM_ABORT_CONT")) { LOG("[obs] DM_ABORT_CONT: the aborting thread parks here, the rest of the process continues"); for (;;) pause(); }
 }
+// main's operator new (_Znwm, main+0xf271c0) gives up at main+0xf2722c, where the requested size is still in x19 and the next instructions tail-call the SDK's
+// exception allocation with w0 = 16 (sizeof(std::bad_alloc)). This is the only place the size that could not be satisfied is readable: the throw itself carries an
+// empty bad_alloc, and the abort it leads to names neither the size nor the caller.
+static void obs_new_fail(uint64_t *r, int param) {
+    (void)param;
+    char chain[400], caller[64];
+    uint64_t sp = r[99];
+    mod_where(sp ? *(const uint64_t *)(uintptr_t)(sp + 8) : 0, caller, sizeof caller);
+    fp_chain(r[29], chain, sizeof chain);
+    LOG("[obs] operator new failed: %llu bytes (%#llx), called from %s | %s", (unsigned long long)r[19], (unsigned long long)r[19], caller, chain);
+}
 __attribute__((constructor)) static void regions_attach(void) {
     gate_obs_set(OBS_REGION_ASK, region_ask); gate_obs_set(OBS_REGION_GOT, region_got); gate_obs_set(OBS_REGION_FREE, region_free);
     gate_obs_set(OBS_STDALLOC_INIT, stdalloc_init); gate_obs_set(OBS_UE_REGION, ue_region);
     gate_obs_set(OBS_OOM, obs_oom);
     gate_obs_set(OBS_ABORT_CALL, obs_abort_call);
+    gate_obs_set(OBS_NEW_FAIL, obs_new_fail);
     gate_obs_set(OBS_ARGS, obs_args);
     gate_obs_set(OBS_SDK_ABORT, obs_abort);
 }
