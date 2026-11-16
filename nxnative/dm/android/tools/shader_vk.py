@@ -110,6 +110,7 @@ def job_for(key, stage, rec, w):   # dmsh_build.py job_for; transform feedback i
             stage = 'cs'   # translate the stage-buffer body as workgroup IR, then wrap as native EXT task/mesh
             extra.update(nvn2_mesh=mesh, nvn2_stage=[mesh['kind'], mesh['input_words'], mesh['attr_words'], mesh['map_words']], local=[mesh['threads'], 1, 1], shared=mesh['shared'])
         elif stage == 'cs':
+            extra.update(dmsh_ampere.compute_state(rec[ci:]))
             extra['nvn2_cs'] = [rec[ci + 0xb1], rec[ci + 0xb2], rec[ci + 0xb3], struct.unpack_from('<H', rec, ci + 0xba)[0], rec[ci + 0xa9] * 4]
         xfb = None
     else:
@@ -121,7 +122,9 @@ def job_for(key, stage, rec, w):   # dmsh_build.py job_for; transform feedback i
         elif code[:4] == bytes.fromhex('79563412'): code = code[0x100:]
         xfb = xfb_layout(key, rec[ci:]) if stage == 'vs' else None
     cp = os.path.join(w, key + '.bin'); Path(cp).write_bytes(code)
-    j = {'key': key, 'stage': stage, 'code': cp, 'tex': {}, 'img': {}, 'attr': {}, 'fout': {}, 'c1': c1.hex(), 'debug': False, 'reduced': True, 'sb_align': SB_ALIGN, 'gs_passthrough': False, **({'xfb': xfb} if xfb else {}), **extra}
+    # A logical NVIDIA warp is 32 lanes. The wide path selects its ballot word
+    # and shuffle base from the physical lane, also working on wave32 devices.
+    j = {'key': key, 'stage': stage, 'code': cp, 'tex': {}, 'img': {}, 'attr': {}, 'fout': {}, 'c1': c1.hex(), 'debug': False, 'reduced': True, 'sb_align': SB_ALIGN, 'subgroup_size': 128, 'gs_passthrough': False, **({'xfb': xfb} if xfb else {}), **extra}
     if key in FACTS: j.update(FACTS[key])
     else: j['no_facts'] = True
     return j, c1
@@ -368,10 +371,19 @@ def main():
             if ln.strip(): errs[ln.strip()[:120]] += 1
     entries, fails = [], collections.Counter()
     spvs, virtual_bindings = {}, {}
+    import hmma_spv
+    hmma_modules = hmma_calls = 0
     for k in keys:
         spv_p = os.path.join(w, k + '.spv')
         if not os.path.exists(spv_p): fails['no output'] += 1; continue
         spvs[k] = formatless_image_capabilities(open(spv_p, 'rb').read())[0]
+        if stages[k] == 'cs':
+            optimized, count = hmma_spv.lower(spvs[k])
+            if count:
+                checked = Path(w) / (k + '.hmma.spv');checked.write_bytes(optimized)
+                subprocess.run(['spirv-val','--target-env','vulkan1.2',str(checked)],check=True,capture_output=True)
+                spvs[k] = optimized;hmma_modules += 1;hmma_calls += count
+    if hmma_modules: print(f'HMMA vector gathers: {hmma_calls} calls in {hmma_modules} compute modules (two retained tiles)',flush=True)
     # A vertex shader gets the outputs its paired pixel shaders read but it does not write: NVN lets the pixel stage read an unwritten attribute (it reads
     # 0,0,0,1), Vulkan refuses to link the pair. dmsh_build.py vs_pad does the same for the Mac chain on MSL text; here it is the SPIR-V (dm/android/tools/
     # dmsv_pad.py). The pairs are the profile's shader_pairs.tsv, which the split writes from each BNSH variation.

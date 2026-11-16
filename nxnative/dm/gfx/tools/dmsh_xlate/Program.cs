@@ -119,6 +119,10 @@ static class SwshXlate
         public int QueryComputeLocalSizeY() => Local(1);
         public int QueryComputeLocalSizeZ() => Local(2);
         public int QueryComputeSharedMemorySize() => _job["shared"] is JsonNode n ? (int)n : 0;   // the shared memory size in the compute shader's control section (shader_split.py)
+        // Android jobs use the wide-subgroup path even on wave32 hardware: its lane masks,
+        // ballot word selection and shuffle bases are computed from the physical lane ID.
+        // Apple jobs retain the native 32-lane path.
+        public int QueryHostSubgroupSize() => _job["subgroup_size"] is JsonNode n ? (int)n : 32;
         static AttributeType Attr(string s) => s switch { "sint" => AttributeType.Sint, "uint" => AttributeType.Uint, _ => AttributeType.Float };
         public bool QueryGeometryInputFixed() => _job["geometry_topology"] != null;
         // Compute lowering must emit passthrough vertices explicitly: Metal

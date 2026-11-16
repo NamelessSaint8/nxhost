@@ -131,6 +131,7 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 
 ## Threads
 
+- a new fiber faults with SIGILL at its initial return authentication (`AUTIASP`), after gRPC initialization starts working. → [Initial fiber frames on Android pthreads](../reference/threads.md#initial-fiber-frames-on-android-pthreads)
 - TSan reports `thread_main` writing `host_work` while `thr_runnable` reads it during a same-core yield (`t_notify_sched`, issue #411). → [Publishing a new thread's scheduler fields](../reference/threads.md#publishing-a-new-threads-scheduler-fields)
 - a parent returns from `StartThread` before a newly runnable higher-priority child pinned to its core finishes its work (deterministic regression, not attributed to a game failure). → [Starting a higher-priority thread on the caller's core](../reference/threads.md#starting-a-higher-priority-thread-on-the-callers-core)
 - per-core job queues never drained. → [Core mask changes move the ideal core into the new mask](../reference/threads.md#core-mask-changes-move-the-ideal-core-into-the-new-mask)
@@ -242,6 +243,7 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 - abort in `nn::sm::Initialize` under `nn::pctl::IsFreeCommunicationAvailable` (Engage, entering its first battle map). → [Parental controls and free communication](../reference/services.md#parental-controls-and-free-communication)
 - play report calls met entering the save select (3D World); undefined `nn::ldn::` / `nn::socket::` imports with no hook, found from the import list before they were met (Big Brain Academy). → [Network interface, LDN, socket and play report calls](../reference/services.md#network-interface-ldn-socket-and-play-report-calls)
 - the boot sits at a black loading screen for good, CPU nearly idle, every thread waiting, about 1 boot in 6 (3 in 4 with four Mac hosts at once); the title movie is never opened, and the save files are never probed. → [Network requests stay on hold before they settle](../reference/services.md#network-requests-stay-on-hold-before-they-settle)
+- gRPC aborts during poll-engine selection even though `all` is a valid wildcard strategy. → [Local EventFd wakeup descriptors work offline](../reference/services.md#local-eventfd-wakeup-descriptors-work-offline)
 - one thread at 100% CPU from boot, with one SVC in 99 s (`NexusRevolution Socket`, `main+0x92c7c4`, the game's network thread). → [Socket `Poll` and `Select` with nothing to wait on](../reference/services.md#socket-poll-and-select-with-nothing-to-wait-on)
 - the first comparison in `nnMain` aborted in `sm`. → [Language codes](../reference/services.md#language-codes)
 - `DM_LANG=zh-Hans` or `zh-Hant` reaches the game unchanged, but its startup menu falls back to Japanese; the older `zh-CN` or `zh-TW` spelling selects Chinese. → [Chinese language aliases in settings comparisons](../reference/services.md#chinese-language-aliases-in-settings-comparisons)
@@ -654,9 +656,11 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 - Vulkan validation reports VUID04627 at render-pass begin even when pixel readbacks pass. → [Imageless framebuffers inherit attachment-view usage](../reference/rendering.md#imageless-framebuffers-inherit-attachment-view-usage)
 - validation reports a nonidentity storage-image swizzle or a float shader interface bound to an integer image view. → [Storage image views preserve numeric words and identity swizzles](../reference/rendering.md#storage-image-views-preserve-numeric-words-and-identity-swizzles)
 - mapped sparse textures perform four manual fetches for each bilinear sample, including ordinary samples within one physical tile. → [Vulkan atlas interiors use native bilinear filtering](../reference/rendering.md#vulkan-atlas-interiors-use-native-bilinear-filtering)
+- a compute descriptor binds an image for storage writes with view usage `0x8`, while the underlying image was created with usage `0x17` (no storage permission). → [Storage views require image creation usage](../reference/rendering.md#storage-views-require-image-creation-usage)
 
 ## Shaders
 
+- captured compute programs translate with workgroup size `1x1x1` and no shared storage despite declaring larger workgroups. → [NVN2 compute execution geometry without a facts row](../reference/shaders.md#nvn2-compute-execution-geometry-without-a-facts-row)
 - the split finds no shaders in `main` or RomFS, while reporting control sections in `main` with no code area. The game has `.sp4` resources and loose `.nvnbin` files rather than BNSH archives or whole GLSLC outputs. → [Sumo Ninty_NX shaders and MuxFDMR streams](../reference/shaders.md#sumo-ninty_nx-shaders-and-muxfdmr-streams)
 - the shader split finds no game programs despite loose `.fx.phyre` effects and multi-GB `.vbf` archives. → [Phyre NVN effects in Virtuos VBF archives](../reference/shaders.md#phyre-nvn-effects-in-virtuos-vbf-archives)
 - the shader split stops on one archive with a Python traceback (an `IndexError` or `struct.error` naming no file), or a reader's `[RED]` line about a format it does not know, and nothing is written; the NSP script loses the build at the split. → [A file no reader reads](../reference/shaders.md#a-file-no-reader-reads)
@@ -824,6 +828,12 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 - validation reports VUID06530: a compute shader declares 49,152 shared bytes on a device permitting 32,768. → [Compute shared storage exceeds the device limit](../reference/shaders.md#compute-shared-storage-exceeds-the-device-limit)
 - a diagnostic cold start exits with `watchdog: no progress` during a batch of successful Vulkan pipeline builds before the first frame. → [Completed pipeline builds count as watchdog progress](../reference/shaders.md#completed-pipeline-builds-count-as-watchdog-progress)
 - first-use graphics pipeline compilation consumes much of loading and interrupts gameplay, even with a persistent driver cache. → [Recorded Vulkan states can prepare before replay](../reference/shaders.md#recorded-vulkan-states-can-prepare-before-replay)
+- the upper 32 invocations of a 64-lane Vulkan subgroup read wrong lanes, return incorrect lane masks or reductions, or index tensor scratch incorrectly. → [Logical NVIDIA warps on wider Vulkan subgroups](../reference/shaders.md#logical-nvidia-warps-on-wider-vulkan-subgroups)
+- an isolated `vkCreateComputePipelines` aborts in `libllvm-qgl.so` with `Scudo ERROR: internal map failure (Out of memory)` or `std::bad_alloc`, while system memory remains available. → [Native compiler exceeds the allocator mapping budget](../reference/shaders.md#native-compiler-exceeds-the-allocator-mapping-budget)
+- a translated shader contains matrix calls with undefined lane, scratch-block or fragment inputs, or reads a helper's out parameter without executing its call. Such a shader can validate as SPIR-V yet render corruption. → [Dead matrix results detach live inputs or erase output calls](../reference/shaders.md#dead-matrix-results-detach-live-inputs-or-erase-output-calls)
+- the movie reconstruction output contains monochrome bands despite nearly black input. Replaying identical inputs produces different pixels; shaders compile and pass SPIR-V validation. → [Transposed LDSM scales byte addresses as a memory stride](../reference/shaders.md#transposed-ldsm-scales-byte-addresses-as-a-memory-stride)
+- Android compute dominates a movie frame despite valid pixels: about 402 ms of GPU work, including two 71 ms dispatches of one network shader and a 71 ms reconstruction dispatch. → [Vector HMMA gathers with bounded tile reuse](../reference/shaders.md#vector-hmma-gathers-with-bounded-tile-reuse)
+- title text is absent although the CPU font atlas and its GPU upload contain readable glyphs. The glyph producer draws zero-area triangles; all vertices of each glyph have the same Y coordinate. Shader validation succeeds. → [Guarded deferred writes overwrite newer register values](../reference/shaders.md#guarded-deferred-writes-overwrite-newer-register-values)
 
 ## Game state
 

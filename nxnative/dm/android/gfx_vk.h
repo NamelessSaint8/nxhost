@@ -72,6 +72,7 @@ void vk_pools_sync(VkCommandBuffer cb);
 typedef struct vksub vksub_t;
 VkCommandBuffer vk_cmd(void);          // the current submission's main command buffer (recording)
 void vk_cmd_sync_host(void);           // submit pending work, wait, and resume recording without publishing NVN completion
+void vk_compute_ts(int end, uint64_t key, uint32_t x, uint32_t y, uint32_t z); // DM_VK_PASS_TIMES includes compute steps
 int vk_sub_open(void);                 // a submission is being recorded
 VkCommandBuffer vk_upload_cmd(void);   // the current submission's upload command buffer (runs before the main one)
 void *vk_scratch(VkDeviceSize n, VkDeviceSize align, VkBuffer *buf, VkDeviceSize *off);   // host-visible memory that lives until this submission completes
@@ -146,6 +147,7 @@ void vk_tex_mark_gpu_write(vkimg_t *im);
 void vk_tex_note_use(vkimg_t *im);
 void vk_lrz_forget(vkimg_t *im);                                 // an image is being dropped: the pass code forgets it (gfx_vk_exec.c)
 VkImageView vk_tex_view(const tex_t *t, const view_t *v, int dim, int arrayed, int purpose, vkimg_t **img_out);   // purpose: 0 sampled, 1 attachment, 2 storage (identity swizzle)
+int vk_tex_view_description(vkimg_t *im, VkImageView view, VkImageViewCreateInfo *out); // diagnostic: exact cached view parameters
 void vk_watch(const vkimg_t *im, const char *what);   // DM_VK_WATCH (gfx_vk_exec.c)
 void vk_tex_wrote(vkimg_t *im, const tex_t *t, int how, const char *detail);   // DM_VK_TEXLOG's write side: 1 attachment, 2 storage image, 3 buffer copy, 4 image copy, 5 clear
 vkimg_t *vk_tex_by_id(int tid, const view_t **view_out, const tex_t **tex_out);   // registered texture ID → image (NULL if none)

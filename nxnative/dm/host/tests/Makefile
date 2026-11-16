@@ -40,6 +40,7 @@ run: $(B)/t_sf_buffers $(B)/t_sf $(B)/t_language $(B)/t_motion $(B)/t_heap_size 
 	$(B)/t_condvar
 	$(B)/t_condvar_old
 	$(B)/t_pollwait
+	$(B)/t_net_eventfd
 	$(B)/t_preempt
 	$(B)/t_preempt --all-peers
 	$(B)/t_pctl
@@ -67,6 +68,9 @@ run: $(B)/t_sf_buffers $(B)/t_sf $(B)/t_language $(B)/t_motion $(B)/t_heap_size 
 	$(B)/t_symbols
 run: $(B)/t_nro
 run: $(B)/t_symbols
+run: $(B)/t_net_eventfd
+$(B)/t_net_eventfd: t_net_eventfd.c ../hle_net.c ../hle.h ../dm.h $(GAME_H) | $(B)
+	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_net_eventfd.c
 $(B)/t_symbols: t_symbols.c ../hle.c ../loader.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -Wno-deprecated-declarations -I.. $(GINC) -o $@ t_symbols.c
 .PHONY: symbols

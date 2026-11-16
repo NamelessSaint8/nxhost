@@ -24,6 +24,20 @@ def inst_len(ctl):   # the instructions (SPH included)
     return struct.unpack_from('<I', ctl, 0x38)[0]
 
 
+def compute_state(ctl):
+    """Workgroup dimensions and shared bytes declared by an ordinary NVN2 CS.
+
+    Runtime captures have no shader_facts row. Leaving these fields to that table
+    translated captured programs as 1x1x1 with no shared storage.
+    """
+    if not is_nvn2(ctl) or len(ctl) < 0x68:
+        raise ValueError('truncated or invalid NVN2 compute control')
+    x, y, z, shared = struct.unpack_from('<4I', ctl, 0x58)
+    if not x or not y or not z:
+        raise ValueError('NVN2 compute control has a zero workgroup dimension')
+    return {'local': [x, y, z], 'shared': shared}
+
+
 def c1_segment(ctl, code):   # the c1 constant segment at the end of the code area
     a, e = struct.unpack_from('<II', ctl, 0x40)
     return code[a:e] if a <= e <= len(code) else b''

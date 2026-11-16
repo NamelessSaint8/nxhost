@@ -1,5 +1,5 @@
-# The Legend of Zelda: Ocarina of Time (Switch 2, loose dump of update 1.1.1). In bring-up: no registered build row, no android.tsv, the host has not
-# booted this title yet. RomFS Product.100/Product.111 tables and RegionLangMask.txt "111" put the update at 1.1.1.
+# The Legend of Zelda: Ocarina of Time (Switch 2, loose dump of update 1.1.1).
+# RomFS Product.100/Product.111 tables and RegionLangMask.txt "111" identify the update.
 # Nintendo EPD's engine (Nin_Ounce: sead / agl / gsys, Phive), an sdk built for the Switch 2 (`spec: Ounce`), NVN2 with Ampere shaders; modules
 # main + sdk + subsdk0 (rtld is the SDK's own, as on the other Switch 2 titles). Every RomFS .zs is a zstd frame that names a dictionary from
 # Pack/ZsDic.pack.zs (shader_split's zs_dicts), so a reader without that pack sees no asset at all.
@@ -9,6 +9,7 @@
 # ---- Identity ----
 title_id	0400486024DEC000
 program_id	0400486024DEC000
+build	1.1.1	1.1.1	main=e0f3ccfaf50065ae4ea01eb5aeb13b1a	subsdk0=b0110087a7b339ef74588d3bd0b4dd5d	sdk=1643a838814f9c10c696f930ed681e7f
 
 # ---- App ----
 name	The Legend of Zelda: Ocarina of Time
@@ -20,10 +21,10 @@ pad_layout	full
 modules	main subsdk0 sdk
 romfs_marker	System/GameRomConfig/NormalProduct.game__RomConfig.bgyml
 
-# ---- Memory (provisional: reservations, none measured on this title yet) ----
+# ---- Memory (virtual reservations and measured heap request; resident requirements open) ----
 # The NPDM declares 48 MB of system resource, so virtual address memory is on (unlike Donkey Kong Bananza). The first boot asked SetHeapSize for
 # 0x18ce00000 (6.22 GB) and the Splatoon Raiders split left only 0x130000000 (4.75 GB), so these are Mario Kart World's reservations, measured on
-# this host: 25 GB reserve less 16 GB alias, 256 MB stack and a 256 MB gap leaves 8.5 GB of heap. The reserve is now 34 GB (17.5 GB of heap region) so that
+# this host: 25 GiB reserve less 16 GiB alias, 256 MiB stack and a 256 MiB gap leaves 8.5 GiB of heap. The reserve is now 32 GiB (15.5 GiB of heap region) so that
 # a heap sized from a 12 GiB total can be granted; like every guest region it is reserved, not committed.
 mem_reserve	0x800000000
 mem_alias	0x400000000

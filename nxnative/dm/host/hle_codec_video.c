@@ -17,6 +17,7 @@
 #include "hle.h"
 #include <pthread.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include "vpx/vpx_decoder.h"
 #include "vpx/vp8dx.h"
 #include "hle_movie_yuv.h"
@@ -110,6 +111,30 @@ static void cv_state(cv_dec *d, const char *what, uint64_t got) {
         what, (unsigned long long)got, (unsigned long long)d->submits, (unsigned long long)d->acqs, (unsigned long long)d->rels,
         (unsigned long long)d->pictures, d->pcount, d->fcount, d->nheld);
 }
+// Opt-in pixel provenance, at decoder delivery and the client's NV12 readback.
+// First eight, every thirtieth, and the first non-black picture at each stage.
+// DM_CV_DUMP=1 saves those pictures as tight NV12 under DM_ROOT as well.
+static void cv_pixels(int readback, const cv_pool *pool, uint32_t index, const vpx_image_t *im,
+                      const uint8_t *ydst, const uint8_t *uvdst, unsigned w, unsigned h) {
+    const char *trace=getenv("DM_CV_PIXELS");if(!trace || atoi(trace)<=0)return;
+    static _Atomic unsigned counts[2], nonblack[2];unsigned n=atomic_fetch_add(&counts[readback],1)+1;
+    unsigned lo=255,hi=0;uint64_t hash=1469598103934665603ull;
+    if(!ydst && !im){LOG("[codec] pixels %s %u: pool %p index %u has no picture",readback?"read":"decoded",n,(void*)pool,index);return;}
+    for(unsigned y=0;y<h;y++)for(unsigned x=0;x<w;x++){
+        unsigned value=ydst?ydst[(size_t)y*w+x]:im->planes[0][(size_t)y*im->stride[0]+x];
+        if(value<lo)lo=value;if(value>hi)hi=value;hash=(hash^value)*1099511628211ull;
+    }
+    int first=hi>32 && !atomic_exchange(&nonblack[readback],1);
+    if(n>8 && n%30 && !first)return;
+    LOG("[codec] pixels %s %u: pool %p index %u image %p %ux%u Y %u..%u hash %016llx%s dst %p/%p",
+        readback?"read":"decoded",n,(void*)pool,index,(void*)im,w,h,lo,hi,(unsigned long long)hash,first?" first-nonblack":"",ydst,uvdst);
+    const char *root=getenv("DM_ROOT"),*dump=getenv("DM_CV_DUMP");if(!root || !dump || atoi(dump)<=0)return;
+    size_t size=(size_t)w*h*3/2;uint8_t *bytes=malloc(size);if(!bytes)die("codec pixel dump allocation failed");
+    if(ydst){memcpy(bytes,ydst,(size_t)w*h);memcpy(bytes+(size_t)w*h,uvdst,(size_t)w*h/2);}else md_nv12(im,bytes,(int)w,(int)h);
+    char path[1024];snprintf(path,sizeof path,"%s/codec_%s_%06u.nv12",root,readback?"read":"decoded",n);
+    FILE *file=fopen(path,"wb");if(!file || fwrite(bytes,1,size,file)!=size)die("codec pixel dump failed: %s",path);
+    if(fclose(file))die("codec pixel dump close failed: %s",path);free(bytes);
+}
 // Pictures and end of stream into the released buffers, in order (decoder lock held)
 static void drain(cv_dec *d) {
     while (d->pcount && (d->nheld || d->eos_pending)) {
@@ -120,6 +145,7 @@ static void drain(cv_dec *d) {
             memmove(d->held, d->held + 1, sizeof d->held[0] * (CV_HOLD - 1)); memmove(d->held_ts, d->held_ts + 1, sizeof d->held_ts[0] * (CV_HOLD - 1));
             memmove(d->held_eos, d->held_eos + 1, CV_HOLD - 1); d->nheld--;
             b->w = (uint16_t)im->d_w; b->h = (uint16_t)im->d_h; b->ts = ts; b->eos = eos;
+            cv_pixels(0,b->pool,b->pidx,im,NULL,NULL,im->d_w,im->d_h);
             if (b->pool && b->pidx < b->pool->count) { pool_native_write(b->pool, b->pidx, im); if (b->pool->img[b->pidx]) vpx_img_free(b->pool->img[b->pidx]); b->pool->img[b->pidx] = im; } else vpx_img_free(im);
             if (!d->pictures++) LOG("[codec] %s decoder %u: first picture %ux%u into buffer %u", k_cv_name[d->codec], d->id, b->w, b->h, i);
         } else { b->w = b->h = 0; b->ts = 0; b->eos = 1; d->eos_pending = 0; }
@@ -224,10 +250,11 @@ HLE_FORCE("_ZN2nn5codec26ReadDecoderOutputImageNv12EPKNS0_25VideoDecoderImagePoo
           Result, h_cv_nv12, const void *t, uint32_t i, uint16_t x, uint16_t y, uint16_t w, uint16_t h, void *ydst, uint64_t ystride, uint64_t ysize, void *uvdst, uint64_t uvstride, uint64_t uvsize) {
     cv_pool *p = pool_of(t); const vpx_image_t *im = p && i < p->count ? p->img[i] : NULL;
     if (x || y || ystride != w || uvstride != w || ysize < (uint64_t)w * h || uvsize < (uint64_t)w * h / 2) { static int once; if (!once++) LOG("[RED] nn::codec::ReadDecoderOutputImageNv12: region %u,%u strides %llu / %llu: only whole tight pictures are served", x, y, (unsigned long long)ystride, (unsigned long long)uvstride); return 0; }
-    if (!im) { memset(ydst, 16, ysize); memset(uvdst, 128, uvsize); return 0; }
-    if ((uint8_t *)uvdst == (uint8_t *)ydst + (size_t)w * h) { md_nv12(im, ydst, w, h); return 0; }
+    if (!im) { memset(ydst, 16, ysize); memset(uvdst, 128, uvsize);cv_pixels(1,p,i,NULL,ydst,uvdst,w,h);return 0; }
+    if ((uint8_t *)uvdst == (uint8_t *)ydst + (size_t)w * h) { md_nv12(im, ydst, w, h); cv_pixels(1,p,i,im,ydst,uvdst,w,h);return 0; }
     uint8_t *tmp = malloc((size_t)w * h * 3 / 2); md_nv12(im, tmp, w, h);
     memcpy(ydst, tmp, (size_t)w * h); memcpy(uvdst, tmp + (size_t)w * h, (size_t)w * h / 2); free(tmp);
+    cv_pixels(1,p,i,im,ydst,uvdst,w,h);
     return 0;
 }
 
@@ -337,6 +364,13 @@ static Result cv_dec_submit(uint64_t *out, void *t, const void *data, uint64_t s
     pthread_mutex_lock(&d->mu);
     if (d->nheld >= CV_HOLD) { if (d->event) hle_clear_system_event(d->event); pthread_mutex_unlock(&d->mu); return CV_BUSY; }
     int got = 0;
+    const char *trace=getenv("DM_CV_PIXELS"),*dump=getenv("DM_CV_DUMP"),*root=getenv("DM_ROOT");
+    if(trace && atoi(trace)>0 && (!d->submits || !((d->submits+1)%60)))
+        LOG("[codec] packet %s %u number %llu bytes %llu timestamp %lld eos %d",k_cv_name[d->codec],d->id,(unsigned long long)(d->submits+1),(unsigned long long)size,(long long)ts,eos);
+    if(!d->submits && size && trace && atoi(trace)>0 && dump && atoi(dump)>0 && root){
+        char path[1024];snprintf(path,sizeof path,"%s/codec_%u_first_packet.bin",root,d->id);FILE *f=fopen(path,"wb");
+        if(!f || fwrite(data,1,(size_t)size,f)!=(size_t)size)die("codec packet dump failed: %s",path);if(fclose(f))die("codec packet dump close failed: %s",path);
+    }
     if (d->codec == CV_H264 && d->avc) {   // VideoToolbox reorders: pictures leave in presentation order, all of them at the end of the stream
         if (size && mavc_decode(d->avc, data, (int)size, ts / 1000) < 0) { static int n; if (n++ < 4) LOG("[RED] nn::codec H.264: VideoToolbox could not decode a packet"); }
         uint8_t *nv12 = malloc((size_t)d->w * d->h * 3 / 2); int64_t pts = 0;

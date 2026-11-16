@@ -5,6 +5,7 @@
 //   dirty-page tracker saw a write to its pages; any other texture is the GPU's (render targets, images), filled only by GPU work.
 //   Version 1 keeps every image in VK_IMAGE_LAYOUT_GENERAL after its first use, ordered by whole-pipeline barriers.
 #include "gfx_vk.h"
+#include "gfx_vk_image_usage.h"
 #include "nvn_tex.h"
 #include "../gfx/tex/nvn_deswizzle.h"
 #include "../gfx/tex/nvn_bc.h"
@@ -214,10 +215,12 @@ static vkimg_t *img_new(const tex_t *t, const vkfmt_t *f) {
     im->levels = d->levels ? d->levels : 1; im->samples = d->samples > 1 ? d->samples : 1; im->target = d->target; im->nvn_format = d->format;
     im->fmt = f->vk; im->vtype = vtype_of(d->target); im->aspect = aspect_of(f);
     VkFormatProperties fp; vkGetPhysicalDeviceFormatProperties(V.pd, f->vk, &fp);
-    VkImageUsageFlags u = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    if (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) u |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-    if (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) u |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-    if ((d->flags & NVN_TEXTURE_FLAGS_IMAGE) && (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) u |= VK_IMAGE_USAGE_STORAGE_BIT;
+    VkFormatProperties compatible = {0};
+    VkFormat twin = srgb_twin(f->vk);
+    if (twin) vkGetPhysicalDeviceFormatProperties(V.pd, twin, &compatible);
+    VkImageUsageFlags u = vk_texture_image_usage(fp.optimalTilingFeatures, compatible.optimalTilingFeatures,
+                                                !f->compressed && im->aspect == VK_IMAGE_ASPECT_COLOR_BIT && im->samples == 1);
+    int extended_storage = (u & VK_IMAGE_USAGE_STORAGE_BIT) && !(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT);
     VkImageCreateInfo ci = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, NULL,
         VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT | (d->target == 8 || d->target == 9 ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0) |
         (d->target == 2 ? VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT : 0) | (f->compressed ? VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT : 0),
@@ -227,7 +230,8 @@ static vkimg_t *img_new(const tex_t *t, const vkfmt_t *f) {
     VkFormat fl[2] = {f->vk, srgb_twin(f->vk)}; VkImageFormatListCreateInfo fli = {VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO, NULL, fl[1] ? 2u : 1u, fl};
     if (!f->compressed && (ubwc_mode() & (im->aspect == VK_IMAGE_ASPECT_COLOR_BIT ? 1 : 2))) {   // (a depth format has no twin: a list of itself, no MUTABLE_FORMAT)
         im->fixed_fmt = 1; im->fmt2 = fl[1]; ci.pNext = &fli;
-        ci.flags &= ~(VkImageCreateFlags)VK_IMAGE_CREATE_EXTENDED_USAGE_BIT; if (!fl[1]) ci.flags &= ~(VkImageCreateFlags)VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+        if (!extended_storage) ci.flags &= ~(VkImageCreateFlags)VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
+        if (!fl[1]) ci.flags &= ~(VkImageCreateFlags)VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
     }
     im->usage = ci.usage; im->cflags = ci.flags;
     VkResult r = vkCreateImage(V.dev, &ci, NULL, &im->img);
@@ -717,6 +721,7 @@ VkImageView vk_tex_view(const tex_t *t, const view_t *vw, int dim, int arrayed, 
         VKLOG("sparse view ser=%llu format=%#x attachment=%d dim=%d arrayed=%d CPU-readable=%d view-layers=%u+%u set=%d view-levels=%u+%u set=%d",(unsigned long long)t->serial,t->d.format,as_attachment,dim,arrayed,nvn_sparse_cpu_readable(t->pool,(uint64_t)(uintptr_t)t->mem,t->L.size),vw?vw->min_layer:0,vw?vw->nlayers:0,vw?vw->set_layers:0,vw?vw->base_level:0,vw?vw->nlevels:0,vw?vw->set_levels:0);
     vkimg_t *im = vk_tex(t); if (img_out) *img_out = im;
     if (!im) return VK_NULL_HANDLE;
+    if (storage && !(im->usage & VK_IMAGE_USAGE_STORAGE_BIT)) die("[RED] [vk] storage view of image without storage usage (format %d, nvn flags %#x)", im->fmt, t->d.flags);
     if (!purpose) {   // DM_VK_TEXPAINT=map: magenta BC7, green BC1, blue 4-byte uncompressed, yellow 1-2 byte
         const char *pt = getenv("DM_VK_TEXPAINT");
         if (pt && !strcasecmp(pt, "map")) {
@@ -839,6 +844,15 @@ vkimg_t *vk_tex_by_id(int tid, const view_t **view_out, const tex_t **tex_out) {
     if (!ok) return NULL;
     if (view_out) *view_out = t_treg.has_v ? &t_treg.v : NULL; if (tex_out) *tex_out = &t_treg.t;
     return (vkimg_t *)1;   // presence only: the caller makes the view with vk_tex_view
+}
+int vk_tex_view_description(vkimg_t *im, VkImageView view, VkImageViewCreateInfo *out) {
+    int found = 0; pthread_mutex_lock(&g_view_mu);
+    for (vview *v = nvn_hm_get(&g_views, &im); v; v = v->next) if (v->v == view) {
+        *out = (VkImageViewCreateInfo){.sType=VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image=im->img, .viewType=v->type,
+            .format=v->fmt, .components=v->swz, .subresourceRange={v->aspect,v->lv0,v->nlv,v->ly0,v->nly}};
+        found = 1; break;
+    }
+    pthread_mutex_unlock(&g_view_mu); return found;
 }
 static VkSamplerAddressMode wrap(int w) {
     switch (w) { case 1: return VK_SAMPLER_ADDRESS_MODE_REPEAT; case 6: return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT; case 2: case 3: return VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE;

@@ -1,5 +1,17 @@
 # The rewriter's patches of Nintendo SDK module builds (sdk), which several games can ship: dm/tools/patch_nso.py applies those of a module's NSO build ID, whatever the game.
 # A patch of a game's own module (main) goes in its profile's patches.py (dm/games/<id>/patches.py). CUTS as described in patch_nso.py ("Registered patches")
+import os
+
+OBS = {
+    '1643a838814f9c10c696f930ed681e7f': [
+        (0x84f2d4, 29 | 1 << 8, '52800100', 'sdk operator new aligned: give-up path, x19 align, x20 size'),
+        (0x84f270, 29 | 2 << 8, 'f100041f', 'sdk operator new aligned: entry, x0 is the requested size'),
+        (0x7780a4, 28, '2a1303e0', "the sdk's abort(): the entry the loader binds is 0x7780a0, so the gate sits inside it"),
+        (0x84f668, 27, 'aa0103f4', '__cxa_throw: x1 is the type_info, filtered to the allocation failure'),
+        (0xba124, 20, '2a1f03e3', 'nn::diag abort without a message: the call site is in the stack scan'),
+    ],
+}
+
 CUTS = {
   # Kingdom Battle 1.9.589692, SDK 4.4.0: the older VammManager reserves a
   # full 1 GB node area (constructor +0x93dd8, occupied range +0x93e98).
@@ -177,6 +189,25 @@ CUTS = {
   ],
 }
 
+# Android bionic resets APIAKey in each pthread (API 31+). SDK 22 fibers are
+# initialized on one thread and first entered on another: PACIA at initialization
+# cannot pair with AUTIASP there. APIBKey is inherited, and the SDK already uses
+# it for subsequent fiber switches. Use that same key for the initial frame;
+# PACGA integrity checks and the expected continuation check still run unchanged.
+# Checked on the TB323FU with an independent cross-pthread signing probe and
+# signing/restore gates: stack modifiers matched, APIA signatures differed, APIB
+# signatures matched. Keep this platform limit cut restricted to the reviewed SDK.
+if os.environ.get('DM_TARGET') == 'android':
+    CUTS['1643a838814f9c10c696f930ed681e7f'] = [
+        # Registering this build bypasses MATCH_CUTS: retain its already-matched
+        # node-area cuts (constructor at 0x16ba38); its alignment rule did not match.
+        (0x16ba48, '08fca752', '087ca052', 'AddressRegionManager node area limit: 1 GB to 62 MB'),
+        (0x16bad4, '09fca752', '097ca052', 'AddressRegionManager occupied node area: 1 GB to 62 MB'),
+        (0x16d0e8, '3001c1da', '3005c1da', 'fiber initial return signing: PACIA x16,x9 to PACIB x16,x9 (shared pthread key)'),
+        (0x16d0f8, '3101c1da', '3105c1da', 'fiber initial return signing check: PACIA x17,x9 to PACIB x17,x9'),
+        (0x16d40c, 'bf2303d5', 'ff2303d5', 'fiber initial return authentication: AUTIASP to AUTIBSP (shared pthread key)'),
+    ]
+
 # SDK-wide function patches (dm/tools/nso_match.py): the two fixes above that hold for any game on an iPhone's small address space, for every game's sdk of a build with no CUTS
 # (patch_nso.py "Registered patches"), so a new game or a new version of one gets them without a cut for its build. The Switch's alias region is
 # 64 GB, where neither matters; the host's is about 4.4 GB:
@@ -323,6 +354,12 @@ MATCH_CUTS = {'sdk': [
 # How general each patch is and could be (dm/tools/docs_patches.py "Binding", listed in docs/agents/game-patches.md): what, its binding now, the loosest it could have (goal),
 # purpose, why; blocked or kept: why the gap stays open (cannot close yet, or left open on purpose); checked: what was checked on game files (else a judgement)
 BINDING = [
+    {'what': 'SDK 22 allocator, throw and abort observations (1643a838)', 'now': 'build', 'goal': 'build', 'purpose': 'runtime',
+     'why': 'read-only diagnostics at exact instructions of this SDK build, for every game shipping it'},
+    {'what': 'SDK 22 initial fiber frames use the shared B-key on Android (1643a838)', 'now': 'build', 'goal': 'sdk', 'purpose': 'runtime',
+     'checked': 'SDK 22.2.8 signing and restore instructions, plus cross-pthread PAC probe on TB323FU, 2026-11-15',
+     'why': 'bionic resets APIAKey per pthread, while a fiber can first run on a different thread; APIBKey is inherited',
+     'blocked': 'only this SDK fiber implementation has been reviewed'},
     {'what': 'node area 1 GB → 62 MB and regions of 4 MB and more aligned to 2 MB, as SDK 20: the SDK-wide rules', 'now': 'sdk', 'goal': 'sdk', 'purpose': 'address space',
      'checked': '20 registered builds rewritten byte-identical with the rules alone, 2026-10-29 and 2026-10-30; the 2 MB alignment on every sdk build on the drive, 2026-10-30',
      'why': 'one rule per reviewed implementation; every sdk build without CUTS gets them'},

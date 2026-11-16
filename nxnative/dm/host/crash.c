@@ -12,6 +12,10 @@
 #include <mach/mach.h>
 #include <stdatomic.h>
 #include <time.h>
+#if defined(__ANDROID__)
+#include <sys/auxv.h>
+#include <asm/hwcap.h>
+#endif
 
 static _Atomic uint64_t g_watch_last_ns;
 static _Atomic uint64_t g_watch_count;
@@ -77,10 +81,23 @@ void crash_off(const char *tag, uint64_t a) {   // Also used by diag.c
 #define off crash_off
 
     module_t *m = module_of((void *)a);
-    Dl_info di;
+    Dl_info di = {0};
     if (m) fprintf(stderr, " %s%s%s+%#llx", tag, *tag ? "=" : "", m->name, a - (uint64_t)m->base);
     else if (dladdr((void *)a, &di) && di.dli_sname) fprintf(stderr, " %s%s%s+%#lx", tag, *tag ? "=" : "", di.dli_sname, (unsigned long)(a - (uint64_t)di.dli_saddr));
+    else if (di.dli_fname && di.dli_fbase) fprintf(stderr, " %s%s%s+%#llx", tag, *tag ? "=" : "", strrchr(di.dli_fname, '/') ? strrchr(di.dli_fname, '/') + 1 : di.dli_fname, a - (uint64_t)(uintptr_t)di.dli_fbase);
     else fprintf(stderr, " %s%s%#llx", tag, *tag ? "=" : "", a);
+}
+static uint64_t crash_code_address(uint64_t address) {
+#if defined(__ANDROID__)
+    // Saved native LRs carry a PAC whose width depends on the kernel VA layout;
+    // masking a fixed number of high bits cannot reliably symbolize them.
+    if (getauxval(AT_HWCAP) & HWCAP_PACA) {
+        register uint64_t value __asm__("x16") = address;
+        __asm__ volatile(".inst 0xdac143f0" : "+r"(value)); // XPACI x16
+        return value;
+    }
+#endif
+    return address;
 }
 // Frame pointer backtrace: x29 chain [fp]=previous frame's fp, [fp+8]=return address; only 8-byte aligned, monotonically increasing frames are walked.
 // Each frame is read with vm_read_overwrite, which fails instead of faulting: code built without frame pointers keeps data in x29 (STEINS;GATE RE:BOOT's main+0x38921c: x29 = 0x430),
@@ -91,7 +108,7 @@ void dm_backtrace(uint64_t fp) {
         uint64_t w[2]; vm_size_t got = 0;
         if (vm_read_overwrite(mach_task_self(), (vm_address_t)fp, sizeof w, (vm_address_t)w, &got) != KERN_SUCCESS || got != sizeof w) break;
         uint64_t nfp = w[0], ra = w[1];
-        off("", ra);
+        off("", crash_code_address(ra));
         if (nfp <= fp) break;
         fp = nfp;
     }

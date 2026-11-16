@@ -339,10 +339,12 @@ namespace Ryujinx.Graphics.Shader.Translation
         // Scoreboards: a variable-latency instruction (one that sets a write barrier, control bits 110..113; 7 = none) writes its registers when the result
         // arrives, and the compiler lets later instructions that do not wait on that barrier (wait mask, bits 116..122) read the registers' old values (LDG R2,
         // [R2.64] then LDG R4, [R2.64 + 4] reads the address twice). Such an instruction's writes go to locals that start as the registers' values; they are
-        // copied to the registers before the first instruction that waits on the barrier, at DEPBAR, and at the end of the block.
+        // copied to the registers before the first wait, at DEPBAR, and at the end of the block. A guarded-off instruction commits nothing,
+        // preserving writes made meanwhile. Snapshot its predicate at issue, before another instruction can change it.
+        // Guarded commit handling adapted from BananaNative 341299f7 (MIT-licensed Ryujinx fork).
         private static void EmitOpsAmpere(EmitterContext context, Block block)
         {
-            List<(Register Reg, Operand Value)>[] pending = new List<(Register, Operand)>[7];
+            List<(Register Reg, Operand Value, Operand Guard)>[] pending = new List<(Register, Operand, Operand)>[7];
             int shadows = 0;
             Stack<int> freeShadows = new();
 
@@ -350,9 +352,22 @@ namespace Ryujinx.Graphics.Shader.Translation
             {
                 if (pending[barrier] != null)
                 {
-                    foreach ((Register reg, Operand value) in pending[barrier])
+                    foreach ((Register reg, Operand value, Operand guard) in pending[barrier])
                     {
-                        context.Copy(Register(reg), value);
+                        if (guard != null)
+                        {
+                            Operand skip = Label();
+
+                            context.BranchIfFalse(skip, context.ICompareNotEqual(guard, Const(0)));
+                            context.Copy(Register(reg), value);
+                            context.MarkLabel(skip);
+                            freeShadows.Push(guard.GetRegister().Index);
+                        }
+                        else
+                        {
+                            context.Copy(Register(reg), value);
+                        }
+
                         freeShadows.Push(value.GetRegister().Index);
                     }
 
@@ -401,12 +416,14 @@ namespace Ryujinx.Graphics.Shader.Translation
                 int opStart = context.OperationsCount;
 
                 Operand predSkipLbl = null;
+                Operand guardPred = null;
 
                 if (a.Pred != RegisterConsts.PredicateTrueIndex && a.Opcode != Instructions.AmpereOpcodes.Bra)
                 {
                     Operand label;
 
-                    if (opIndex == block.OpCodes.Count - 1 && block.HasNext())
+                    // The next block only when nothing waits for the end of this one's commits
+                    if (opIndex == block.OpCodes.Count - 1 && block.HasNext() && writeBarrier >= 6 && Array.TrueForAll(pending, list => list == null || list.Count == 0))
                     {
                         label = context.GetLabel(block.Successors[0].Address);
                     }
@@ -419,6 +436,8 @@ namespace Ryujinx.Graphics.Shader.Translation
 
                     RegisterType predType = Instructions.AmpereTable.HasUniformGuard(a.Opcode) ? RegisterType.UniformPredicate : RegisterType.Predicate;
                     Operand pred = Register(a.Pred, predType);
+
+                    guardPred = pred;
 
                     if (a.PredInv)
                     {
@@ -441,7 +460,7 @@ namespace Ryujinx.Graphics.Shader.Translation
 
                 if (writeBarrier < 6 && !op.Props.HasFlag(InstProps.Bra))
                 {
-                    DeferAmpereWrites(context, opStart, pending, writeBarrier, ref shadows, freeShadows);
+                    DeferAmpereWrites(context, opStart, pending, writeBarrier, ref shadows, freeShadows, guardPred, a.PredInv);
                 }
             }
 
@@ -452,12 +471,14 @@ namespace Ryujinx.Graphics.Shader.Translation
         private static void DeferAmpereWrites(
             EmitterContext context,
             int opStart,
-            List<(Register Reg, Operand Value)>[] pendingAll,
+            List<(Register Reg, Operand Value, Operand Guard)>[] pendingAll,
             int barrier,
             ref int shadows,
-            Stack<int> freeShadows)
+            Stack<int> freeShadows,
+            Operand guardPred,
+            bool guardInv)
         {
-            List<(Register Reg, Operand Value)> pending = pendingAll[barrier] ??= [];
+            List<(Register Reg, Operand Value, Operand Guard)> pending = pendingAll[barrier] ??= [];
 
             int end = context.OperationsCount;
             Dictionary<Register, Operand> locals = new();
@@ -518,23 +539,44 @@ namespace Ryujinx.Graphics.Shader.Translation
             {
                 context.InsertOperation(at++, new Operation(Instruction.Copy, local, Register(reg)));
 
-                // A register written again before its earlier deferred write landed: the later write wins, the earlier shadow is free
-                foreach (List<(Register Reg, Operand Value)> list in pendingAll)
+                Operand guard = null;
+
+                if (guardPred != null)
                 {
-                    if (list == null)
+                    if (freeShadows.Count == 0 && shadows == RegisterConsts.ShadowsCount)
                     {
-                        continue;
+                        throw new InvalidOperationException("Ampere: more deferred register writes pending at once than shadow registers");
                     }
 
-                    foreach ((Register r, Operand v) in list.FindAll(p => p.Reg.Equals(reg)))
+                    // The guard as it is at issue, as a nonzero word (a float's bits, which the conditional select keeps), not 1: a denormal could be flushed
+                    guard = Register(freeShadows.Count != 0 ? freeShadows.Pop() : shadows++, RegisterType.Shadow);
+                    context.InsertOperation(at++, new Operation(Instruction.ConditionalSelect, guard, guardPred, Const(guardInv ? 0 : 0x3f800000), Const(guardInv ? 0x3f800000 : 0)));
+                }
+                else
+                {
+                    // A register written again before its earlier deferred write landed: the later write wins, the earlier shadow is free. A guarded later write may not happen, so the earlier one stays
+                    foreach (List<(Register Reg, Operand Value, Operand Guard)> list in pendingAll)
                     {
-                        freeShadows.Push(v.GetRegister().Index);
-                    }
+                        if (list == null)
+                        {
+                            continue;
+                        }
 
-                    list.RemoveAll(p => p.Reg.Equals(reg));
+                        foreach ((Register r, Operand v, Operand g) in list.FindAll(p => p.Reg.Equals(reg)))
+                        {
+                            freeShadows.Push(v.GetRegister().Index);
+
+                            if (g != null)
+                            {
+                                freeShadows.Push(g.GetRegister().Index);
+                            }
+                        }
+
+                        list.RemoveAll(p => p.Reg.Equals(reg));
+                    }
                 }
 
-                pending.Add((reg, local));
+                pending.Add((reg, local, guard));
             }
         }
 

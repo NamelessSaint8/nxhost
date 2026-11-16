@@ -99,9 +99,18 @@ static uint8_t g_atlas_census_seen[8][64][2];   // DM_VK_ATLAS_CENSUS_SHADER=<sh
 static long long g_watch_off = -1; static int g_watch_n; extern uint64_t g_tex_frame;
 // DM_VK_UBO_LOG=<shader key, hex>[#n] (live): log the next n (40) uniform buffers that shader reads (present, stage, register, address, a hash and the first 16 words)
 static uint64_t g_ubolog_key; static int g_ubolog_n;
+// DM_VK_TRACE_CS=<key hex>[#n] (live): trace descriptors for the next n
+// dispatches of one compute program, using the same path as traced draws.
+static uint64_t g_cstrace_key; static int g_cstrace_n;
 static void ubo_log(const vkshader_t *s, int st, int reg, uint64_t a, uint64_t n) {
     if (!g_ubolog_key || s->key != g_ubolog_key || g_ubolog_n <= 0) return;
     g_ubolog_n--; uint8_t buf[4096]; if (n > sizeof buf) n = sizeof buf; void vk_ubd_read(uint64_t a, uint64_t n, uint8_t *dst); vk_ubd_read(a, n, buf);
+    if (getenv("DM_VK_UBO_DUMP")) {
+        const char *root = getenv("DM_ROOT"); static unsigned sequence;
+        if (root) { char path[1024]; snprintf(path,sizeof path,"%s/ubo_%016llx_%llu_%u_s%d_r%d.bin",root,
+            (unsigned long long)s->key,(unsigned long long)g_tex_frame,sequence++,st,reg);
+            FILE *file=fopen(path,"wb");if(file){fwrite(buf,1,(size_t)n,file);fclose(file);VKLOG("ubo bytes: %s",path);} }
+    }
     uint64_t h = 1469598103934665603ull; for (uint64_t i = 0; i < n; i++) h = (h ^ buf[i]) * 1099511628211ull; float f[16] = {0}; memcpy(f, buf, n < 64 ? n : 64);
     char t[4096]; int k = 0; uint32_t nw = (uint32_t)(n < 512 ? n : 512) / 4; (void)f;   // every word up to 512 bytes, as floats
     for (uint32_t i = 0; i < nw && k < (int)sizeof t - 24; i++) { float v; memcpy(&v, buf + 4 * i, 4); k += snprintf(t + k, sizeof t - k, "%s%g", i ? (i % 4 ? " " : " | ") : "", v); }
@@ -116,9 +125,10 @@ static void ubo_log(const vkshader_t *s, int st, int reg, uint64_t a, uint64_t n
         void vk_ubd_read(uint64_t a, uint64_t n, uint8_t *dst); vk_ubd_read(a, n, buf); }
     VKLOG("ubo: present %llu pass %d stage %d c%d %#llx +%llu hash %016llx: %s", (unsigned long long)g_tex_frame, g_sub_pass - 1, st, reg, (unsigned long long)a, (unsigned long long)n, (unsigned long long)h, t);
 }
-// DM_VK_TEXDUMP=<pool hex>+<offset hex> (read when a pass dump starts; the trace prints both): during the dump, the first sampled image there is blitted (level 0, up to 6 layers)
+// DM_VK_TEXDUMP=<pool hex>+<offset hex> or <width>x<height> (read when a pass dump starts): during the dump, the first matching sampled image is blitted (level 0, up to 6 layers)
 // into RGBA16F images and dumped with the passes, so a compressed texture (BC6H cube maps...) can be looked at decoded by the GPU
 static long long g_td_off = -1; static unsigned long long g_td_pool; static vkimg_t *g_td_im; static int g_td_done;
+static unsigned g_td_width, g_td_height;
 // DM_VK_TEXRAW: an image's level 0 exactly as the GPU holds it (compressed blocks and all), so it can be compared with the bytes the game handed the copy.
 // The blit path above cannot read a BC image (BLIT_SRC is not offered for them), and this is the only way to tell a wrong upload from a wrong binding
 static struct { VkBuffer b; VkDeviceMemory m; void *p; VkDeviceSize n; uint32_t w, h; uint64_t serial, fence; int busy; } g_tr;
@@ -148,13 +158,20 @@ static void texraw_write(uint64_t done_fence) {   // gfx_vk_present.c's poll, ev
         VKLOG("[vk] texraw: serial %llu %ux%u → %s (%llu bytes as the GPU holds them)", (unsigned long long)g_tr.serial, g_tr.w, g_tr.h, path, (unsigned long long)g_tr.n); }
     vkDestroyBuffer(V.dev, g_tr.b, NULL); vk_memory_free(V.dev, g_tr.m, NULL); g_tr.b = VK_NULL_HANDLE;
 }
-void vk_texdump_note(vkimg_t *im) { if (g_td_off >= 0 && !g_td_done && !g_td_im && im && im->off == g_td_off && im->pool == g_td_pool) g_td_im = im; }
+void vk_texdump_note(vkimg_t *im) {
+    if (g_td_off >= 0 && !g_td_done && !g_td_im && im &&
+        (g_td_width ? im->w == g_td_width && im->h == g_td_height : im->off == g_td_off && im->pool == g_td_pool)) g_td_im = im;
+}
 void vk_watch(const vkimg_t *im, const char *what) {
     if (g_watch_off < 0 || !im || im->off != g_watch_off || g_watch_n <= 0) return;
     g_watch_n--; VKLOG("watch: present %llu pass %d (%ux%u): %s %ux%u fmt %d pool %#llx+%#llx (image %p, nvn flags %#x, %d overlapping)", (unsigned long long)g_tex_frame, g_sub_pass - 1, S.pass_w, S.pass_h, what, im->w, im->h, im->fmt,
                        (unsigned long long)im->pool, (unsigned long long)im->off, (const void *)im, im->flags, im->novl);
 }
 static void x_read(void) { const char *c = getenv("DM_VK_CB_DRAWS"); g_x_cbdraws = c ? atoi(c) : 128; g_sub_pass = 0;
+    { const char *w = getenv("DM_VK_TRACE_CS"); static char last[64];
+      if (!w || !*w || !strcmp(w, "0")) g_cstrace_key = 0;
+      else if (strcmp(w, last)) { g_cstrace_key = strtoull(w, NULL, 16); const char *h = strchr(w, '#'); g_cstrace_n = h ? atoi(h + 1) : 1; }
+      snprintf(last, sizeof last, "%s", w ? w : ""); }
     const char *fy = getenv("DM_VK_FLIPY"); g_flipy = !(fy && !atoi(fy));   // on unless DM_VK_FLIPY=0
     if (g_x_listpasses) { g_x_listpasses = 0; setenv("DM_VK_TRACE_PASS", "-1", 1); }
     const char *tp = getenv("DM_VK_TRACE_PASS"); g_x_tracepass = tp ? atoi(tp) : -1;
@@ -437,7 +454,12 @@ void vk_pass_dump_poll(uint64_t done_fence) {   // gfx_vk_present.c, every prese
     if (g_pd_state == 0 && e && atoi(e)) { const char *sk = getenv("DM_VK_PASSDUMP_SKIP"); g_pd_skip = sk && !strchr(sk, 'x') ? atoi(sk) : 0;
         snprintf(g_pd_from, sizeof g_pd_from, "%s", sk && strchr(sk, 'x') ? sk : "");
         const char *sz = getenv("DM_VK_PASSDUMP_SIZE"); snprintf(g_pd_size, sizeof g_pd_size, "%s", sz && strcmp(sz, "0") ? sz : "");
-        { const char *td = getenv("DM_VK_TEXDUMP"); const char *pl = td ? strchr(td, '+') : NULL; g_td_pool = pl ? strtoull(td, NULL, 16) : 0; g_td_off = pl ? strtoll(pl + 1, NULL, 16) : -1; g_td_im = NULL; g_td_done = 0; }
+        { const char *td = getenv("DM_VK_TEXDUMP"); const char *pl = td ? strchr(td, '+') : NULL;
+          g_td_width = g_td_height = 0;
+          unsigned w, h; char trailing;
+          if (td && !pl && sscanf(td, "%ux%u%c", &w, &h, &trailing) == 2 && w && h) { g_td_width = w; g_td_height = h; }
+          g_td_pool = pl ? strtoull(td, NULL, 16) : 0; g_td_off = pl ? strtoll(pl + 1, NULL, 16) : g_td_width ? 0 : -1;
+          g_td_im = NULL; g_td_done = 0; }
         const char *fr = getenv("DM_VK_PASSDUMP_FRAMES"); g_pd_frames = fr && atoi(fr) > 1 ? atoi(fr) : 1;
         g_pd_state = 1; g_npd = 0; setenv("DM_VK_PASSDUMP", "0", 1); VKLOG("pass dump: the next submission's passes from pass %d", g_pd_skip); return; }
     if (g_pd_state == 1 && g_npd && --g_pd_frames > 0 && g_npd < PD_MAX - 8) return;   // DM_VK_PASSDUMP_FRAMES=N: N presents in a row (with DM_VK_PASSDUMP_SIZE)
@@ -982,6 +1004,7 @@ static int view_num(const tex_t *t, const view_t *v) {
     return f->is_int ? (f->is_sint ? 2 : 1) : 0;
 }
 static uint64_t g_num_um, g_num_im, g_num_atlas;   // integer view ordinals and active atlas binding numbers
+#include "gfx_vk_capture.inc"
 extern uint64_t g_tex_gen;
 static int tex_desc_for(int st, const dmsv_bind *b, uint64_t h, VkDescriptorImageInfo *ii, int storage, VkDescriptorBufferInfo *atlas_meta) {   // the view's view_num
     int tid = (int)(h & 0xfffff); const view_t *v = NULL; const tex_t *t = NULL;
@@ -1012,6 +1035,12 @@ static int tex_desc_for(int st, const dmsv_bind *b, uint64_t h, VkDescriptorImag
         vkimg_t *im = NULL; ii->imageView = vk_tex_view(t, v, b->dim, b->flags & 1, storage ? 2 : 0, &im); if (storage && im) { vk_tex_mark_gpu_write(im); vk_tex_wrote(im, t, 2, NULL); }
         if (g_tracing) VKLOG("  texture handle %#llx id %d: %ux%u nvn format %#x target %d serial %llu pool %p+%#llx size %#llx → image %p (%ux%u fmt %d layers %u levels %u) view %p", (unsigned long long)h, tid, t->d.width, t->d.height, t->d.format, t->d.target,
                              (unsigned long long)t->serial, (const void *)t->pool, (unsigned long long)t->off, (unsigned long long)t->L.size, (void *)im, im ? im->w : 0, im ? im->h : 0, im ? im->fmt : 0, im ? im->layers : 0, im ? im->levels : 0, (void *)ii->imageView);
+        if (g_tracing) VKLOG("  image descriptor: stage %d binding %u %s view format %d nvn flags %#x image usage %#x", st, b->binding,
+                             storage ? "storage" : "sampled", vk_view_fmt, t->d.flags, im ? im->usage : 0);
+        if(g_tracing && im) { VkImageViewCreateInfo description;
+            if(vk_tex_view_description(im,ii->imageView,&description))VKLOG("  sampled mapping RGBA %u %u %u %u; texture mapping set %u bits %#x; view mapping set %u",
+                description.components.r,description.components.g,description.components.b,description.components.a,t->set_swz,t->swz,v?v->set_swizzle:0); }
+        if(st==5)cscap_image(b,im,ii->imageView,ii->sampler,storage);
         vk_tex_note_use(im);
         if (ii->imageView) num = view_num(t, v);
         if (ii->imageView) { g_tvc[ck].epoch = g_set_epoch; g_tvc[ck].gen = g_tex_gen; g_tvc[ck].tid = tid; g_tvc[ck].dim = b->dim; g_tvc[ck].arr = b->flags & 1; g_tvc[ck].storage = storage; g_tvc[ck].v = ii->imageView; g_tvc[ck].im = im; g_tvc[ck].num = num; }
@@ -1218,6 +1247,10 @@ static VkDescriptorSet stage_set(int st, vkshader_t *s, uint32_t *dofs) {
             else if (b->kind == RK_UBO_PTR && b->reg >= 0 && b->reg < 16) { a = S.ubo[st][b->reg].addr; n = S.ubo[st][b->reg].size; }
             else if (b->kind == RK_SBUF_UBO) { a = (uint64_t)ubo_word(st, b->reg, b->off) | (uint64_t)ubo_word(st, b->reg, b->off + 4) << 32; }
             vkpool_t *p = a ? vk_pool_of(a, 1) : NULL;
+            if (p && g_ubolog_key && getenv("DM_VK_UBO_DUMP")) ubo_log(s,st,16+b->reg,a,n);
+            if(st==5 && p)cscap_cpu(b->binding,a,n);
+            if (g_tracing) VKLOG("  buffer descriptor: stage %d binding %u kind %u reg %d guest %#llx size %llu", st, b->binding, b->kind, b->reg,
+                                 (unsigned long long)a, (unsigned long long)n);
             if (p) { buf = vk_pool_buffer(p); off = a - p->lo; if (!n || off + n > p->hi - p->lo) n = p->hi - p->lo - off;
                 // bound from the 256-byte boundary below it, the boundary the translator offsets every access from (shader_vk.py SB_ALIGN; a multiple of any device's minimum alignment)
                 const VkDeviceSize al = SB_ALIGN; if (V.props.limits.minStorageBufferOffsetAlignment > al) VKRED_ONCE(41, "storage buffer alignment %llu above %llu", (unsigned long long)V.props.limits.minStorageBufferOffsetAlignment, (unsigned long long)al);
@@ -1276,6 +1309,7 @@ static VkDescriptorSet stage_set(int st, vkshader_t *s, uint32_t *dofs) {
         }
         }
         wr->pBufferInfo = &bi[nw]; wr->descriptorType = b->desc == RD_SSBO ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        if(st==5)cscap_buffer(b->binding,wr->descriptorType,&bi[nw]);
         if (s->dyn[i]) {   // the offset goes to the bind, so the set's content (and its reuse) does not depend on it
             if (bi[nw].offset > UINT32_MAX) VKRED_ONCE(42, "dynamic uniform buffer offset past 4 GB");
             int j = nd++; while (j > 0 && dp[j - 1].b > b->binding) { dp[j] = dp[j - 1]; j--; }
@@ -1772,6 +1806,42 @@ static void draw_idx(const p_draw_idx *d,unsigned max_draws,unsigned stride) {
     if (!(dbg_draw() & 1) && g_ok) { int xf = xfb_begin(cb); vkCmdDrawIndexed(cb, (uint32_t)d->count, inst, 0, d->base_vertex, (uint32_t)d->base_instance); if (xf) xfb_end(cb, prim, (uint32_t)d->count, inst); }
 }
 static nvn_hmap g_cpipes = {.klen = 32};   // {shader, integer views, active atlas modes}
+// Pipeline creation only, before loading the guest: isolates native compiler
+// failures from game allocations, dispatch results, and frame scheduling.
+// Uses the ordinary base descriptor/module ABI (no integer/atlas variants).
+int vk_compute_probe_tool(void) {
+    const char *keys = getenv("DM_VK_COMPUTE_PROBE");
+    if (!keys || !*keys) die("DM_VK_COMPUTE_PROBE requires comma-separated shader keys");
+    void crash_install(void); void crash_thread_init(void);
+    crash_install(); crash_thread_init(); vk_init();
+    while (*keys) {
+        char *end; uint64_t key = strtoull(keys, &end, 16);
+        if (end == keys || (*end && *end != ',')) die("invalid compute probe key: %s", keys);
+        vkshader_t *cs = vk_shader(key, 5);
+        if (!cs) die("compute probe shader %016llx is unavailable", (unsigned long long)key);
+        VkDescriptorSetLayout dsl[5] = {cs->dsl}; VkPipelineLayout layout = vk_pipeline_layout(dsl, 1, 0);
+        VkComputePipelineCreateInfo ci = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO, NULL, 0,
+            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, NULL, 0, VK_SHADER_STAGE_COMPUTE_BIT,
+             vk_shader_module(cs, 0, 0, 0, 0, 0, 0, 0), "main", NULL}, layout, VK_NULL_HANDLE, -1};
+        const char *noopt = getenv("DM_VK_COMPUTE_PROBE_NOOPT");
+        if (noopt && atoi(noopt)) ci.flags |= VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;
+        if (cs->atlas_specs) die("compute probe needs explicit atlas specialization for %016llx", (unsigned long long)key);
+        VkPipelineCreationFeedback feedback = {0};
+        VkPipelineCreationFeedbackCreateInfo fci = {.sType=VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO, .pPipelineCreationFeedback=&feedback};
+        if (V.has_cache_feedback) ci.pNext = &fci;
+        VKLOG("compute probe begin shader=%016llx local=%ux%ux%u flags=%#x", (unsigned long long)key, cs->local[0], cs->local[1], cs->local[2], ci.flags);
+        uint64_t start = tick(); VkPipeline pipeline = VK_NULL_HANDLE;
+        VkResult result = vkCreateComputePipelines(V.dev, V.pcache, 1, &ci, NULL, &pipeline);
+        VKLOG("compute probe end shader=%016llx result=%d ms=%.2f feedback=%#x", (unsigned long long)key, result, (tick()-start)/1e6, feedback.flags);
+        if (result != VK_SUCCESS) die("compute probe pipeline creation failed: %d", result);
+        vk_pipeline_cache_compiled(V.has_cache_feedback ? &feedback : NULL);
+        vk_pipeline_cache_save();
+        vkDestroyPipeline(V.dev, pipeline, NULL);
+        keys = *end ? end + 1 : end;
+        if (*end && !*keys) die("empty trailing compute probe key");
+    }
+    return 1;
+}
 static void dispatch(const p_dispatch *d) {
     vkshader_t *cs = S.sh[5];
     if (!cs) { VKRED_ONCE(60, "dispatch with no compute shader in the bundle: skipped"); return; }
@@ -1806,7 +1876,25 @@ static void dispatch(const p_dispatch *d) {
         memcpy(g_dispatch,source,12);for(unsigned axis=0;axis<3;axis++)if(g_dispatch[axis]>V.props.limits.maxComputeWorkGroupCount[axis])die("[RED] indirect workgroup spill group count exceeds device limits");
     }
     VkCommandBuffer cb = vk_cmd();
+    int capture=cscap_begin(cs,d);
+    int was_tracing = g_tracing;if(capture)g_tracing=1;
+    if (g_cstrace_key == cs->key && g_cstrace_n > 0) {
+        g_cstrace_n--; g_tracing = 1;
+        VKLOG("compute resources: present %llu shader %016llx groups %ux%ux%u", (unsigned long long)g_tex_frame,
+              (unsigned long long)cs->key, g_dispatch[0], g_dispatch[1], g_dispatch[2]);
+        const char *root = getenv("DM_ROOT");
+        if (root) { static unsigned sequence; char path[1024];
+            snprintf(path, sizeof path, "%s/cs_%016llx_%u.push.bin", root, (unsigned long long)cs->key, sequence++);
+            FILE *file = fopen(path, "wb");
+            if (file) { fwrite(S.push[1], 1, DMSH_PUSH_SIZE, file); fclose(file); VKLOG("compute push constants: %s", path); }
+        }
+    }
     uint32_t dofs[96]; VkDescriptorSet set = stage_set(5, cs, dofs);
+    g_tracing = was_tracing;
+    if(capture){
+        if(g_cscap.n!=(unsigned)cs->nbind || g_num_um || g_num_im || g_num_atlas)die("[RED] compute capture has unsupported or missing descriptors");
+        cscap_copy(0);cb=vk_cmd();
+    }
     uint64_t ck[4] = {cs->key, g_num_um, g_num_im,g_num_atlas};
     VkPipeline p = nvn_hm_get(&g_cpipes, ck);
     if (!p) {
@@ -1815,19 +1903,26 @@ static void dispatch(const p_dispatch *d) {
         VkPipelineCreationFeedback feedback={0};
         VkPipelineCreationFeedbackCreateInfo feedback_ci={.sType=VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO,.pNext=ci.pNext,.pPipelineCreationFeedback=&feedback};
         if(V.has_cache_feedback)ci.pNext=&feedback_ci;
+        int trace_compile=getenv("DM_VK_PIPE_TIMING") && atoi(getenv("DM_VK_PIPE_TIMING"));
+        if(trace_compile)VKLOG("compute pipeline begin shader=%016llx groups=%ux%ux%u spill=%u um=%#llx im=%#llx atlas=%#llx",
+            (unsigned long long)cs->key,g_dispatch[0],g_dispatch[1],g_dispatch[2],cs->workgroup_spill,
+            (unsigned long long)ck[1],(unsigned long long)ck[2],(unsigned long long)ck[3]);
         uint64_t compile_start=tick();VkResult result=vkCreateComputePipelines(V.dev,V.pcache,1,&ci,NULL,&p);uint64_t compile_ns=tick()-compile_start;
         if(result==VK_SUCCESS)crash_watch_work_completed();
-        if(compile_ns>50000000ull || (getenv("DM_VK_PIPE_TIMING") && atoi(getenv("DM_VK_PIPE_TIMING"))))VKLOG("compute pipeline end result=%d ms=%.2f shader=%016llx",result,compile_ns/1e6,(unsigned long long)cs->key);
+        if(compile_ns>50000000ull || trace_compile)VKLOG("compute pipeline end result=%d ms=%.2f shader=%016llx",result,compile_ns/1e6,(unsigned long long)cs->key);
         if(result){LOG("[RED] [vk] compute pipeline failed: %016llx",(unsigned long long)cs->key);p=(VkPipeline)1;}else vk_pipeline_cache_compiled(V.has_cache_feedback?&feedback:NULL);
         nvn_hm_put(&g_cpipes, ck, p);
     }
-    if (p == (void *)1) return;
+    if (p == (void *)1) { if(capture)die("[RED] captured compute pipeline failed");return; }
     vk_img_barrier_all(cb);
+    vk_compute_ts(0,cs->key,g_dispatch[0],g_dispatch[1],g_dispatch[2]);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, (uint32_t)cs->ndyn, dofs);
     if (d->ind) { VkBuffer b; VkDeviceSize o; if (vk_buf_at(d->ind, 12, &b, &o)) vkCmdDispatchIndirect(cb, b, o); }
     else vkCmdDispatch(cb, (uint32_t)d->x, (uint32_t)d->y, (uint32_t)d->z);
     vk_img_barrier_all(cb);
+    vk_compute_ts(1,cs->key,g_dispatch[0],g_dispatch[1],g_dispatch[2]);
+    if(capture)cscap_copy(1);
     if (crumbs_on()) { crumb_t *c = crumb_cur(); if (c->n < 8) { c->k[c->n][0] = 0; c->k[c->n][1] = 0; c->k[c->n][2] = cs->key; c->n++; } crumb_mark(1); }
     if (g_x_tracepass == -2) VKLOG("--- dispatch %016llx %dx%dx%d%s after pass %d", (unsigned long long)cs->key, d->x, d->y, d->z, d->ind ? " (indirect)" : "", g_sub_pass - 1);   // (DM_VK_TRACE_PASS=-2 lists the dispatches too)
 }

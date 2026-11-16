@@ -50,6 +50,11 @@ void dm_gfx_texlist(int target) { (void)target; }
 void dm_gfx_texraw(uint64_t serial, const char *path) { (void)serial; (void)path; }
 
 int mtl_pso_prebuild_tool(void) {   // main() asks first, every boot: 0 = no tool run, the game starts (Mac's pipeline-archive prebuild, nvn_mtl.m, DM_PSO_PREBUILD=tool)
+    extern int vk_compute_probe_tool(void) __attribute__((weak));
+    if (getenv("DM_VK_COMPUTE_PROBE")) {
+        if (!vk_compute_probe_tool) die("DM_VK_COMPUTE_PROBE requires the Vulkan backend");
+        return vk_compute_probe_tool();
+    }
     if (getenv("DM_PSO_PREBUILD")) LOG("[RED] DM_PSO_PREBUILD is the Mac host's pipeline archive prebuild; the Android host has no such tool, starting the game");
     return 0;
 }

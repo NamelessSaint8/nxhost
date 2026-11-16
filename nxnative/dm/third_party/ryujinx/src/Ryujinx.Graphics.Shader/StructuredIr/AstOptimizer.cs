@@ -23,6 +23,14 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
                 {
                     if (node is AstAssignment assignment && assignment.Destination is AstOperand propVar)
                     {
+                        // Calls can write out parameters or memory. Retain the call
+                        // even when its return value is unused, and keep it before
+                        // later reads of those outputs instead of propagating it.
+                        if (assignment.Source is AstOperation sourceOp && sourceOp.Inst == Instruction.Call)
+                        {
+                            continue;
+                        }
+
                         bool isWorthPropagating = propVar.Uses.Count == 1 || IsWorthPropagating(assignment.Source);
 
                         // nxnative: a call's arguments stay the locals StructuredProgram copied them to (SPIR-V passes them by pointer). Propagated, the call

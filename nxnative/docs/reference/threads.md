@@ -4,6 +4,17 @@ Guest threads, their synchronization and how the host schedules them. Each entry
 
 ## Thread creation and cores
 
+### Initial fiber frames on Android pthreads
+
+- **Symptom:** a new fiber faults with SIGILL at its initial return authentication (`AUTIASP`), after gRPC initialization starts working.
+- **Cause:** bionic resets APIAKey for each pthread on API 31 and later. The SDK initializes a fiber on one thread and first enters it on another.
+  Matching stack modifiers cannot authenticate a signature made with a different key. A tablet probe showed different APIA signatures but identical
+  APIB signatures across pthreads; the SDK already uses APIB for subsequent switches.
+- **Fix:** Android-only SDK cuts in `sdk_patches.py`, checked against the module build ID and original bytes, change both initial-frame PACIA
+  instructions to PACIB and the paired AUTIASP to AUTIBSP. PACGA integrity and expected-continuation checks remain enabled. Apple code is unchanged.
+- **Found on:** [Ocarina of Time, SDK 22.2.8](../../dm/games/0400486024DEC000/README.md#follow-up-2026-11-15-startup-fixes-and-the-native-compiler).
+- **Check:** the dispatcher starts on the tablet without SIGILL; `dm/tools/tests/test_sdk_fibers.py` checks the paired instructions and platform scope.
+
 ### Publishing a new thread's scheduler fields
 
 - **Symptom:** TSan reports `thread_main` writing `host_work` while `thr_runnable` reads it during a same-core yield (`t_notify_sched`, issue #411).

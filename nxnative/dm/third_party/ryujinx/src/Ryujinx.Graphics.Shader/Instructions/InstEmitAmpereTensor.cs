@@ -37,12 +37,12 @@ namespace Ryujinx.Graphics.Shader.Instructions
             }
 
             Operand src = AGpr(x.Ra);
-            Operand active = context.Ballot(Const(IrConsts.True), 0);
+            Operand active = EmitBallot(context, Const(IrConsts.True));
             Operand acc = null;
 
             for (int lane = 0; lane < 32; lane++)
             {
-                Operand v = context.Shuffle(src, Const(lane));
+                Operand v = AWarpShuffle(context, src, Const(lane));
                 Operand r = acc == null ? v : op switch
                 {
                     0 => context.BitwiseAnd(acc, v),
@@ -72,16 +72,16 @@ namespace Ryujinx.Graphics.Shader.Instructions
             AmpereOp x = new(context.CurrOp);
             bool u64 = x.Bit(73), any = x.Bit(79);
             Operand lo = AGpr(x.Ra), hi = u64 ? AGpr(x.Ra + 1) : null;
-            Operand active = context.Ballot(Const(IrConsts.True), 0);
+            Operand active = EmitBallot(context, Const(IrConsts.True));
             Operand same = Const(0);
 
             for (int lane = 0; lane < 32; lane++)
             {
-                Operand eq = context.ICompareEqual(context.Shuffle(lo, Const(lane)), lo);
+                Operand eq = context.ICompareEqual(AWarpShuffle(context, lo, Const(lane)), lo);
 
                 if (u64)
                 {
-                    eq = context.BitwiseAnd(eq, context.ICompareEqual(context.Shuffle(hi, Const(lane)), hi));
+                    eq = context.BitwiseAnd(eq, context.ICompareEqual(AWarpShuffle(context, hi, Const(lane)), hi));
                 }
 
                 same = context.BitwiseOr(same, context.ConditionalSelect(eq, Const(1 << lane), Const(0)));
@@ -110,6 +110,19 @@ namespace Ryujinx.Graphics.Shader.Instructions
         }
 
         private static Operand ALaneId(EmitterContext context) => EmitLoadSubgroupLaneId(context);
+
+        // Tensor instructions, MATCH and REDUX address lanes within a 32-lane
+        // NVIDIA warp, including the upper warp of a wider Vulkan subgroup.
+        private static Operand AWarpShuffle(EmitterContext context, Operand value, Operand lane)
+        {
+            if (context.TranslatorContext.GpuAccessor.QueryHostSubgroupSize() > 32)
+            {
+                Operand physicalLane = context.Load(StorageKind.Input, IoVariable.SubgroupLaneId);
+                lane = context.BitwiseOr(context.BitwiseAnd(physicalLane, Const(0x60)), lane);
+            }
+
+            return context.Shuffle(value, lane);
+        }
 
         private static Operand AGpr(int r) => r >= RegisterConsts.RegisterZeroIndex ? Const(0) : Register(r, RegisterType.Gpr);
 
@@ -183,7 +196,7 @@ namespace Ryujinx.Graphics.Shader.Instructions
 
                 for (int r = 0; r < aRegs; r++)
                 {
-                    Operand v = context.Shuffle(AGpr(x.Ra + r), src);
+                    Operand v = AWarpShuffle(context, AGpr(x.Ra + r), src);
                     int row = r & 1, kb = (r >> 1) * 8 + 2 * j;
                     a[row, kb] = AHalf(context, v, 0);
                     a[row, kb + 1] = AHalf(context, v, 1);
@@ -203,7 +216,7 @@ namespace Ryujinx.Graphics.Shader.Instructions
 
                     for (int r = 0; r < bRegs; r++)
                     {
-                        Operand v = context.Shuffle(AGpr(x.Rb + r), src);
+                        Operand v = AWarpShuffle(context, AGpr(x.Rb + r), src);
                         int kb = r * 8 + 2 * j;
                         b[c, kb] = AHalf(context, v, 0);
                         b[c, kb + 1] = AHalf(context, v, 1);
@@ -254,7 +267,10 @@ namespace Ryujinx.Graphics.Shader.Instructions
                 throw AFail(context, $"LDSM mode {mode} count {count}");
             }
 
-            Operand addr = context.IAdd(ALocalAddress(context, x, 32), Const((int)x.SignedField(40, 64)));
+            // Bits 78..79 select matrix transposition here, not the LDS/STS address
+            // stride. Scaling a transposed LDSM's byte address by four reads
+            // outside shared memory even when its row addresses are valid.
+            Operand addr = context.IAdd(ALocalAddress(context, x, 32, stride: false), Const((int)x.SignedField(40, 64)));
             Operand lane = ALaneId(context);
             Operand g = context.ShiftRightU32(lane, Const(2));
             Operand t = context.BitwiseAnd(lane, Const(3));
@@ -265,7 +281,7 @@ namespace Ryujinx.Graphics.Shader.Instructions
             {
                 if (mode == 0)
                 {
-                    Operand rowAddr = context.Shuffle(addr, context.IAdd(g, Const(8 * m)));
+                    Operand rowAddr = AWarpShuffle(context, addr, context.IAdd(g, Const(8 * m)));
                     Operand byteOffset = context.IAdd(rowAddr, context.ShiftLeft(t, Const(2)));
                     results[m] = context.Load(StorageKind.SharedMemory, id, context.ShiftRightU32(byteOffset, Const(2)));
                 }
@@ -276,7 +292,7 @@ namespace Ryujinx.Graphics.Shader.Instructions
                     for (int j = 0; j < 2; j++)
                     {
                         Operand row = context.IAdd(context.ShiftLeft(t, Const(1)), Const(j));
-                        Operand rowAddr = context.Shuffle(addr, context.IAdd(row, Const(8 * m)));
+                        Operand rowAddr = AWarpShuffle(context, addr, context.IAdd(row, Const(8 * m)));
                         Operand byteOffset = context.IAdd(rowAddr, context.ShiftLeft(g, Const(1)));
                         Operand word = context.Load(StorageKind.SharedMemory, id, context.ShiftRightU32(byteOffset, Const(2)));
                         h[j] = context.BitfieldExtractU32(word, context.ShiftLeft(context.BitwiseAnd(byteOffset, Const(2)), Const(3)), Const(16));
@@ -312,7 +328,7 @@ namespace Ryujinx.Graphics.Shader.Instructions
             {
                 // out (r, c = 2t + j) = in (c, r): held by lane 4c + r / 2, half r % 2
                 Operand c = context.IAdd(context.ShiftLeft(t, Const(1)), Const(j));
-                Operand v = context.Shuffle(src, context.IAdd(context.ShiftLeft(c, Const(2)), context.ShiftRightU32(r, Const(1))));
+                Operand v = AWarpShuffle(context, src, context.IAdd(context.ShiftLeft(c, Const(2)), context.ShiftRightU32(r, Const(1))));
                 h[j] = context.BitfieldExtractU32(v, context.ShiftLeft(context.BitwiseAnd(r, Const(1)), Const(4)), Const(16));
             }
 

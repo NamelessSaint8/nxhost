@@ -6,7 +6,7 @@
 #                  instructions tail-call the SDK's exception allocation with w0 = 16 (sizeof(std::bad_alloc)). This is the only place
 #                  the size that could not be satisfied is readable — the throw itself carries an empty bad_alloc, and the abort that
 #                  follows names neither the size nor the caller.
-#   main+0x21f09b4 the creator lookup that aborts: x21 is the name it wants ("all"), which its own registry does not answer.
+#   main+0x21f09b4 gRPC poll selection: "all" is the wildcard; EventFd availability decides whether its poll factory succeeds.
 #   sdk+0x7780a4   the sdk's abort(): the dynsym's value 0x7780a0 is the entry the loader binds (the 0x778080 prologue before it
 #                  belongs to a different function), so the gate sits on the `mov w0,w19` inside that entry. It reports the caller and,
 #                  with DM_ABORT_CONT, parks the thread instead of letting the host's bionic abort end the process.
@@ -22,15 +22,11 @@ OBS = {
         (0x14c6ca8, 29 | 4 << 8, 'aa0003e1', 'malloc entry: x0 is the requested size'),
         (0xf204a4, 29 | 5 << 8, 'aa0003e1', 'operator new[] entry: x0 is the requested size'),
         (0xf2722c, 29, 'aa1303e1', "operator new: x19 is the requested size, the caller is the gate's saved x30"),
-        (0x21f09b4, 19, 'aa1503e0', 'creator lookup: x21 is the name it wants, x0.. the name it compares with'),
-    ],
-    '1643a838814f9c10c696f930ed681e7f': [   # sdk, update 1.1.1 (sdk.fixups.tsv)
-        # The sdk's aligned operator new (sdk+0x84f260): 0x84f2d4 is where it gives up (x19 alignment, x20 size after rounding); 0x84f270 is its
-        # entry, logged only when the request is 64 MiB or more. The dynsym's _Znwm value 0x84f2e0 is inside this function's cold block.
-        (0x84f2d4, 29 | 1 << 8, '52800100', 'sdk operator new aligned: give-up path, x19 align, x20 size'),
-        (0x84f270, 29 | 2 << 8, 'f100041f', 'sdk operator new aligned: entry, x0 is the requested size'),
-        (0x7780a4, 28, '2a1303e0', "the sdk's abort(): the entry the loader binds is 0x7780a0, so the gate sits inside it"),
-        (0x84f668, 27, 'aa0103f4', '__cxa_throw: x1 is the type_info, filtered to the allocation failure'),
-        (0xba124, 20, '2a1f03e3', 'nn::diag abort without a message: the call site is in the stack scan'),
+        (0x21f09b4, 19, 'aa1503e0', 'gRPC poll selection: x21 is the requested strategy, x20 the all wildcard'),
     ],
 }
+
+BINDING = [
+    {'what': 'Read-only allocator and gRPC observation gates', 'now': 'build', 'goal': 'build', 'purpose': 'runtime',
+     'why': 'diagnostics at exact instructions in main 1.1.1; SDK observations live in sdk_patches.py'},
+]

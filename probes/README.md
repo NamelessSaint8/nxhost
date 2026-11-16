@@ -1,5 +1,86 @@
 # Bounded Android Vulkan proofs
 
+`vk_compute_replay.c` replays one raw compute capture from the Android host.
+Set `DM_VK_CAPTURE_CS=<shader key>#<minimum present>` and `DM_ROOT` on a debug
+host. The first matching dispatch saves `capture_<key>_<present>.tsv` and raw
+binding files: GPU-visible buffers, CPU storage-buffer bytes, sampled/storage
+texels, sampler parameters, and storage results. Copies immediately bracket the
+dispatch, preserve packed bits, and synchronize readback. Capture perturbs
+scheduling and is a diagnostic mode.
+
+Version 1 accepts direct dispatches with buffers and single-level, single-layer
+uncompressed 2D colour images. Unsupported descriptors, shapes and module
+variants fail explicitly. Extract the translated SPIR-V from the same DMSV;
+its bindings remain unchanged. Keep game-derived inputs and outputs in the
+game's external work folder. Build the runner with NDK clang and
+`-O2 -Wall -Wextra -Werror -lvulkan`, then run:
+
+```sh
+vk_compute_replay capture_prefix shader.spv output_prefix pipeline_cache.bin
+# Optional final arguments select the first gx, gy, gz workgroups:
+vk_compute_replay capture_prefix shader.spv output_prefix pipeline_cache.bin 1 1 1
+```
+
+The runner saves storage bindings and a pipeline cache, uses a ten-second GPU
+fence timeout, and exits nonzero on failure. Compare raw outputs and inspect
+the result separately; successful execution alone does not establish correctness.
+
+`make_warp32_proof.py` and `vk_warp32.c` check translated Ampere lane IDs,
+LDSM loads, MOVM shuffles, MATCH ballots, REDUX sums and HMMA F16 results on wider Vulkan
+subgroups. Build fixtures with `python3 probes/make_warp32_proof.py "$PROBE_OUT"`,
+compile the runner with NDK clang and `-lvulkan`, push that folder, then run
+`vk_warp32 <device folder>`. CPU references cover both 32-lane warps of a
+`32x2x1` workgroup. HMMA additionally checks either result used alone and reads
+the out parameter before the returned value, catching IR liveness and AST call
+ordering/removal bugs. Compile checks precede dispatch so undefined scratch
+inputs are never submitted. Varied lane fragments and accumulators also match
+an independent CPU matrix product. A transposed LDSM case verifies byte addressing
+and the transpose's row/column layout. The complete run has sixteen checks. Safe legacy controls must reproduce the old upper-warp
+errors on wave64; the legacy HMMA path is never dispatched because its scratch
+accesses can exceed their array. Each submission has a ten-second fence timeout.
+
+Add `--hmma-lds` to build twenty cases with the Android matrix lowering, including
+dependent tile reuse, aliased input/output fragments, fractional halves and
+subnormals. Use the current `vk_warp32.c` runner. Integer products match an
+independent CPU matrix reference exactly. Fractional cases compare every word
+against a separately compiled scalar GPU helper and check its CPU-reference
+error is at most one half ULP; subnormals compare bit for bit with that scalar
+GPU helper, preserving the driver's existing conversion behavior. The manifest's
+mode is 0 for a CPU reference, 1 for a safe legacy negative control, 2 for a
+scalar GPU reference and 3 for a scalar GPU reference plus the CPU precision
+bound. `--hmma-reference` builds the additional cases without lowering.
+
+`make_ampere_scoreboard_proof.py` builds eleven synthetic guarded deferred-write
+cases for the same `vk_warp32` runner. Generate them with
+`python3 probes/make_ampere_scoreboard_proof.py "$PROBE_OUT"`, push that folder,
+and run `vk_warp32 <device folder>`. Cases cover regular and inverted predicates,
+predicates changed after issue, a guarded-off reissue preserving an earlier
+pending result, and different predicates in the two logical warps. Every word
+must match the independent CPU register values. Seven cases fail with the old
+unconditional deferred commits. `test_ampere_scoreboard.py` also checks nine
+constant-predicate programs through independent GLSL constant folding; set
+`DMSH_TEST_XLATE` to the translator executable to enable it.
+
+For a missing-text investigation, `DM_VK_TEXDUMP=<width>x<height>` selects the
+first sampled image with those dimensions; the existing `poolhex+offsethex`
+selector remains available. Use it alongside `DM_VK_PASSDUMP` and a bounded
+`DM_VK_PASSDUMP_SIZE` to distinguish a valid font atlas from a blank glyph target.
+R8 readbacks appear in the red channel. `DM_VK_UBO_LOG=<shader key>#<count>` plus
+the presence of `DM_VK_UBO_DUMP` saves up to 4,096 bytes per uniform/storage-buffer
+diagnostic under `DM_ROOT`, as `ubo_<key>_<present>_<sequence>_s<stage>_r<reg>.bin`.
+Storage-buffer register numbers have 16 added. These are CPU/deferred-uniform
+snapshots, not evidence of GPU-only buffer contents. Keep them on the external
+game drive and use exact shader/count limits. `DM_VK_SHOT` schedules specific
+presents; live `DM_VK_SHOTS` is a count of consecutive captures, not a present.
+
+`vk_storage_usage.c` uses the renderer's image-usage helper and checks actual
+compute writes and byte readback through UNORM views of both UNORM and sRGB
+images, including a restricted format list. Compile
+`probes/shaders/storage-usage.comp` with `glslangValidator -V --target-env vulkan1.2`,
+build the runner with NDK clang and `-lvulkan -lm`, and pass the compiled shader
+path to it. Three cases must report zero bad pixels; submissions have a
+ten-second fence timeout.
+
 `vknvn2.c` checks actual translated NVN2 task/mesh execution and compressed image
 storage on an Android Vulkan device. It creates no window or installed app and
 does not start a game. The required features are task/mesh shaders, BC and ASTC

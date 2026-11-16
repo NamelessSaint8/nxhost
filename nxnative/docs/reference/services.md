@@ -631,6 +631,16 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Check:** 12 of 12 boots with four hosts at once reached the title, with both fixes; a host that answers at once hung 1 of 4 in the same test.
 - **Note:** how it was found: the hung boots' logs diverged from good ones at the save probe (`DM_FS=1`), the thread dumps showed nothing but idle waits, and `DM_PROBE` on the state machine, then `peek` lines in a hung run's `DM_CTL` file, followed the pointers to the status word (a probe on the hot path slowed the boot enough to hide the race: 8 of 8 good).
 
+### Local EventFd wakeup descriptors work offline
+
+- **Symptom:** gRPC aborts during poll-engine selection even though `all` is a valid wildcard strategy.
+- **Cause:** its poll factory probes `nn::socket::EventFd`. This provides local synchronization, but the host returned ENETDOWN as for network sockets.
+- **Fix:** `hle_net.c` provides guest-numbered counters, drain/semaphore reads, nonblocking errors, overflow protection, poll/select readiness and
+  close notifications. Blocking native waits release the guest core. Generations prevent old waiters from consuming a descriptor reused after close.
+  C and C++ close calls share the table; network sockets remain offline.
+- **Found on:** [Ocarina of Time, SDK 22.2.8](../../dm/games/0400486024DEC000/README.md#follow-up-2026-11-15-startup-fixes-and-the-native-compiler).
+- **Check:** `dm/host/tests/t_net_eventfd.c`: 33 checks normally and with ASan/UBSan; the tablet reaches dispatcher/timer creation.
+
 ### Socket `Poll` and `Select` with nothing to wait on
 
 - **Symptom:** one thread at 100% CPU from boot, with one SVC in 99 s (`NexusRevolution Socket`, `main+0x92c7c4`, the game's network thread).
