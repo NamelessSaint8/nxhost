@@ -1,7 +1,7 @@
 # Bring-up: Android reaches NVN2 submission, gRPC startup and AV1 decode.
 # Isolated cache preparation permits full compute; the title movie and menu render, with gameplay unverified.
 status	experimental
-tested	0.1-bringup Lenovo TB323FU / Adreno 840 / Android 16: title movie, readable menu and Options navigation; about 213 ms GPU; gameplay unverified
+tested	0.1-bringup Lenovo TB323FU / Adreno 840 / Android 16: title movie, visible Options settings and narrated New Game opening; about 215 ms GPU; player-controlled gameplay unverified
 package	org.nx2a.ocarinaoftime
 orientation	landscape
 requires	bcn

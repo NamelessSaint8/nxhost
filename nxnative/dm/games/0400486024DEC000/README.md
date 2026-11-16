@@ -7,10 +7,11 @@ Isolated precompilation avoids the native allocator failure. Logical-warp handli
 transposed LDSM addressing are corrected. **The opening movie now renders a recognizable moonlit field without the corruption bands.**
 Decoded pictures, CPU readback and GPU planes match the source movie; the earlier black captures were its opening fade.
 Integrated vector HMMA gathers reduce measured GPU work from about 402 to 215 ms per frame (roughly 4.6 fps).
-See [the current findings](#follow-up-2026-11-15-guarded-scoreboards-and-menu-text).
+See [the current findings](#follow-up-2026-11-15-menu-shader-coverage-and-new-game).
 The full rebuilt bundle now renders readable New Game and Options text over the title movie. The missing text was a guarded
 deferred-register-write bug in the translator. Down selects Options, A opens it and B returns to the title menu.
-Some Options labels, real-time playback and gameplay remain open.
+Visible Options labels now render after adding omitted UI shaders, and New Game reaches the narrated tapestry opening.
+Real-time playback and player-controlled gameplay remain open.
 
 Reference: `NX2navi-0.5.0` beside the dump is a static recompilation of this game (v1.1.1) to Windows x86-64 with a Vulkan renderer. It is read for
 **what the game asks of the SDK** — its architecture notes enumerate the services it had to serve (`fs`, `hid`, the audio renderer, `nn::codec`
@@ -235,7 +236,7 @@ the run ends about three seconds in.
   instead of failing cleanly. `DM_ABORT_CONT` is a deliberate park, not a substitute: the gate itself still needs fixing.
 - **The opening movie picture is verified.** The bands were a transposed LDSM addressing error, and the early black pictures were the source's
   fade. Later captures show the moonlit field; see [the decoder-to-GPU follow-up](#follow-up-2026-11-15-decoder-to-gpu-provenance).
-  Performance and gameplay remain open; see [the menu-text follow-up](#follow-up-2026-11-15-guarded-scoreboards-and-menu-text) for title UI verification.
+  Performance and gameplay remain open; see [the menu-coverage follow-up](#follow-up-2026-11-15-menu-shader-coverage-and-new-game) for current UI and opening verification.
 - **Native allocation failure is attributed.** A fourth compute program, `d15370a382630d4e`, fails inside the Adreno compiler even with the original three skipped. See the current findings below.
 - The full translation build (the rest of the 56,339 keys). The Android Vulkan chain translates the native task/mesh programs as EXT task/mesh, so
   the 845 refused by the Mac chain are not a wall there; the 3 `_cb0_40000000` pool-array shaders and the 8 Ampere-243 programs are skipped.
@@ -801,3 +802,46 @@ Artifacts under the external work folder's `bringup-20261115/ui-text/`: `guarded
 `guarded-shaders/validation.json` records the whole-bundle audit and its previous-chain negative controls.
 `test-results.json` records the focused automated checks. Documentation checks still have the same three unrelated failures:
 the absent `0100005027A18000` game note, missing `BRINGUP_SKYRIM.md` links and the over-length debugging guide.
+
+## Follow-up (2026-11-15): menu shader coverage and New Game
+
+### Resolved: the visible Options labels were absent from the bundle
+
+The previous ordinary menu run captured **19 missing shader keys**. All are already in `shader_map.tsv`: layout
+vertex/fragment programs and agl common/post-processing programs. They were omitted from the selected development
+bundle, rather than failing translation. Rebuilding the selection with those keys produces **2,417 of 2,428** entries,
+**275,602,400 bytes**, on the unchanged chain `aea015ee5502`. Every previous entry's stage, SPIR-V, reflection and flags
+is byte-identical; all 19 added final modules independently pass `spirv-val`. The same eight opcode-243 and three
+reflection-overflow failures remain, as do the previously documented seven invalid modules in the older portion.
+
+The ordinary `options-newgame` run uses the normal allocator, no compute skips, no shader overrides and no abort
+parking. Its route is `f1600:Down~f9,f1750:A~f9,f1900:B~f9,f2100:Up~f9,f2250:A~f9`, starting from a separate
+empty test save. At present **1,800**, the Options screenshot now shows the amiibo/ZELDA NOTES panels, camera-axis
+labels, rotation speed, motion aiming, targeting type, swap-jump label and right-hand explanation. The movie background
+is blurred and the panels render correctly. This verifies the visible settings page; lower scrolled rows remain untested.
+GPU p50 through frame 1,800 is **214.71 ms**, consistent with the earlier result. No new translator fix is needed for these labels.
+
+### New Game reaches the narrated opening
+
+After returning from Options, Up selects New Game and A begins its transition. Present **2,300** still shows the title
+without a selected highlight; **2,500** shows the tapestry opening. Presents **2,700**, **3,200** and **3,551** show
+readable narration subtitles and progression from the castle to the forest panel. The summaries through present 4,200
+report **zero** draws skipped for missing programs, targets or pipelines, and zero skipped compute dispatches.
+No missing shader keys, red diagnostics or crash are reported on this route.
+
+Live Plus, X and A inputs are saved in `options-newgame/ctl`; these captures do not establish a complete movie skip or
+attribute the narrative transitions to a particular press. The decoder state trace continues delivering pictures
+(1,464 to 1,524 in consecutive observations), so the captured opening is progressing. `DM_KBD=Link` is configured
+for any later software-keyboard request, but none has been observed. This verifies New Game's opening sequence,
+not player-controlled gameplay or a gameplay save checkpoint. The normal movie route remains around 215 ms GPU per frame.
+The run ends at its configured **900-second timeout** (exit 137); no owned test process remains on the tablet.
+
+A separate coverage candidate translates **all 145 layout shaders**, with no translation failures and independent
+validation of every final module. Merging them with the 2,417-entry bundle adds **113** entries and preserves every
+existing entry byte for byte, yielding **2,530** entries / **278,465,164 bytes**. This candidate is staged separately on
+the tablet; it is not the bundle used for the frame-1,800 verification.
+
+Artifacts: `ui-text/options-complete/` (build and `comparison.json`), `ui-text/options-newgame/` (exact run command,
+log and `frame_001800.png`), and `ui-text/layout-coverage/` (145-program bundle, merged candidate and `validation.json`).
+The implementation checkpoint is commit `f56081c4`; the 43 focused shader/SDK/chain/patch tests and 33 EventFd checks
+pass. Fresh documentation checks retain exactly the same three failures listed above; no new link failure is reported.
