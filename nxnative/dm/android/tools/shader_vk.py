@@ -240,7 +240,10 @@ def classify(stage, b, res):
         idx = int(m.group(1)); sb = sorted(res.get('sbufs', []), key=lambda x: x['binding'])
         s = sb[idx] if idx < len(sb) else None; off = s['cb_offset'] * 4 if s and s['cb_slot'] == 0 else None; base = SSBO.get(stage)
         e.update(kind='sbuf', rw=bool(s and s['flags'] & 2))
-        if stage == 'cs' and off is not None and 0x210 <= off < 0x310 and (off - 0x210) % 16 == 0: e.update(kind='ubo_ptr', reg=(off - 0x210) // 16)
+        if s and s['cb_slot'] == 0xff:
+            if s['cb_offset'] not in (0, 1): raise ValueError('unknown reserved global-memory descriptor offset')
+            e.update(kind='gmem_log' if s['cb_offset'] else 'gmem_map', reg=None)
+        elif stage == 'cs' and off is not None and 0x210 <= off < 0x310 and (off - 0x210) % 16 == 0: e.update(kind='ubo_ptr', reg=(off - 0x210) // 16)
         elif s and s['cb_slot'] >= 3: e.update(kind='sbuf_ubo', reg=s['cb_slot'] - 3, off=s['cb_offset'] * 4)
         else: e['reg'] = (off - base) // 16 if off is not None and base is not None and 0 <= off - base < 0x100 and (off - base) % 16 == 0 else None
         return e
@@ -282,7 +285,7 @@ def classify(stage, b, res):
 # binding: u8 kind, u8 desc (descriptor type), u8 dim (SPIR-V Dim, 0xff none), u8 flags (1 arrayed, 2 multisampled, 4 written), u16 binding, u16 count,
 #          i16 reg, u8 samp (sampler source), u8 fmt (SPIR-V image format), i32 off, i32 samp_arg
 KIND = {'support': 0, 'cbuf': 1, 'c1': 2, 'drvcb': 3, 'sbuf': 4, 'ubo_ptr': 5, 'sbuf_ubo': 6, 'tex': 7, 'tbuf': 8, 'img': 9, 'img_tbuf': 10, 'tex_c2a': 11,
-        'tex_ubo': 12, 'tbuf_ubo': 13, 'img_ubo': 14, 'atlas_meta': 15, '?': 255}
+        'tex_ubo': 12, 'tbuf_ubo': 13, 'img_ubo': 14, 'atlas_meta': 15, 'gmem_map': 17, 'gmem_log': 18, '?': 255}
 DESC = {'ubo': 0, 'ssbo': 1, 'sampled': 2, 'storage': 3, 'tbuf': 4, 'storage_tbuf': 5, 'image': 6, 'sampler': 7, '?': 255}
 SAMP_NONE, SAMP_TEX, SAMP_SLOT, SAMP_ID, SAMP_UBO = 0, 1, 2, 3, 4
 kinds_all = collections.Counter()
@@ -442,6 +445,16 @@ def main():
         binds, local, io = spirv_bindings(spv)
         st = stages[k]
         cl = [classify(st, b, res) for b in binds]
+        if st=='cs':
+            import gmem_cache_spv
+            for binding in cl:
+                if binding['kind']=='gmem_map':
+                    cached,count=gmem_cache_spv.cache_lookup(spv,binding['binding'],require_mixed=True)
+                    if count:
+                        checked=Path(w)/(k+'.gmem-cache.spv');checked.write_bytes(cached)
+                        subprocess.run(['spirv-val','--target-env','vulkan1.2',str(checked)],check=True,capture_output=True)
+                        spv=cached
+                        print(f'{k}: cached raw pool lookups in {count} helpers',flush=True)
         for binding in cl:
             if binding['binding'] in virtual_bindings.get(k, []): binding['atlas'] = True
         if st in ('ts', 'ms') and any(e['kind'] == '?' for e in cl):

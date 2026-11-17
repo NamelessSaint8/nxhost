@@ -196,6 +196,19 @@ def main():
     classified=[shader_vk.classify('cs',b,{'sbufs':[{'binding':2,'cb_slot':0,'cb_offset':0x310//4,'flags':2}]}) for b in binds]
     meta=dmsv_workgroup.reflection(shader_vk.refl_bin(classified,b'',local),3,spill_bytes)
     entries.append((33,5,binary,meta,10))
+    binary=compile_glsl('global-memory','comp',(repo/'probes/shaders/global-memory.comp').read_text())
+    binds,local,_=shader_vk.spirv_bindings(binary)
+    resources={'sbufs':[{'binding':0,'cb_slot':0,'cb_offset':0x310//4,'flags':0},
+                        {'binding':1,'cb_slot':255,'cb_offset':0,'flags':0},
+                        {'binding':2,'cb_slot':255,'cb_offset':1,'flags':1},
+                        {'binding':3,'cb_slot':0,'cb_offset':0x320//4,'flags':1}]}
+    classified=[shader_vk.classify('cs',b,resources) for b in binds]
+    entries.append((34,5,binary,shader_vk.refl_bin(classified,b'',local),0))
+    source=(repo/'probes/shaders/global-memory.comp').read_text().replace('#version 460','#version 460\n#define COOPERATIVE 1',1)
+    binary=compile_glsl('global-memory-cooperative','comp',source)
+    binds,local,_=shader_vk.spirv_bindings(binary)
+    classified=[shader_vk.classify('cs',b,resources) for b in binds]
+    entries.append((35,5,binary,shader_vk.refl_bin(classified,b'',local),0))
     entries.sort()
     offset = 12+32*len(entries); table, blobs = [], []
     for key, stage, binary, refl, flag in entries:

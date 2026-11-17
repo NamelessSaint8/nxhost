@@ -1,0 +1,48 @@
+#version 460
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_KHR_memory_scope_semantics : require
+layout(local_size_x=64) in;
+layout(binding=0,std430) readonly buffer A { uint av[]; };
+layout(binding=1,std430) readonly buffer B { uint bv[]; };
+layout(binding=2,std430) readonly buffer C { uint cv[]; };
+layout(binding=3,std430) buffer D { uint dv[]; };
+shared float16_t aa[1024],bb[256],cc[1024],dd[1024];
+shared float fullResult[1024];
+void main() {
+    uint lane=gl_LocalInvocationIndex,block=gl_WorkGroupID.x;
+    for(uint i=lane;i<1024;i+=64) {
+        aa[i]=float16_t(unpackHalf2x16(av[block*512+i/2])[i%2]);
+        cc[i]=float16_t(unpackHalf2x16(cv[block*512+i/2])[i%2]);
+    }
+    for(uint i=lane;i<256;i+=64)bb[i]=float16_t(unpackHalf2x16(bv[block*128+i/2])[i%2]);
+    barrier();
+#ifdef SCALAR
+    for(uint i=lane;i<1024;i+=64) {
+        precise float sum=float(cc[i]);
+        for(uint k=0;k<16;k++)sum=fma(float(aa[(i/16)*16+k]),float(bb[k*16+i%16]),sum);
+#ifdef PACK_DIRECT
+        fullResult[i]=sum;
+#else
+        dd[i]=float16_t(sum);
+#endif
+    }
+#else
+    coopmat<float16_t,gl_ScopeSubgroup,64,16,gl_MatrixUseA> a;
+    coopmat<float16_t,gl_ScopeSubgroup,16,16,gl_MatrixUseB> b;
+    coopmat<float16_t,gl_ScopeSubgroup,64,16,gl_MatrixUseAccumulator> c,d;
+    coopMatLoad(a,aa,0,16,gl_CooperativeMatrixLayoutRowMajor);
+    coopMatLoad(b,bb,0,16,gl_CooperativeMatrixLayoutRowMajor);
+    coopMatLoad(c,cc,0,16,gl_CooperativeMatrixLayoutRowMajor);
+    d=coopMatMulAdd(a,b,c);
+    coopMatStore(d,dd,0,16,gl_CooperativeMatrixLayoutRowMajor);
+#endif
+    barrier();
+    for(uint i=lane;i<512;i+=64) {
+#ifdef PACK_DIRECT
+        dv[16+block*512+i]=packHalf2x16(vec2(fullResult[i*2],fullResult[i*2+1]));
+#else
+        dv[16+block*512+i]=packHalf2x16(vec2(dd[i*2],dd[i*2+1]));
+#endif
+    }
+}

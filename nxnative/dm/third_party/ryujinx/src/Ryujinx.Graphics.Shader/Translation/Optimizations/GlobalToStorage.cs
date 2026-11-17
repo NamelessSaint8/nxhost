@@ -75,6 +75,8 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
             private readonly Dictionary<LsKey, Dictionary<uint, SearchResult>> _sharedEntries;
             private readonly HelperFunctionManager _hfm;
 
+            public bool HasRawReadHelper => _entries.Any(entry => entry.Inst == Instruction.Load && entry.IsMultiTarget && entry.TargetCbs.Count == 0);
+
             public GtsContext(HelperFunctionManager hfm)
             {
                 _entries = [];
@@ -781,10 +783,11 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
 
         // nxnative: the memory pool table the host binds for raw global memory (dmsh_abi.h DMSH_GMEM_MAP_*): a storage buffer reserved under this sentinel constant buffer
         // slot, which no constant buffer of the game has (dmsh_build.py turns it into DMSH_KIND_GMEM_MAP). 1 << GmemMapLog2 entries of GmemMapEntryWords words each,
-        // {start lo, start hi, end lo, end hi, delta lo, delta hi, 0, 0}, sorted by start; entry 0 is empty (start 0, end 0) and unused entries start at ~0
+        // {start lo, start hi, end lo, end hi, delta lo, delta hi, flags, 0}, sorted by start; entry 0 is empty (start 0, end 0) and unused entries start at ~0
         public const int GmemMapCbSlot = 0xff;
         private const int GmemMapLog2 = 12;
         private const int GmemMapEntryWords = 8;
+        private const int GmemMapNoWriteLog = 1; // dmsh_abi.h: host explicitly does not consume this pool's page log
 
         // nxnative: the write log (dmsh_abi.h DMSH_GMEM_LOG_*), reserved under the same sentinel slot at offset 1: the set of guest pages (address >> 12) the stores and atomics wrote,
         // as an open-addressing hash set of 1 << GmemLogLog2 words from word 1 (0 = empty), word 0 set when a page found no free slot in GmemLogProbes tries. The host cannot know where
@@ -880,18 +883,45 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
 
             if (writes)
             {
+                Operand lblLogged = Label();
+                // Read-only table metadata, not the concurrently written
+                // overflow flag. The host must still synchronize/publicize
+                // writes as required; zero flags keep normal page tracking.
+                Operand logFlags = MapWord(found, 6);
+                Operand noLog = context.ICompareNotEqual(
+                    context.BitwiseAnd(logFlags, Const(GmemMapNoWriteLog)), Const(0));
+                if (operation.Inst == Instruction.Store && !isSmall && !gtsContext.HasRawReadHelper)
+                {
+                    // Store-only code benefits from a direct return. Once raw
+                    // reads are in use, retain one physical-store block: cloning
+                    // it regresses Adreno's pointer-based upsampling kernels.
+                    Operand lblTrack = Label();
+                    context.BranchIfFalse(lblTrack, noLog);
+                    Operand directLow = context.IAdd(addrLow, MapWord(found, 4));
+                    Operand directCarry = context.ConditionalSelect(context.ICompareLessUnsigned(directLow, addrLow), Const(1), Const(0));
+                    Operand directHigh = context.IAdd(context.IAdd(addrHigh, MapWord(found, 5)), directCarry);
+                    context.Store(StorageKind.GlobalMemory, directLow, directHigh, Argument(2));
+                    context.Return();
+                    context.MarkLabel(lblTrack);
+                }
+                else
+                {
+                    context.BranchIfTrue(lblLogged, noLog);
+                }
+
                 // A page in a pool is never 0 (the guest's first page is not mapped), so 0 marks an empty slot
                 Operand page = context.BitwiseOr(context.ShiftLeft(addrHigh, Const(20)), context.ShiftRightU32(addrLow, Const(12)));
                 Operand hash = context.ShiftRightU32(context.IMultiply(page, Const(unchecked((int)0x9e3779b1))), Const(32 - GmemLogLog2));
 
-                Operand lblLogged = Label();
-
-                for (int probe = 0; probe < GmemLogProbes; probe++)
-                {
-                    Operand slot = context.IAdd(context.BitwiseAnd(context.IAdd(hash, Const(probe)), Const((1 << GmemLogLog2) - 1)), Const(1));
-                    Operand old = context.AtomicCompareAndSwap(StorageKind.StorageBuffer, logBinding, Const(0), slot, Const(0), page);
-                    context.BranchIfTrue(lblLogged, context.BitwiseOr(context.ICompareEqual(old, Const(0)), context.ICompareEqual(old, page)));
-                }
+                Operand probe = Local();
+                context.Copy(probe, Const(0));
+                Operand lblProbe = Label();
+                context.MarkLabel(lblProbe);
+                Operand slot = context.IAdd(context.BitwiseAnd(context.IAdd(hash, probe), Const((1 << GmemLogLog2) - 1)), Const(1));
+                Operand old = context.AtomicCompareAndSwap(StorageKind.StorageBuffer, logBinding, Const(0), slot, Const(0), page);
+                context.BranchIfTrue(lblLogged, context.BitwiseOr(context.ICompareEqual(old, Const(0)), context.ICompareEqual(old, page)));
+                context.Copy(probe, context.IAdd(probe, Const(1)));
+                context.BranchIfTrue(lblProbe, context.ICompareLessUnsigned(probe, Const(GmemLogProbes)));
 
                 context.Store(StorageKind.StorageBuffer, logBinding, Const(0), Const(0), Const(1));
                 context.MarkLabel(lblLogged);

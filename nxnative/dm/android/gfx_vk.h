@@ -26,7 +26,7 @@
     X(vkEnumerateDeviceExtensionProperties) X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) X(vkGetPhysicalDeviceSurfaceFormatsKHR) X(vkGetPhysicalDeviceSurfacePresentModesKHR) \
     X(vkCreateAndroidSurfaceKHR) X(vkDestroySurfaceKHR) X(vkGetPhysicalDeviceSurfaceSupportKHR)
 #define VK_DEV_FNS(X) \
-    X(vkGetDeviceQueue) X(vkCreateBuffer) X(vkDestroyBuffer) X(vkAllocateMemory) X(vkFreeMemory) X(vkBindBufferMemory) X(vkBindImageMemory) X(vkGetBufferMemoryRequirements) \
+    X(vkGetDeviceQueue) X(vkCreateBuffer) X(vkDestroyBuffer) X(vkAllocateMemory) X(vkFreeMemory) X(vkBindBufferMemory) X(vkBindImageMemory) X(vkGetBufferMemoryRequirements) X(vkGetBufferDeviceAddress) \
     X(vkGetImageMemoryRequirements) X(vkCreateImage) X(vkDestroyImage) X(vkCreateImageView) X(vkDestroyImageView) X(vkCreateSampler) X(vkDestroySampler) X(vkMapMemory) X(vkUnmapMemory) \
     X(vkCreateCommandPool) X(vkResetCommandPool) X(vkResetCommandBuffer) X(vkAllocateCommandBuffers) X(vkBeginCommandBuffer) X(vkEndCommandBuffer) X(vkQueueSubmit) X(vkQueueWaitIdle) X(vkDeviceWaitIdle) \
     X(vkCreateSemaphore) X(vkWaitSemaphores) X(vkGetSemaphoreCounterValue) X(vkCreateFence) X(vkWaitForFences) X(vkResetFences) X(vkDestroyFence) \
@@ -53,7 +53,7 @@ typedef struct {
     int has_bc, has_astc, has_gs, has_depth_clip_ctl, has_custom_border, has_robust2, has_xfb, has_imageless, has_dtiming, has_dynrender, has_gpl, has_cache_feedback;
     float max_aniso;
     int has_task, has_mesh;
-    int has_indirect_count;
+    int has_indirect_count, has_bda;
     VkPhysicalDeviceMeshShaderPropertiesEXT mesh;
 } vkdev_t;
 extern vkdev_t V;
@@ -63,10 +63,15 @@ void vk_init(void);   // once, from mtl_init or the first use
 // ---- memory pools (gfx_vk_core.c): the guest's pool memory is GPU memory (AHardwareBuffer mapped over it) ----
 typedef struct { uint64_t lo, hi; VkBuffer buf; VkDeviceMemory mem; void *ahb; int zero_copy; uint8_t *shadow; uint64_t serial, base, end; int flags, synced, cpu_file, lazy; uint32_t gpu_used; uint64_t stamp, stamp0; const void *span; } vkpool_t;   // serial: unique per pool made (caches of views over a pool's buffer key on it); [base, end): the game's pool, of which [lo, hi) is one chunk (ZC_CHUNK); flags: the NVN pool's (vk_pool_set_flags); synced, stamp, stamp0, span: a copied pool's incremental sync
 VkBuffer vk_pool_buffer(vkpool_t *pool);
+void vk_pool_add_flags(const void *memory, uint64_t size, int flags);
 vkpool_t *vk_pool_of(uint64_t addr, uint64_t len);   // the pool containing [addr, addr+len), NULL if none
+vkpool_t *vk_pool_of_buffer(VkBuffer buffer); // diagnostics: registered pool backing this exact buffer, NULL for scratch
 int vk_buf_at(uint64_t addr, uint64_t len, VkBuffer *buf, VkDeviceSize *off);   // GPU buffer + offset of a pool address range
 // Pools that could not be made zero-copy keep a GPU copy refreshed before each submission (vk_pools_sync, called from mtl_sub_commit)
 void vk_pools_sync(VkCommandBuffer cb);
+void vk_gmem_descriptor(int log, VkDescriptorBufferInfo *out);
+void vk_gmem_finish(void); // complete indirect stores and publish their logged pages before another replay operation reads guest memory
+int vk_gmem_coherent(void); // current immutable map contains no copied destination
 
 // ---- submissions (gfx_vk_core.c) ----
 typedef struct vksub vksub_t;
@@ -169,7 +174,7 @@ void vk_img_barrier_all(VkCommandBuffer cb);   // version 1: one global memory b
 void vk_tex_prepare(VkCommandBuffer cb, vkimg_t *im);   // first use: transition from UNDEFINED to GENERAL (and upload a packaged texture)
 
 // ---- shaders (gfx_vk_shader.c) ----
-enum { RK_SUPPORT, RK_CBUF, RK_C1, RK_DRV, RK_SBUF, RK_UBO_PTR, RK_SBUF_UBO, RK_TEX, RK_TBUF, RK_IMG, RK_IMG_TBUF, RK_TEX_C2A, RK_TEX_UBO, RK_TBUF_UBO, RK_IMG_UBO, RK_ATLAS, RK_WORKGROUP, RK_UNKNOWN = 255 };
+enum { RK_SUPPORT, RK_CBUF, RK_C1, RK_DRV, RK_SBUF, RK_UBO_PTR, RK_SBUF_UBO, RK_TEX, RK_TBUF, RK_IMG, RK_IMG_TBUF, RK_TEX_C2A, RK_TEX_UBO, RK_TBUF_UBO, RK_IMG_UBO, RK_ATLAS, RK_WORKGROUP, RK_GMEM_MAP, RK_GMEM_LOG, RK_UNKNOWN = 255 };
 enum { RD_UBO, RD_SSBO, RD_SAMPLED, RD_STORAGE, RD_TBUF, RD_STORAGE_TBUF, RD_IMAGE, RD_SAMPLER };
 enum { RS_NONE, RS_TEX, RS_SLOT, RS_ID, RS_UBO };
 typedef struct __attribute__((packed)) { uint8_t kind, desc, dim, flags; uint16_t binding, count; int16_t reg; uint8_t samp, fmt; int32_t off, samp_arg; } dmsv_bind;
@@ -179,7 +184,7 @@ _Static_assert(sizeof(dmsv_bind) == 20, "dmsv_bind");
 typedef struct { uint32_t version, threads, payload_bytes, shared_bytes, vertices, primitives, primitive_mask, vertex_mask, task_input; } dmsv_mesh;
 _Static_assert(sizeof(dmsv_mesh) == 36, "dmsv_mesh");
 typedef struct { uint64_t um, im; uint32_t xo; int fd; VkShaderModule mod; uint32_t pm, ou, oi; } vkshader_variant;
-typedef struct {
+typedef struct vkshader {
     uint64_t key; int stage,nvn2; uint32_t workgroup_spill; // bytes per group; zero for native shared memory
     VkShaderModule mod;
     VkDescriptorSetLayout dsl; int set;   // the set this stage's bindings were moved to (vertex 0, fragment 1, geometry 2, compute/task 0, mesh 2)
@@ -197,9 +202,11 @@ typedef struct {
     int depth_repl;                     // a fragment shader that writes gl_FragDepth (DepthReplacing / DepthGreater / DepthLess)
     uint32_t in_locs, out_locs;         // the vec4 (or per-vertex vec4) inputs and outputs it declares, by location
     int setmemo;                        // gfx_vk_exec.c stage_set: 1 its set may be memoized per stage, 3 too and also keyed on vk_atlas_version (it has atlas bindings), 2 not (it reads handles or addresses from uniform buffer memory), 0 not known yet
+    struct vkshader *coherent; int coherent_checked,raw_writer,cooperative;
 } vkshader_t;
 vkshader_t *vk_shader(uint64_t key, int stage);   // NULL when the bundle has no such shader
 VkShaderModule vk_shader_module(vkshader_t *s, uint64_t um, uint64_t im, uint32_t xo, int fd, uint32_t pm, uint32_t ou, uint32_t oi);   // pm: per-primitive inputs; ou/oi: unsigned/signed attachment locations
+VkShaderModule vk_shader_compute_module(vkshader_t *s,uint64_t um,uint64_t im,int coherent);
 void vk_shader_atlas_info(const vkshader_t *s,uint64_t active,VkSpecializationInfo *info,VkSpecializationMapEntry entries[64],uint32_t values[64]);
 void vk_prewarm_stats(uint64_t *processed,uint64_t *total);
 VkPipelineLayout vk_pipeline_layout(VkDescriptorSetLayout sets[5], int nsets, int mesh);

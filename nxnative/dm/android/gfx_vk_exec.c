@@ -1116,7 +1116,7 @@ extern uint64_t g_ubd_gen; uint32_t vk_pool_gen(void);
 static int set_memo_ok(vkshader_t *s) {
     if (!s->setmemo) { int ok = 1, ncb = 0, atlas = 0;
         for (int i = 0; i < s->nbind; i++) { const dmsv_bind *b = &s->b[i]; ncb += b->kind == RK_CBUF; atlas |= b->kind == RK_ATLAS || (b->flags & 16);
-            ok &= b->kind != RK_SBUF_UBO && b->kind != RK_UBO_PTR && b->kind != RK_TEX_UBO && b->kind != RK_IMG_UBO && b->kind != RK_TBUF_UBO && b->samp != RS_UBO && i < 256; }
+            ok &= b->kind != RK_GMEM_MAP && b->kind != RK_GMEM_LOG && b->kind != RK_SBUF_UBO && b->kind != RK_UBO_PTR && b->kind != RK_TEX_UBO && b->kind != RK_IMG_UBO && b->kind != RK_TBUF_UBO && b->samp != RS_UBO && i < 256; }
         s->setmemo = ok && ncb <= MEMO_CB ? (atlas ? 3 : 1) : 2; }
     return s->setmemo != 2;
 }
@@ -1230,6 +1230,7 @@ static VkDescriptorSet stage_set(int st, vkshader_t *s, uint32_t *dofs) {
         wr->sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr->dstSet = set; wr->dstBinding = b->binding; wr->descriptorCount = 1;
         VkBuffer buf; VkDeviceSize off, len;
         switch (b->kind) {
+        case RK_GMEM_MAP: case RK_GMEM_LOG: vk_gmem_descriptor(b->kind==RK_GMEM_LOG,&bi[nw]); break;
         case RK_SUPPORT: bi[nw] = (VkDescriptorBufferInfo){vk_support_buffer(), 0, 65536}; break;
         case RK_C1: vk_shader_c1(s, &buf, &off, &len); bi[nw] = (VkDescriptorBufferInfo){buf, off, len}; break;
         case RK_CBUF: cbuf_desc(st, s, b, &bi[nw]); if (ncb < MEMO_CB) { mci[ncb] = (uint8_t)i; mcd[ncb++] = bi[nw]; } break;
@@ -1805,7 +1806,7 @@ static void draw_idx(const p_draw_idx *d,unsigned max_draws,unsigned stride) {
     bc_index(cb, ib, io, it);
     if (!(dbg_draw() & 1) && g_ok) { int xf = xfb_begin(cb); vkCmdDrawIndexed(cb, (uint32_t)d->count, inst, 0, d->base_vertex, (uint32_t)d->base_instance); if (xf) xfb_end(cb, prim, (uint32_t)d->count, inst); }
 }
-static nvn_hmap g_cpipes = {.klen = 32};   // {shader, integer views, active atlas modes}
+static nvn_hmap g_cpipes = {.klen = 40};   // {shader, integer views, active atlas modes, coherent raw map}
 // Pipeline creation only, before loading the guest: isolates native compiler
 // failures from game allocations, dispatch results, and frame scheduling.
 // Uses the ordinary base descriptor/module ABI (no integer/atlas variants).
@@ -1820,9 +1821,10 @@ int vk_compute_probe_tool(void) {
         vkshader_t *cs = vk_shader(key, 5);
         if (!cs) die("compute probe shader %016llx is unavailable", (unsigned long long)key);
         VkDescriptorSetLayout dsl[5] = {cs->dsl}; VkPipelineLayout layout = vk_pipeline_layout(dsl, 1, 0);
+        const char *coherent=getenv("DM_VK_COMPUTE_PROBE_COHERENT");int no_log=coherent && atoi(coherent);
         VkComputePipelineCreateInfo ci = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO, NULL, 0,
             {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, NULL, 0, VK_SHADER_STAGE_COMPUTE_BIT,
-             vk_shader_module(cs, 0, 0, 0, 0, 0, 0, 0), "main", NULL}, layout, VK_NULL_HANDLE, -1};
+             vk_shader_compute_module(cs,0,0,no_log), "main", NULL}, layout, VK_NULL_HANDLE, -1};
         const char *noopt = getenv("DM_VK_COMPUTE_PROBE_NOOPT");
         if (noopt && atoi(noopt)) ci.flags |= VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;
         if (cs->atlas_specs) die("compute probe needs explicit atlas specialization for %016llx", (unsigned long long)key);
@@ -1893,13 +1895,13 @@ static void dispatch(const p_dispatch *d) {
     g_tracing = was_tracing;
     if(capture){
         if(g_cscap.n!=(unsigned)cs->nbind || g_num_um || g_num_im || g_num_atlas)die("[RED] compute capture has unsupported or missing descriptors");
-        cscap_copy(0);cb=vk_cmd();
+        cscap_prepare_pools();cscap_copy(0);cb=vk_cmd();
     }
-    uint64_t ck[4] = {cs->key, g_num_um, g_num_im,g_num_atlas};
+    uint64_t ck[5] = {cs->key, g_num_um, g_num_im,g_num_atlas,(uint64_t)(cs->raw_writer && cs->cooperative && vk_gmem_coherent())};
     VkPipeline p = nvn_hm_get(&g_cpipes, ck);
     if (!p) {
         VkSpecializationInfo info;VkSpecializationMapEntry entries[64];uint32_t values[64];vk_shader_atlas_info(cs,ck[3],&info,entries,values);
-        VkComputePipelineCreateInfo ci = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO, NULL, 0, {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, NULL, 0, VK_SHADER_STAGE_COMPUTE_BIT, vk_shader_module(cs, ck[1], ck[2], 0, 0, 0, 0, 0), "main", cs->atlas_specs?&info:NULL}, layout, VK_NULL_HANDLE, -1};
+        VkComputePipelineCreateInfo ci = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO, NULL, 0, {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, NULL, 0, VK_SHADER_STAGE_COMPUTE_BIT, vk_shader_compute_module(cs, ck[1], ck[2],(int)ck[4]), "main", cs->atlas_specs?&info:NULL}, layout, VK_NULL_HANDLE, -1};
         VkPipelineCreationFeedback feedback={0};
         VkPipelineCreationFeedbackCreateInfo feedback_ci={.sType=VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO,.pNext=ci.pNext,.pPipelineCreationFeedback=&feedback};
         if(V.has_cache_feedback)ci.pNext=&feedback_ci;
@@ -1914,6 +1916,10 @@ static void dispatch(const p_dispatch *d) {
         nvn_hm_put(&g_cpipes, ck, p);
     }
     if (p == (void *)1) { if(capture)die("[RED] captured compute pipeline failed");return; }
+    if(capture){
+        const vkshader_t *actual=ck[4] && cs->coherent?cs->coherent:cs;
+        cscap_write("spv",actual->spv,(size_t)actual->nspv*4);
+    }
     vk_img_barrier_all(cb);
     vk_compute_ts(0,cs->key,g_dispatch[0],g_dispatch[1],g_dispatch[2]);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p);
@@ -2283,6 +2289,7 @@ static void exec_ops(const uint8_t *p) {
         case OP_VP_SWIZZLE: { const p_vp_swizzle *b = (const p_vp_swizzle *)a; memcpy(S.vp_sw[b->first], b->sw, 4 * (size_t)b->n); break; }
         default: { static uint64_t seen; if (h.op < 64 && !(seen >> h.op & 1)) { seen |= 1ull << h.op; VKLOG("[RED] [vk] unknown record op %u", h.op); } break; }   // each op named once, not the first only: a new game then lists all the records it uses that this layer does not know
         }
+        vk_gmem_finish();
         p += h.size;
     }
 }

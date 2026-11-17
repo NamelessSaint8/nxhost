@@ -1,0 +1,68 @@
+#version 460
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+// Synthetic ABI proof: destinations arrive through memory, not a bound SSBO.
+#ifdef COOPERATIVE
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_KHR_memory_scope_semantics : require
+layout(local_size_x=64) in;
+shared float16_t cooperativeA[1024],cooperativeB[256],cooperativeC[1024],cooperativeResult[1024];
+#else
+layout(local_size_x=32) in;
+#endif
+layout(binding=0,std430) readonly buffer cp_s0 { uint64_t address[]; } pointers;
+layout(binding=1,std430) readonly buffer cp_s1 { u64vec4 range[4096]; } pools;
+layout(binding=2,std430) buffer cp_s2 { uint overflow; uint page[1024]; } writes;
+layout(binding=3,std430) buffer cp_s3 { uint value[]; } result;
+layout(buffer_reference,std430,buffer_reference_align=4) buffer Word { uint value; };
+
+uint64_t translated(uint64_t address, out uint flags) {
+    uint low=0,high=4096;
+    while(low+1<high){
+        uint middle=(low+high)/2;
+        if(pools.range[middle].x<=address)low=middle;else high=middle;
+    }
+    flags=uint(pools.range[low].w);
+    return address>=pools.range[low].x && address+4<=pools.range[low].y ? address+pools.range[low].z : 0;
+}
+void record(uint64_t address) {
+    uint page=uint(address>>12),slot=(page*2654435761u)&1023u;
+    for(uint i=0;i<8;i++){
+        uint old=atomicCompSwap(writes.page[(slot+i)&1023u],0,page);
+        if(old==0 || old==page)return;
+    }
+    atomicOr(writes.overflow,1);
+}
+void main() {
+#ifdef COOPERATIVE
+    coopmat<float16_t,gl_ScopeSubgroup,64,16,gl_MatrixUseA> a;
+    coopmat<float16_t,gl_ScopeSubgroup,16,16,gl_MatrixUseB> b;
+    coopmat<float16_t,gl_ScopeSubgroup,64,16,gl_MatrixUseAccumulator> c,d;
+    // Use the same shared-memory load interface as the convolution. This
+    // driver's scalar constructors for A/B layouts fail native compilation.
+    for(uint i=gl_LocalInvocationIndex;i<1024;i+=64){cooperativeA[i]=float16_t(float(uint(pointers.address[0])&4095u));cooperativeC[i]=float16_t(1);}
+    for(uint i=gl_LocalInvocationIndex;i<256;i+=64)cooperativeB[i]=float16_t(float(uint(pointers.address[0]>>12)&4095u));
+    barrier();
+    coopMatLoad(a,cooperativeA,0,16,gl_CooperativeMatrixLayoutRowMajor);
+    coopMatLoad(b,cooperativeB,0,16,gl_CooperativeMatrixLayoutRowMajor);
+    coopMatLoad(c,cooperativeC,0,16,gl_CooperativeMatrixLayoutRowMajor);
+    d=coopMatMulAdd(a,b,c);
+    coopMatStore(d,cooperativeResult,0,16,gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+    if(gl_LocalInvocationIndex>=32)return;
+    uint lane=gl_WorkGroupID.x*32+gl_LocalInvocationIndex;
+    uint delta=16u+lane+uint(cooperativeResult[gl_LocalInvocationIndex*16]);
+#else
+    uint lane=gl_GlobalInvocationID.x;
+    uint delta=17u+lane;
+#endif
+    uint64_t target=pointers.address[0]+uint64_t(lane)*4096;
+    uint flags;
+    uint64_t physical=translated(target,flags);
+    result.value[2048+lane]=flags;
+    if(physical==0){result.value[lane]=0xfeedbad0u;return;}
+    Word word=Word(physical);
+    result.value[lane]=atomicAdd(word.value,delta);
+    if((flags&1u)==0)record(target);
+}

@@ -11,7 +11,9 @@ scheduling and is a diagnostic mode.
 Version 1 accepts direct dispatches with buffers and single-level, single-layer
 uncompressed 2D colour images. Unsupported descriptors, shapes and module
 variants fail explicitly. Extract the translated SPIR-V from the same DMSV;
-its bindings remain unchanged. Keep game-derived inputs and outputs in the
+its bindings remain unchanged. New captures also save `capture_PREFIX.spv`, the
+actual selected module, including coherent-log variants; prefer that file when
+available. Keep game-derived inputs and outputs in the
 game's external work folder. Build the runner with NDK clang and
 `-O2 -Wall -Wextra -Werror -lvulkan`, then run:
 
@@ -21,9 +23,94 @@ vk_compute_replay capture_prefix shader.spv output_prefix pipeline_cache.bin
 vk_compute_replay capture_prefix shader.spv output_prefix pipeline_cache.bin 1 1 1
 ```
 
-The runner saves storage bindings and a pipeline cache, uses a ten-second GPU
-fence timeout, and exits nonzero on failure. Compare raw outputs and inspect
-the result separately; successful execution alone does not establish correctness.
+The runner saves storage bindings and a pipeline cache and exits nonzero on
+failure. The first replay has a ten-second fence timeout. To measure dispatches
+with GPU timestamps, set `DM_REPLAY_REPEAT=24 DM_REPLAY_WARMUP=4`. Each iteration
+restores every captured input, including writable resources; uploads, pipeline
+creation and readback are outside the timestamps. Repeated submissions have a
+thirty-second fence timeout and must reproduce the first replay's storage bytes.
+The JSON result includes individual samples, an upper median, p95 and the number
+of storage resources changed from their inputs. Use cached pipelines and alternate
+variant order when comparing implementations.
+Set `DM_REPLAY_TIME_BARRIER=1` to include the post-dispatch completion barrier,
+matching the host's compute timestamps. This changes only the timing boundary;
+the barrier executes in either mode.
+`DM_REPLAY_POOL_AHB=1` allocates raw pools with the host's BLOB hardware-buffer
+usage, dma-buf mapping and dedicated Vulkan import. Scratch descriptors retain
+ordinary Vulkan memory. Link the runner with `-lvulkan -landroid` using NDK API
+31 or newer. `DM_REPLAY_ROBUST=0` matches the host's core buffer-robustness setting.
+`DM_REPLAY_DYNAMIC_UBO=1` makes all uniform descriptors dynamic; mode `2` keeps
+binding zero static, matching the support/driver layout of the NVN2 captures.
+These controls isolate allocation and pipeline configuration; address guards and
+complete-pool comparisons remain active in every mode.
+
+Set `DM_REPLAY_REQUIRE_CHANGE=1` to reject an unchanged result with exit 4.
+Unchanged outputs can make an equality comparison inconclusive. Compare raw
+outputs and inspect the result separately; successful execution alone does not
+establish correctness. Version 1 does not relocate pointers embedded in captured
+buffers or capture memory reached only through raw global pointers. Captures with
+reserved descriptors include `global_memory` records; version 1 rejects these.
+
+Set `DM_VK_CAPTURE_POOLS=1` for version 2. It captures complete backing pools for
+bound compute storage slots and descriptors, including raw outputs absent from
+shader reflection. `pool` records give guest ranges; `alias` records preserve
+descriptor subranges in the same allocation. Limits are sixteen pools, 64 MiB
+each and 256 MiB total. `DM_VK_CAPTURE_POOL_ADDRS=hex,...` explicitly includes
+additional indirect targets. `DM_VK_CAPTURE_FRAME=N` captures every dispatch of
+one frame, adding a sequence suffix so repeated kernels remain distinct.
+
+Before replaying a raw-address shader, run:
+
+```sh
+python3 probes/raw_memory_guard.py shader.spv guarded.spv
+vk_compute_replay capture_prefix guarded.spv output_prefix
+```
+
+The runner allocates each pool once, checks descriptor aliases against captured
+bytes and rebases the original global table to actual new Vulkan addresses.
+Uncaptured ranges receive no address delta. Binding 30 guards every supported
+32-bit physical load/store before dereference; an uncaptured access increments
+a fault counter and fails with exit 6. Physical atomics/copies and occupied guard
+bindings are rejected during instrumentation. Keep original guest pointers in
+captured buffers. The runner compares whole-pool outputs and nonaliased storage
+images, failing with exit 5 on differences. `DM_REPLAY_ALLOW_DIFFERENCE=1` permits
+intentional numerical experiments; it never disables address checks. Repetitions
+reset complete pools and check stable outputs, excluding write-log hash order.
+Guard instrumentation changes execution cost; use ordinary game shaders for
+frame-rate conclusions.
+
+`cache_raw_lookup.py INPUT OUTPUT` applies the generic last-pool lookup cache.
+It changes no arithmetic, checks both guest range bounds on every hit and retains
+the original full search on misses. The build enables it for recognized mixed
+raw-read/write helpers; the diagnostic can also exercise a read-only fixture.
+`make_lookup_cache_proof.py OUT` creates an independent two-pool integer reference
+covering repeated hits, pool switching, an exact end boundary, null pointers and
+whole-pool canaries. Run both generated `*.guard.spv` variants with reset
+repetitions and ordinary/imported allocations. Cache hits are per invocation,
+and entry zero starts empty. Guarded timing can predict the wrong direction of
+a performance change, so verify the uninstrumented full game before selection.
+
+`make_raw_replay_proof.py OUT` produces a synthetic aliased capture with an
+independent integer reference. Its valid case passes with reset repetitions;
+its deliberately missing pool range must fail with exit 6. It uses no game data.
+`hmma_operand_trace.py` adds binding 31 to the original scalar SPIR-V and records
+the first 1,024 matrix calls in the first logical warp of the first workgroup.
+Each lane records A0..A3, B0..B1, C0..C1, D0..D1, sequence+1 and magic. Later
+logical warps are excluded to prevent trace collisions. Original arithmetic and
+existing buffer-block types remain unchanged. Trace runs are correctness probes.
+
+`check_yuv_capture.py` independently checks R8/RG8 conversion on the CPU, including
+the captured matrix, offsets and bilinear chroma sampling. `check_conv_capture.py`
+checks deterministic samples of HWC half tensors against CPU convolution, with
+K16 rounding, zero padding, stride-2 downsampling, bias and ReLU. It requires
+NumPy and explicit dimensions; its docstring describes the driver-pointer ABI.
+CPU references can differ in half packing/sampler precision, so inspect absolute
+errors and tensor layouts instead of treating replay equality as ground truth.
+
+`make_memory_snapshot_proof.py OUT --xlate TRANSLATOR` produces two fixtures for
+`vk_warp32`: a shared read followed by overwrite and later use, with and without
+a barrier. Each invocation owns its word. Both must export the original integer
+17; the faulty translator exports 99. The fixtures exercise optimized AST code.
 
 `make_warp32_proof.py` and `vk_warp32.c` check translated Ampere lane IDs,
 LDSM loads, MOVM shuffles, MATCH ballots, REDUX sums and HMMA F16 results on wider Vulkan
@@ -49,6 +136,59 @@ GPU helper, preserving the driver's existing conversion behavior. The manifest's
 mode is 0 for a CPU reference, 1 for a safe legacy negative control, 2 for a
 scalar GPU reference and 3 for a scalar GPU reference plus the CPU precision
 bound. `--hmma-reference` builds the additional cases without lowering.
+
+`hmma_shuffle.py` is an experimental, independently written replacement for the
+translator's original matrix helper. It retains the logical 32-lane fragment
+layout, uses subgroup shuffles and keeps the loop and helper calls intact:
+
+```sh
+python3 probes/hmma_shuffle.py original-translator.spv candidate.spv
+```
+
+Use the original translator SPIR-V, before `hmma_spv.py` lowering. The script
+checks that helper contract, compiles with the pinned SPIRV-Cross plus glslang
+and spirv-opt, and validates the result. It does not modify the production chain.
+`--unroll` is a separate loop experiment. `--rounding 8` adds intermediate half
+rounding after eight terms; this is a different numerical model and must be
+tested separately from the default final-only rounding. Neither model's match
+to original hardware follows from matching our scalar helper.
+
+`--instrument` records both results of each matrix call at storage binding 31;
+provide a separate sufficiently sized trace buffer in the capture manifest.
+This diagnostic indexes by X only and is intended for the captured 1D kernels,
+with every call executed once per invocation. `--original --instrument` traces
+the scalar reference. Compare nonzero synthetic matrices as well as captured
+traces, and measure uninstrumented shaders. The OOT experiment rejected the
+shuffle candidate as slower and found an [open Android global-memory binding
+defect](../nxnative/docs/reference/shaders.md#android-reserved-global-memory-descriptors-bind-zero-buffers).
+
+The production replay also has `--global-memory` (build using
+`make_nvn2_replay.py` below). Its synthetic shader loads guest pointers from
+memory and atomically writes an unbound destination through the reserved pool
+table. Twelve checks cover repeated nonzero writes, canaries, log overflow, null
+addresses and unregistering/reusing a guest address. Run the same mode with
+`DM_VK_NO_ZEROCOPY=1`, then additionally `DM_VK_LAZY_POOLS=1`, to exercise copied
+and lazy destination visibility before NVN completion. `DM_VK_ZEROCOPY_MAX_MB=1`
+also exercises a zero-copy descriptor pool with a copied indirect destination.
+The shader returns the destination's actual pool flags: only materialized
+zero-copy ranges may suppress write logging. Copied destinations retain tracked
+page publication, and all four modes preserve their canaries and CPU-visible
+results. These are real backend
+tests, not standalone substitute bindings. The current implementation waits
+after indirect stores; the proof does not imply correct game matrix arithmetic.
+
+`isolate_raw_store.py` provides two output-preserving diagnostics for the
+pre-optimization raw-store helper contract: `--log-binding N` removes only its
+eight CAS probes, and `--map-entry N` specializes its final lookup to the real
+entry found in a capture's table. Unsupported helper shapes reject explicitly.
+Apply `raw_memory_guard.py` afterward and use whole-pool comparison. For a
+capture with one backing pool, `--ranges 1` keeps the guard to that one range;
+uncaptured accesses still fail before dereference. Keep the same guard in every
+compared variant. Repetitions must reset all inputs, retain nonzero tensor
+outputs, and use warm pipeline caches plus GPU warmups. Removing both lookup
+and logging leaves matrix computation, gathers, tensor traffic and the guard;
+its timing is not a pure matrix-arithmetic measurement. These diagnostic
+specializations are never promoted as production shortcuts.
 
 `make_ampere_scoreboard_proof.py` builds eleven synthetic guarded deferred-write
 cases for the same `vk_warp32` runner. Generate them with
@@ -573,7 +713,7 @@ establish API-validation-layer coverage or full-game RAM/FPS.
 
 ## Full-game sparse storage and native indirect counts
 
-The current replay has 33 synthetic shader programs. Build with `make_nvn2_replay.py` and use these additional modes:
+The current replay has 35 synthetic shader programs. Build with `make_nvn2_replay.py` and use these additional modes:
 
 | Mode | What it verifies | Adreno 840 checks |
 |---|---|---:|
@@ -634,3 +774,88 @@ Set `DM_VK_ATLAS_NATIVE_FILTER=1` when running the implicit, offset/gather, expl
 `--prewarm-recorded` prepares an existing private `DM_ROOT/vk_pipelines.bin` against the supplied full shader bundle. Set `DM_PROBE_CACHE=1` so the fixture permits cache reuse. The mode selects single-threaded synchronous preparation, checks that every unique record was processed, and reports elapsed time, RSS and PSS. Run with API validation and a memory guard, then inspect every pipeline result as well as the summary: processing a record alone does not prove that its shader exists or that Vulkan accepted its interface. Use a private copy of the game cache and recipes. This mode records no gameplay FPS.
 
 `--command-copies` uses the real NVN command API and GPU readbacks to distinguish immediate copying from deferred calls. It rerecords and overwrites source storage, reuses both parent and child source storage after copying, and forces destination segment overflow. Four checks pass on the corrected host; the old copy implementation fails the first color check with zero API errors.
+
+## Native cooperative convolution experiment
+
+`make_cooperative_conv.py CAPTURE OUT --shape H W CI --channels CO` extracts
+finite HWC half tensors from the captured driver-pointer ABI used by
+`check_conv_capture.py`. It builds a diagnostic 3x3, stride-1 convolution using
+native subgroup-scoped F16 `64x16x16` tiles. Input packing, halo loads, K16
+accumulation, bias/ReLU and output packing execute inside the measured dispatch.
+The direct-buffer output has 64-byte canaries at both ends. Run with:
+
+```sh
+DM_REPLAY_COOPERATIVE=1 DM_REPLAY_REQUIRE_CHANGE=1 \
+  DM_REPLAY_WARMUP=16 DM_REPLAY_REPEAT=24 \
+  vk_compute_replay OUT/layer OUT/native.spv OUT/native
+python3 probes/check_cooperative_conv.py OUT LOCAL_REPLAY_PREFIX
+```
+
+The runner requires the native tile, F16 arithmetic, Vulkan memory model and
+64-lane subgroup support. `make_cooperative_conv_proof.py OUT` builds independent
+integer and fractional fixtures with padding, negative values, bias/ReLU and
+partial final tiles. Integer results must match exactly; fractional differences
+are reported against the CPU K16 reference. Successful execution or a small
+average error alone does not establish guest numerical equivalence.
+
+`native.raw.spv` uses the original driver's bindings and guest pointers, retains
+pool bounds and copied-pool write logs, and distributes tiles across the original
+dispatch grid. Guard it with `raw_memory_guard.py` before replaying real capture
+pools. Check the entire pool outside the output tensor, not just its end canaries.
+Cooperative modules use the Vulkan memory model; the guard declares the capability
+needed by its cross-workgroup Device-scope fault counter.
+
+`make_cooperative_bundle.py SOURCE NATIVE_RAW_SPV DEST --key HEX` replaces one
+explicitly selected compute module in a separate diagnostic bundle. It retains
+all other shaders, reflection records and flags, changing the selected local size
+to `64x1x1`. It refuses to overwrite the source bundle. The raw kernel's captured
+ABI and dimensions must be established before using this experiment in a game.
+The Android host enables cooperative-matrix features when the device exposes them;
+the production shader translator does not select this experimental kernel.
+
+Full-game measurements remain necessary: direct-buffer layout, raw pointers,
+launch grid and guard instrumentation can change the measured performance.
+See the [OOT experiment](../nxnative/dm/games/0400486024DEC000/README.md#follow-up-2026-11-16-native-cooperative-convolution-experiment).
+
+`cooperative_arithmetic.py OUT` builds three independent matrix probes: native
+K16, scalar float32 FMA with explicit half conversion, and scalar FMA with direct
+half packing. Replay them against `OUT/fixture`, then pass `--native PREFIX
+--scalar PREFIX` to compare GPU results with CPU accumulation models. If
+`scalar-pack.b3.after.bin` is beside the scalar output, the analysis also checks
+round-to-nearest-even and round-toward-zero packing. `check_conv_capture.py`
+accepts `--arithmetic half-mul-add --packing rtz` to test the observed native
+model through a complete sampled convolution. These are explicit diagnostic
+models; default CPU-reference behavior is preserved.
+
+Two version-1 manifest records isolate address handling without inserting
+per-access guards. `address_table 4` requires five SSBOs at bindings 0–4 and a
+64-byte table at binding 4. The replay fills that table with the addresses and
+sizes of its four owned allocations. `owned_pool MAP BACKING GUEST FLAGS` fills
+a 4096-entry map with one owned backing allocation and its guest-to-device
+relocation. The corresponding kernels check whole-tensor bounds before access;
+the experiment checks full outputs, untouched input regions and canaries.
+Neither mode changes version-2 captures' mandatory raw-access guards.
+
+The convolution shader's `QUALIFIED_READS`, `EARLY_RETURN_STORE` and explicit
+function-control experiments test compiler effects while retaining logging.
+`OMIT_WRITE_LOG`, `MINIMAL_ATOMIC_LOG`, `NON_ATOMIC_LOG` and `FIXED_MAP_ENTRY`
+are controlled diagnostics, not production policies. Omit or simplify logging
+only for a destination independently proved coherent; copied pools require page
+publication. The [follow-up findings](../nxnative/dm/games/0400486024DEC000/README.md#follow-up-2026-11-16-native-arithmetic-and-inactive-write-logs)
+record the numerical model and the ordinary-game cost of inactive logging code.
+
+The runtime's coherent-log transform is restricted to cooperative-matrix compute
+modules. It selects a separate module and pipeline only when every range in the
+current immutable map is coherent; copied ranges retain tracking. `spv_gmem.c`
+exposes the exact transform for sanitizer and independent-validation checks.
+`--global-memory` and `--global-memory-cooperative` each run twenty backend checks,
+including copied/coherent replacement of the same guest address and CPU visibility
+before NVN completion. Run both under active Vulkan validation. The cooperative
+fixture requires the reported native F16 tile and uses shared-memory matrix loads.
+Scalar A/B constructors fail compilation on the tested driver.
+
+`FLOAT32_K16` selects a diagnostic tiled float32-FMA implementation in the
+convolution probe. Its half accumulator conversion and final packing are checked
+independently; matching this CPU model does not establish byte equality with the
+game's existing shader. Neither this mode nor the native kernel is selected by
+the production translator.

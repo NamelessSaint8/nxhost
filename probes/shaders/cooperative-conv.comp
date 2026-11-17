@@ -1,0 +1,179 @@
+#version 460
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_KHR_memory_scope_semantics : require
+// Diagnostic whole-layer convolution, not a production guest-shader replacement.
+// Packing, halo loads, K16 accumulation and output packing are timed together.
+layout(local_size_x=64) in;
+#if defined(RAW_LAYOUT) || defined(ADDRESS_LAYOUT)
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(buffer_reference,buffer_reference_align=4) buffer Word { uint value; };
+#ifdef QUALIFIED_READS
+layout(buffer_reference,buffer_reference_align=4) restrict readonly buffer ReadWord { uint value; };
+#else
+#define ReadWord Word
+#endif
+uint64_t pair(uint lo,uint hi) { return uint64_t(lo)|(uint64_t(hi)<<32); }
+#endif
+#ifdef RAW_LAYOUT
+layout(set=0,binding=1,std140) uniform Driver { uvec4 driver[256]; };
+layout(set=0,binding=5,std430) readonly buffer Map { uint words[]; };
+layout(set=0,binding=6,std430) buffer Log { uint pages[]; };
+uint64_t sourceAddress,weightAddress,biasAddress,outputAddress,outputGuest;
+uint outputFlags;
+uint driverWord(uint i) { return driver[i/4][i%4]; }
+uint64_t resolve(uint word,uint bytes,out uint flags) {
+    uint64_t guest=pair(driverWord(word),driverWord(word+1));
+#ifdef FIXED_MAP_ENTRY
+    uint index=FIXED_MAP_ENTRY;
+#else
+    uint index=0;
+    for(uint step=2048;step>0;step/=2) {
+        uint candidate=index+step;
+        if(pair(words[candidate*8],words[candidate*8+1])<=guest)index=candidate;
+    }
+#endif
+    uint entry=index*8;
+    uint64_t base=pair(words[entry],words[entry+1]);
+    uint64_t end=pair(words[entry+2],words[entry+3]);
+    flags=words[entry+6];
+    if(guest<base||guest>=end||uint64_t(bytes)>end-guest||driverWord(word+2)<bytes)return uint64_t(0);
+    return guest+pair(words[entry+4],words[entry+5]);
+}
+float inputHalf(uint i) { return unpackHalf2x16(ReadWord(sourceAddress+uint64_t(i/2)*4).value)[i%2]; }
+float weightHalf(uint i) { return unpackHalf2x16(ReadWord(weightAddress+uint64_t(i/2)*4).value)[i%2]; }
+vec2 biasPair(uint channel) { return unpackHalf2x16(ReadWord(biasAddress+uint64_t(channel)*2).value); }
+void outputPair(uint index,uint value) {
+#ifndef OMIT_WRITE_LOG
+    // These two controls isolate inactive code-generation costs in an owned,
+    // coherent destination. They are not correct copied-pool logging policies.
+#ifdef MINIMAL_ATOMIC_LOG
+    if((outputFlags&1)==0)atomicOr(pages[0],1);
+#else
+#ifdef EARLY_RETURN_STORE
+    if((outputFlags&1)!=0) {
+        Word(outputAddress+uint64_t(index)*4).value=value;
+        return;
+    }
+#endif
+    if((outputFlags&1)==0) {
+        uint page=uint((outputGuest+uint64_t(index)*4)>>12);
+        uint hash=(page*2654435761u)>>22;
+        bool published=false;
+        for(uint i=0;i<8;i++) {
+#ifdef NON_ATOMIC_LOG
+            uint old=pages[1+((hash+i)&1023)];
+            if(old==0)pages[1+((hash+i)&1023)]=page;
+#else
+            uint old=atomicCompSwap(pages[1+((hash+i)&1023)],0,page);
+#endif
+            if(old==0||old==page){published=true;break;}
+        }
+        if(!published) {
+#ifdef NON_ATOMIC_LOG
+            pages[0]=1;
+#else
+            atomicOr(pages[0],1);
+#endif
+        }
+    }
+#endif
+#endif
+    Word(outputAddress+uint64_t(index)*4).value=value;
+}
+#elif defined(ADDRESS_LAYOUT)
+layout(set=0,binding=4,std430) readonly buffer Addresses { uvec4 ranges[]; };
+uint64_t address(uint binding) { return pair(ranges[binding].x,ranges[binding].y); }
+float inputHalf(uint i) { return unpackHalf2x16(ReadWord(address(0)+uint64_t(i/2)*4).value)[i%2]; }
+float weightHalf(uint i) { return unpackHalf2x16(ReadWord(address(1)+uint64_t(i/2)*4).value)[i%2]; }
+vec2 biasPair(uint channel) { return unpackHalf2x16(ReadWord(address(2)+uint64_t(channel)*2).value); }
+void outputPair(uint index,uint value) { Word(address(3)+uint64_t(16+index)*4).value=value; }
+#else
+layout(set=0,binding=0,std430) readonly buffer Source { uint source[]; };
+layout(set=0,binding=1,std430) readonly buffer Weights { uint weights[]; };
+layout(set=0,binding=2,std430) readonly buffer Bias { uint bias[]; };
+layout(set=0,binding=3,std430) buffer Output { uint result[]; };
+float inputHalf(uint i) { return unpackHalf2x16(source[i/2])[i%2]; }
+float weightHalf(uint i) { return unpackHalf2x16(weights[i/2])[i%2]; }
+vec2 biasPair(uint channel) { return unpackHalf2x16(bias[channel/2]); }
+void outputPair(uint index,uint value) { result[16+index]=value; }
+#endif
+shared float16_t packedA[64*16];
+shared float16_t packedB[16*16];
+shared float16_t packedD[64*16];
+void main() {
+    uint lane=gl_LocalInvocationIndex;
+#ifdef ADDRESS_LAYOUT
+    if(ranges[0].z<HEIGHT*WIDTH*CI*2||ranges[1].z<9*CI*CO*2||ranges[2].z<CO*2||ranges[3].z<HEIGHT*WIDTH*CO*2+128)return;
+#endif
+#ifdef RAW_LAYOUT
+    uint unused;
+    sourceAddress=resolve(200,HEIGHT*WIDTH*CI*2,unused);
+    weightAddress=resolve(204,9*CI*CO*2,unused);
+    biasAddress=resolve(208,CO*2,unused);
+    outputAddress=resolve(196,HEIGHT*WIDTH*CO*2,outputFlags);
+    outputGuest=pair(driverWord(196),driverWord(197));
+    if(sourceAddress==uint64_t(0)||weightAddress==uint64_t(0)||biasAddress==uint64_t(0)||outputAddress==uint64_t(0))return;
+#endif
+    uint group=gl_WorkGroupID.x*gl_NumWorkGroups.y+gl_WorkGroupID.y;
+    for(uint tile=group;tile<((HEIGHT*WIDTH+63)/64)*(CO/16);tile+=gl_NumWorkGroups.x*gl_NumWorkGroups.y) {
+    uint firstPixel=(tile/(CO/16))*64;
+    uint firstChannel=(tile%(CO/16))*16;
+#ifdef FLOAT32_K16
+    precise vec4 accumulator[4];
+    for(uint col=0;col<4;col++)accumulator[col]=vec4(0);
+#else
+    coopmat<float16_t, gl_ScopeSubgroup, 64,16,gl_MatrixUseA> a;
+    coopmat<float16_t, gl_ScopeSubgroup, 16,16,gl_MatrixUseB> b;
+    coopmat<float16_t, gl_ScopeSubgroup, 64,16,gl_MatrixUseAccumulator> d;
+    d=coopmat<float16_t,gl_ScopeSubgroup,64,16,gl_MatrixUseAccumulator>(0.0);
+#endif
+    for(uint tap=0;tap<9;tap++) for(uint k0=0;k0<CI;k0+=16) {
+        for(uint i=lane;i<64*16;i+=64) {
+            uint pixel=firstPixel+i/16;
+            int y=int(pixel/WIDTH)+int(tap/3)-1;
+            int x=int(pixel%WIDTH)+int(tap%3)-1;
+            float value=0.0;
+            if(pixel<HEIGHT*WIDTH && y>=0 && y<HEIGHT && x>=0 && x<WIDTH)
+                value=inputHalf((uint(y)*WIDTH+uint(x))*CI+k0+i%16);
+            packedA[i]=float16_t(value);
+        }
+        for(uint i=lane;i<16*16;i+=64)
+            packedB[i]=float16_t(weightHalf((tap*CI+k0+i/16)*CO+firstChannel+i%16));
+        barrier();
+#ifdef FLOAT32_K16
+        for(uint col=0;col<4;col++) {
+            precise vec4 sum=accumulator[col];
+            for(uint k=0;k<16;k++) {
+                uint at=k*16+col*4;
+                vec4 weight=vec4(packedB[at],packedB[at+1],packedB[at+2],packedB[at+3]);
+                sum=fma(vec4(float(packedA[lane*16+k])),weight,sum);
+            }
+            accumulator[col]=vec4(f16vec4(sum));
+        }
+#else
+        coopMatLoad(a,packedA,0,16,gl_CooperativeMatrixLayoutRowMajor);
+        coopMatLoad(b,packedB,0,16,gl_CooperativeMatrixLayoutRowMajor);
+        d=coopMatMulAdd(a,b,d);
+#endif
+        barrier();
+    }
+#ifdef FLOAT32_K16
+    for(uint col=0;col<16;col++)packedD[lane*16+col]=float16_t(accumulator[col/4][col%4]);
+#else
+    coopMatStore(d,packedD,0,16,gl_CooperativeMatrixLayoutRowMajor);
+#endif
+    barrier();
+    for(uint i=lane;i<64*8;i+=64) {
+        uint pixel=firstPixel+i/8;
+        uint channel=firstChannel+(i%8)*2;
+        if(pixel<HEIGHT*WIDTH) {
+            vec2 v=vec2(packedD[(i/8)*16+(i%8)*2],packedD[(i/8)*16+(i%8)*2+1]);
+            v=max(v+biasPair(channel),vec2(0));
+            outputPair((pixel*CO+channel)/2,packHalf2x16(v));
+        }
+    }
+    barrier();
+    }
+}

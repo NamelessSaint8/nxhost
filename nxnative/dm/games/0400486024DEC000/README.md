@@ -4,10 +4,12 @@ A Switch 2 title, dumped loose as `exefs/` (`main` 29.9 MB, `sdk` 7.8 MB, `subsd
 (`Product.100`/`Product.111` tables, `RegionLangMask.txt` `111`). Nintendo EPD's engine (Nin_Ounce: sead / agl / gsys, Phive), SDK **22.2.8** (the `sdk`
 names its spec `Ounce`), NVN2 with Ampere shaders. **Android now runs all eleven captured compute programs without abort parking or dispatch skips.**
 Isolated precompilation avoids the native allocator failure. Logical-warp handling, two optimizer liveness bugs, storage-image usage and
-transposed LDSM addressing are corrected. **The opening movie now renders a recognizable moonlit field without the corruption bands.**
+transposed LDSM addressing are corrected. Earlier builds rendered a recognizable moonlit field while neural stores were missing.
 Decoded pictures, CPU readback and GPU planes match the source movie; the earlier black captures were its opening fade.
-Integrated vector HMMA gathers reduce measured GPU work from about 402 to 215 ms per frame (roughly 4.6 fps).
-See [the current findings](#follow-up-2026-11-15-menu-shader-coverage-and-new-game).
+**The corrected network now renders clean movie frames with every neural pass active.**
+Logging and lookup improvements bring the ordinary game to about 241.64 ms per frame (4.14 fps).
+A separate native cooperative-matrix experiment measures a further gain, with numerical equivalence still open;
+see [the latest experiment](#follow-up-2026-11-17-cooperative-only-log-specialization).
 The full rebuilt bundle now renders readable New Game and Options text over the title movie. The missing text was a guarded
 deferred-register-write bug in the translator. Down selects Options, A opens it and B returns to the title menu.
 Visible Options labels now render after adding omitted UI shaders, and New Game reaches the narrated tapestry opening.
@@ -106,6 +108,12 @@ split and built in the background rather than inline in a probe.
 - [Decoder-to-GPU provenance](#follow-up-2026-11-15-decoder-to-gpu-provenance): the early black input is the source movie's fade; later pictures render, with decoded/readback bytes and GPU planes independently verified.
 - [Vector HMMA gathers with bounded tile reuse](../../../docs/reference/shaders.md#vector-hmma-gathers-with-bounded-tile-reuse): integrated compute acceleration, preserving the scalar helper's results and reducing measured frame work by about 45%.
 - [Guarded deferred writes overwrite newer register values](../../../docs/reference/shaders.md#guarded-deferred-writes-overwrite-newer-register-values): corrected collapsed glyph geometry and restored menu text.
+- [Android reserved global-memory descriptors bind zero buffers](../../../docs/reference/shaders.md#android-reserved-global-memory-descriptors-bind-zero-buffers): binding and visibility corrected; the active neural path exposes another rendering defect.
+- [Expression propagation delays mutable reads past overwrites](../../../docs/reference/shaders.md#expression-propagation-delays-mutable-reads-past-overwrites): the first incorrect nonzero weight fragment is traced to a shared-memory read moved past an overwrite; corrected full-network movie frames render cleanly on Adreno.
+- [Raw write logs track pages the zero-copy backend does not consume](../../../docs/reference/shaders.md#raw-write-logs-track-pages-the-zero-copy-backend-does-not-consume): controlled tensor replays isolate logging and lookup costs; coherent zero-copy outputs now omit redundant page tracking.
+- [Repeated raw pointer accesses search every pool again](../../../docs/reference/shaders.md#repeated-raw-pointer-accesses-search-every-pool-again): a validated invocation-private cache recovers the upsampling regression and improves the other mixed-memory pass; guarded timing can predict the wrong performance direction.
+- [Native F16 cooperative matrices round products and additions separately](../../../docs/reference/shaders.md#native-f16-cooperative-matrices-round-products-and-additions-separately): an independent model explains the native convolution's fractional differences.
+- [Inactive multi-probe atomic logging slows a cooperative kernel](../../../docs/reference/shaders.md#inactive-multi-probe-atomic-logging-slows-a-cooperative-kernel): controlled replays reproduce the gap and a coherent-only diagnostic recovers the full-game dispatch cost.
 - Every RomFS `.zs` is a **dictionary** frame: the census's first run reported no BNSH under the whole dump because the reader had no
   `Pack/ZsDic.pack.zs` table. `shader_split` already supported such frames (Tears of the Kingdom); the census did not load the table.
 - `shader_map.tsv` names one shader source this dump has and Mario Kart World's does not: `Shader/ApplicationPackage.Nin_Ounce_NVN2.release.sarc.zs`
@@ -845,3 +853,602 @@ Artifacts: `ui-text/options-complete/` (build and `comparison.json`), `ui-text/o
 log and `frame_001800.png`), and `ui-text/layout-coverage/` (145-program bundle, merged candidate and `validation.json`).
 The implementation checkpoint is commit `f56081c4`; the 43 focused shader/SDK/chain/patch tests and 33 EventFd checks
 pass. Fresh documentation checks retain exactly the same three failures listed above; no new link failure is reported.
+
+## Follow-up (2026-11-15): shuffle experiment and missing global writes
+
+### Result: retain the current gather lowering
+
+The Triforce review at commit `93eeb714c2f2d9dda543447564ee953f417b9c38` suggested a compact shuffle helper
+and separate numerical checks. `probes/hmma_shuffle.py` independently implements our translator's fragment mapping
+and FMA order; no Triforce code is copied. The default candidate retains final-only half rounding, a bounded loop
+and helper calls. Production chain `aea015ee5502` and the 2,417-entry bundle remain unchanged.
+
+Both kernels were captured from the ordinary movie route on the Adreno 840 tablet, driver `0x8034a01f`, physical
+subgroup 64. Each comparison uses the same complete captured dispatch and input bytes. After four warmups, each
+implementation has 48 timestamp samples in gather/shuffle/shuffle/gather order, resetting every input between samples.
+Pipeline compilation, transfers and readback are excluded. Rounded aggregate medians:
+
+| Kernel / dispatch groups | Current gather | Compact shuffle | Candidate cost |
+|---|---:|---:|---:|
+| `e6be82d835fbe4d3` / `120x1x1` | 31.97 ms | 86.02 ms | 2.69x |
+| `a8b4fb48fee0ccf8` / `720x1x1` | 25.93 ms | 69.34 ms | 2.67x |
+
+Both use local size `32x1x1`. The candidate reduces SPIR-V size from 4,068,356 to 1,170,596 bytes and from
+427,484 to 204,508 bytes respectively, but is substantially slower. A separate unrolled version is slower again:
+321.73 and 106.94 ms (12 samples each). These are measurements of the currently incomplete workload, not a
+gameplay FPS estimate or evidence of correct neural reconstruction.
+
+### Numerical checks and the deeper blocker
+
+The default candidate passes all twenty existing GPU warp/matrix checks, including varied nonzero fragments,
+both result-use orders, aliasing, reuse, fractional halves and subnormals. Fractional and subnormal results match
+the separately compiled scalar GPU helper. The separate `--rounding 8` model changes 32 of 128 words in the
+fractional fixture; nineteen checks pass. This establishes a numerical difference, not which model matches Ampere.
+
+Neither real capture changes any of its bound storage buffers, even with the production shader. The `a8b4`
+scalar/default/midpoint matrix traces are identical but entirely zero; the completed `e6be` default trace is also
+entirely zero. Scalar and midpoint `e6be` trace pipeline creation fails with native `std::bad_alloc`; no numerical
+comparison is claimed for those variants. All-zero traces are inconclusive even where both versions execute.
+
+The [reserved global-memory descriptor defect](../../../docs/reference/shaders.md#android-reserved-global-memory-descriptors-bind-zero-buffers)
+explains the missing raw stores. This qualifies earlier movie and timing results: source decoding, GPU movie
+planes, readable menu pixels and navigation were verified, but faithful neural feature propagation was not.
+
+The replay tool now reports observable writes, can reject unchanged outputs, and times independently reset
+dispatches. An incrementing-buffer proof changes the expected 32 words, preserves the remaining 32, and stays
+identical over two warmups and nine samples. The no-change guard rejects the real `a8b4` capture with exit 4.
+Three new shader-interface/rejection tests pass; the probe builds with `-Wall -Wextra -Werror`.
+The 27 existing HMMA, warp, compute-state, chain and toolchain checks pass. Documentation checks retain the same
+three unrelated failures listed above; the regenerated symptom index is current and no new broken link is reported.
+
+### Next work
+
+1. Implement Android's reserved pool table and write log, including Vulkan device-address translation, pool
+   lifetime and CPU/GPU visibility. Verify a synthetic indirect global store with nonzero data before another game run.
+2. Recapture actual neural feature propagation, including raw-address destinations; extend replay to capture and
+   relocate those pools. Establish meaningful nonzero output equivalence, then remeasure the full ordinary route.
+3. Revisit native matrix tiling only after that baseline. The tablet exposes F16 cooperative tiles of `64x64x16`,
+   `64x32x16` and `64x16x16`, with subgroup size fixed at 64. It does not expose Triforce's direct `16x8x16` shape;
+   using native matrices requires retiled work and a fresh fragment-layout/rounding proof.
+
+Artifacts remain under external `bringup-20261115/hmma-shuffle/`: `report.json` (hashes, results and limitations),
+`capture/`, `abba/results.json`, `fixtures-r16.log`, `fixtures-r8.log`, `trace-results/`, `replay-reset-proof/`,
+`device-properties.log` and `nochange-guard.json`. No performance candidate is promoted to production.
+
+## Follow-up (2026-11-15): global writes execute and expose neural corruption
+
+### Reserved bindings and device addresses corrected
+
+The shared [Android global-memory correction](../../../docs/reference/shaders.md#android-reserved-global-memory-descriptors-bind-zero-buffers)
+implements the translator's reserved pool map and write log, Vulkan device addresses and visibility of indirect writes.
+There is no game-specific exception or compute skip. The first implementation conservatively waits after each operation
+with indirect stores, before later replay operations can read guest data. It does not predict future write pools.
+
+Chain **`4f0c7f8b9136`** rebuilds the complete development selection: **2,417 of 2,428** programs. All existing shader
+SPIR-V, stages and entry flags are byte-identical; **88** reflection records change. There are **88 map** and **8 log**
+bindings. The same eight unsupported opcode-243 and three reflection-size failures remain. The earlier seven invalid
+vertex/stage-0 modules are unchanged. The Android host builds all **267** sources.
+
+The actual renderer passes **27** new device checks: nine each with ordinary zero-copy, forced copied and lazy-copied
+pools. The targets are never bound directly. Checks cover nonzero indirect atomics, preserved canaries, repeated writes,
+log overflow, unmapped addresses and re-registering the same guest address. The copied-pool test caught a real first-pass
+bug: synchronization published indirect destinations but left ordinary bound outputs stale. Both now become visible.
+Another **135** related device checks pass for driver state, pool registry, copied bindings, scratch retirement,
+timestamps and shared spill. **47** targeted Python tests pass, including three new reserved-descriptor tests.
+
+### Actual feature propagation and remaining wrong picture
+
+The ordinary 300-second diagnostic run uses the normal allocator and complete rebuilt bundle, with no movie bypass,
+abort parking, shader override or skipped dispatch. `e6be82d835fbe4d3` is captured at present **350**, and
+`a8b4fb48fee0ccf8` at **515**. The first kernel's 8,294,432-byte feature binding now contains **4,243,639 nonzero bytes**;
+the second kernel's 16,588,832-byte binding contains **15,830,365**. Both older captures had only **21** nonzero bytes.
+Their weight bindings are still populated. The pool map now has 131,072 bytes with valid ranges, and each fresh 4,100-byte log
+changes after dispatch. Most large dispatches overflow the 1,024-page log; the visibility path handles that explicitly.
+
+The feature bindings are inputs, so they stay unchanged across these individual producer dispatches; their raw-address
+destinations are separate. These captures establish active propagation, not complete output equivalence. They explicitly
+mark raw global bindings, and the v1 replay tool rejects their unrelocated physical pointers. Capturing indirect pools
+and relocating them remains necessary before an exact-input replay can validate all writes.
+
+Presents **350**, **500** and **800** show colored blocks, incorrect colors and a visible pixel grid. The field remains
+recognizable at 800, but this is not a correct reconstructed movie. The missing stores had concealed this next defect.
+No corrected nonzero-network image or hardware-accurate matrix result is claimed. The binding fix is retained in the
+diagnostic build; that build is not promoted as a rendering improvement.
+
+### Performance of the active path
+
+Through frame 900, GPU p50 is **310.64 ms** and frame-time p50 **313.92 ms** (about **3.2 fps**). The pass report totals
+**299.95 ms** in timed steps. The largest costs are `ba079f68ae288dba` at **41.53 ms**, the two `e6be` passes at
+**39.74 / 40.01 ms**, and the two `a8b4` passes at **39.93 / 39.98 ms**. Reconstruction `4f41ccf24f163e0d` costs
+**26.33 ms**. Most frame time is in the GPU steps, although the conservative synchronization also costs time.
+These numbers are not directly comparable to the older incomplete network as an implementation speed regression.
+
+A separate **180-second** run of the final source disables compute capture and limits global-write diagnostics. It reaches
+frame **600** with GPU p50 **307.83 ms**, frame-time p50 **310.73 ms**, and **297.74 ms** in timed steps. It reports no
+red diagnostic, skipped draw or skipped dispatch, and ends at the configured timeout. The final source's three pool-mode
+proof runs also pass. No owned test process remains on the tablet. The bad movie colors remain visible in this run.
+
+Next: find the first incorrect nonzero feature or reconstruction result, validate its layout and arithmetic independently,
+then revisit performance. The earlier shuffle comparison does not establish which method wins on the now-active network.
+Native matrix retiling remains deferred until that correctness baseline exists.
+
+Artifacts under external `bringup-20261115/global-memory/`: `proof/` (synthetic and related device results), `shaders/`
+(full build, exact command and byte comparison), `run/` (two captures, feature summaries, screenshots and log), and the
+run command/exit records. The first run ends at its configured 300-second timeout, not a game crash.
+Cross-title Mac checks remain unavailable for absent packaged builds. A full Mac shader build was attempted, but stops
+at `ValueError: NVN2 mesh output is not a triangle list` while reading unsupported mesh metadata; no full Mac/iOS library
+stamp is validated. Metal itself is now available and the host's thirteen built-in Mac libraries compile successfully.
+Python lint reports unrelated findings in untouched files, and clang-tidy is not installed. Documentation checks retain
+the three known unrelated failures. No change has been committed in this follow-up.
+
+## Follow-up (2026-11-16): nonzero layer replay and memory ordering
+
+### Current: full neural movie reconstruction renders cleanly on Adreno
+
+The first incorrect nonzero operand is now traced and corrected in the shared translator. With the full rebuilt bundle,
+ordinary allocator, every movie dispatch enabled and no shader overrides, **frame 350** shows the moon, clouds and landscape
+without the previous colored blocks or green moon. The run reaches frame **600** and is deliberately stopped after its
+capture and timing report. This validates the observed movie route on the Adreno 840; it does not repeat menu/gameplay UAT.
+
+This is a correctness improvement. The frame-600 report gives frame time p50 **315.51 ms**, p95 **322.31 ms** and GPU p50
+**312.38 ms**, p95 **318.80 ms**, approximately **3.17 fps**. The one captured frame is excluded from steady-state conclusions;
+its readbacks cost extra time. No frame-rate improvement is established. Per-dispatch timing of the corrected network is
+the current performance baseline; earlier results with missing global writes are not a valid complete-network comparison.
+
+A separate warm Adreno run disables capture and enables `DM_VK_PASS_TIMES=1 DM_VK_PASS_REPORT=200`. Its 17 timed steps
+sum to **303.70 ms** per frame. The dominant compute work is:
+
+| Shader | Dispatches per frame | GPU time per dispatch | Combined |
+|---|---:|---:|---:|
+| `e6be82d835fbe4d3` | 2 | 41.93 / 41.75 ms | 83.68 ms |
+| `a8b4fb48fee0ccf8` | 2 | 39.15 / 39.14 ms | 78.29 ms |
+| `ba079f68ae288dba` | 1 | 41.49 ms | 41.49 ms |
+| `4f41ccf24f163e0d` reconstruction | 1 | 28.77 ms | 28.77 ms |
+
+The first three keys account for **203.46 ms, 67%** of timed work. They all use raw output stores. The next experiment
+should separate matrix work from raw address lookup and write-log cost using the complete-pool replays, then improve
+the dominant proven path. This timing does not yet attribute their cost to either mechanism or establish that compact
+shuffle arithmetic is faster. Input conversion takes only **0.39 ms**; render steps are below **0.2 ms** each.
+The 50-second timing run ends at its configured TERM timeout with a graceful exit, not a crash.
+
+### Trace from complete pools to the first wrong fragment
+
+One movie frame now captures all **14 dispatches**, including both uses of repeated kernels. All neural weights, activations
+and raw output destinations reside in one **50,569,216-byte pool**. Capturing its full before/after contents preserves
+aliases between bound SSBO ranges and raw destinations, which separate descriptor allocations would lose. The guarded v2
+replay relocates actual Vulkan addresses and rejects uncaptured physical accesses; its valid synthetic aliased case passes
+reset repetitions, while the missing-range control fails with exit 6 before dereference.
+
+Across **13 of the 14 dispatches**, 25 production/scalar replays reproduce complete pool and storage-image outputs byte for
+byte, with no uncaptured accesses. Both guarded variants of `d15370a382630d4e` abort during cold driver compilation, so that
+isolated comparison remains unavailable. The input conversion also passes an independent CPU check across **2,073,600 pixels**:
+maximum error one byte, no channel over one byte. Equality between shader implementations alone would not prove correct math.
+
+Independent sampled convolution checks stay close through the downsampling stages, then first diverge substantially at
+the 64-channel 3x3 convolution `0a56002cdc7e1fce` (sequence 6). The original scalar helper's first-warp operand trace identifies
+calls **68/69**: their B tiles contain kernel tap 8, input channels **48–63**, where **32–47** are required. The next two calls
+consume 48–63 again. A operands, the other B tiles and accumulator chaining agree with the expected tensor layout.
+The [general finding](../../../docs/reference/shaders.md#expression-propagation-delays-mutable-reads-past-overwrites)
+describes the delayed shared load and the AST correction. No Triforce implementation was copied.
+
+On identical captured inputs, maximum sampled error against CPU float32 FMA/K16-half convolution falls from **1.20325** to
+**0.00585938**. A fresh layer capture from the corrected full game has the same maximum and **zero of 33,088 checked values**
+over 0.01. Small half-rounding differences remain; this does not claim bit-exact Nintendo hardware arithmetic.
+Two focused Adreno GPU fixtures return the overwritten integer 99 in all 64 words before the correction and the saved 17
+in all words afterward. The same two small fixtures also pass on the Mac GPU as a shared-translator regression; full-game
+rendering and frame-rate evidence in this follow-up come from the Adreno tablet.
+
+### Rebuild, compiler cache and validation
+
+Chain **`dd39582388d1`** produces **2,417 of 2,428** programs, **277,209,504 bytes**. Relative to the preceding global-memory
+bundle, **2,349** SPIR-V modules and **10** reflection records change; keys, stages and flags are unchanged. Nine reflection
+records retain additional buffers, and one only changes binding-record order. The same eight opcode-243 and three reflection
+overflow failures remain. Independent validation of every final module retains exactly the seven previously documented
+vector-extract failures. Both translator launch architectures build, the universal launcher and pinned tool fingerprints
+are updated, and the Android host rebuild compiles **267 sources with zero failures**.
+
+The first ordinary cold launch aborts while compiling the large neural kernel. The existing isolated allocator workaround
+prepares all eleven compute pipelines, including `d15370a382630d4e` in **34.35 seconds**, into a **4,585,700-byte** cache.
+The successful full game then uses that cache with its normal allocator. This remains a cold-compiler workaround, separate
+from the memory-ordering fix; cache loss still requires preparation.
+
+The focused capture/guard/CPU tests, Ampere memory, scoreboards, HMMA, control flow and chain checks pass. Required five-title
+Mac regression is attempted for OOT, Mario Kart World, Bananza, Raiders and Fortune's Weave because they share translator
+memory/tensor paths; all lack packaged Mac builds. The full Mac shader rebuild again stops on unsupported mesh metadata.
+Python lint retains fifteen findings in untouched files, and documentation checks retain the three known unrelated failures.
+Full Mac/iOS game validation remains open. No changes in this follow-up are committed.
+
+Artifacts remain in the external `bringup-20261115/neural-replay/` work folder: `capture/`, `replays/`, `proof/`, matrix traces,
+`conv-cpu-reference.json`, `yuv-cpu-reference.json`, `snapshot-fixed/` (CPU/device regressions), `shaders-fixed/`, `runtime/`,
+`prewarm-fixed/`, `fixed-game/`, `fixed-frame350.png`, `timing-report/`, and exact command/exit records. The capture/replay and CPU-reference
+instructions are in [probes/README.md](../../../../probes/README.md#bounded-android-vulkan-proofs).
+
+## Follow-up (2026-11-16): Adreno isolation and zero-copy write logs
+
+### Controlled isolation with complete nonzero tensors
+
+A fresh frame-350 capture uses the corrected neural network from `dd39582388d1`. The five hot dispatches retain complete
+before/after backing pools, their descriptor aliases and original guest pointers. All comparisons run on **Adreno 840**,
+reset every input, require observable nonzero storage writes, guard raw accesses and compare every output byte. Only
+write-log contents are excluded from equality because their hash insertion order is not deterministic.
+
+The diagnostic variants retain the matrix instructions. One removes only log CAS probes, another specializes lookup to
+the real captured pool entry, and a fourth combines both. Sixteen GPU samples follow three warmups, with variant order
+reversed between captures; subsequent confirmation uses warm pipeline caches, **16 warmups and 24 samples**.
+Representative first-capture medians are:
+
+| Shader | Original | No log | Captured-entry lookup | Both |
+|---|---:|---:|---:|---:|
+| `ba079f68ae288dba` | 41.80 ms | 27.02 ms | 33.51 ms | 19.58 ms |
+| `a8b4fb48fee0ccf8` | 39.84 ms | 26.28 ms | 30.99 ms | 17.05 ms |
+| `e6be82d835fbe4d3` | 41.29 ms | 35.93 ms | 36.39 ms | 29.22 ms |
+
+All **20** comparisons across the five dispatches pass complete-pool equality and reset stability checks. These are
+guarded replay timings, not uninstrumented frame measurements. Removing both mechanisms still leaves matrix work,
+operand gathers, tensor traffic and the guard, so the remainder is not a pure arithmetic measurement. Compiler effects
+also mean the two savings are not strictly additive. The captured-entry specialization remains diagnostic only.
+
+### Selected production optimization
+
+The [general mechanism](../../../docs/reference/shaders.md#raw-write-logs-track-pages-the-zero-copy-backend-does-not-consume)
+now suppresses logging only for actual coherent zero-copy destinations. Copied pools retain page publication and the
+same conservative overflow behavior; the host still waits after raw writers. No matrix rounding, tensor layout,
+dispatch or game-code behavior is changed.
+
+Helper shape matters on this driver. A plain branch around eight unrolled probes slows one tracked `e6be` case to
+58.9 ms. A bounded loop removes that penalty; returning directly for ordinary zero-copy stores further improves the
+store-only network kernels. The first full-game optimization measures **25.62 ms** for `7f7ff0f36b54d90f`, versus
+**10.93 ms** before. Keeping a single store block gives an exact-input guarded replay of **5.56 ms**;
+`d15370a382630d4e` measures **2.82 ms** in its replay. The final structural choice uses the presence of raw-read helpers,
+not game or shader keys. It emits
+**byte-identical SPIR-V** to the separately validated fast forms for all five investigated keys.
+
+With logging suppressed, the selected guarded replay medians are **27.70 ms** for `ba079`, **26.44 ms** for each `a8b4`
+dispatch and **29.56 ms** for each `e6be` dispatch. Tracking remains correct and the large `e6be` tracking slowdown is gone.
+The final selection does **not** reproduce the mixed-memory replay gains in the full game: `7f7f` still costs
+**25.58 ms** and `d153` **8.57 ms**. The upsampling regression remains open. Byte comparison confirms the selected
+bundle contains the intended modules, and fresh native compilation rules out an obsolete pipeline-cache hit.
+Including the completion barrier in the guarded `7f7f` replay still measures **5.56 ms**, as does allowing the guard
+wrappers to inline. Neither experiment explains the discrepancy. Guard instrumentation and the standalone allocation
+path still differ from the runtime; their effects have not been isolated. Do not count these replay-only gains as
+achieved frame-rate improvements.
+
+### Full tablet result and remaining costs
+
+With all fourteen compute dispatches active and the ordinary game allocator, the final frame-600 interval improves
+p50 frame time from **315.51 ms to 261.05 ms**, or about **3.17 to 3.83 fps** (**17.3% less frame time, 20.9% more fps**).
+Frame-time p95 is **264.40 ms**; GPU p50/p95 is **258.11/261.02 ms**. The earlier full optimization measures
+260.58 ms, so the structural refinement adds no demonstrated full-game improvement. Frame 350 remains visually clean.
+The bounded run exits via its configured 180-second TERM timeout, with no red error lines and no skipped neural passes.
+
+The last full-game report totals **248.20 ms** in timed steps. The two `e6be` dispatches cost **34.27/34.20 ms**,
+reconstruction **28.79 ms**, `ba079` **27.32 ms**, the two `a8b4` dispatches **26.03/26.06 ms**, and upsampling
+`7f7f` **25.58 ms**. Logging removal is a demonstrated gain; address lookup is the next independently measured
+overhead. Before further compiler shaping, reproduce the mixed-memory timing gap with the runtime's allocation path
+and guarded versus native modules under comparable conditions. The residual convolution time cannot yet be attributed
+solely to matrix arithmetic.
+
+### Rebuild and coverage
+
+Final chain **`7453f031ea67`** builds **2,417 of 2,428** shader entries. Exactly **eight** raw-writing compute modules change
+from the clean baseline; the final selection changes only the two shaders that use raw reads and writes compared with the
+first full-game optimization. Reflection, shader keys, stages and bundle flags are unchanged. Independent validation of
+every final module retains the same seven existing vector-extract failures. The eight opcode-243 and three reflection
+overflow build failures are unchanged. The host rebuild checks **267 sources with zero failures**.
+
+The real-backend proof passes **48 checks**: twelve each in zero-copy, forced-copy, lazy forced-copy and mixed-pool modes.
+These include unbound atomic destinations, CPU visibility before NVN completion, repeated writes, complete canaries,
+overflow, null addresses, pool removal/address reuse and returned pool flags. The new flag's ABI mirror, guarded-capture
+rejection, CPU convolution, Ampere memory, scoreboards and control-flow tests pass. The broader ABI suite retains two
+unrelated pre-existing failures (task/mesh table expectations and its literal ratchet); documentation/lint retain their
+previous unrelated findings. Five-title regression remains unavailable for absent packaged Mac builds, and a full Mac
+shader rebuild still stops on unsupported mesh metadata. No Mac GPU performance work is part of this follow-up.
+
+All artifacts are external under `bringup-20261116/isolation/`: `report.json`, exact captures, `variants/`, `bench/`,
+`proof/`, `mixed-memory/`, `timing-boundary/`, `adaptive/comparison.json`, full bundle comparisons, native-cache
+preparation, `optimized-selected/frame350.png` and exact run commands.
+The isolated native compiler still uses the documented allocator workaround; ordinary game runs use the normal allocator.
+Changes remain uncommitted.
+
+## Follow-up (2026-11-16): last-pool cache and the 30 FPS budget
+
+### Allocation isolated; guarded timing remains a different workload
+
+The replay now optionally uses the same BLOB hardware-buffer usage, dma-buf mapping and dedicated Vulkan import as
+the runtime. Imported pools use device-local memory type 1 (flags `0x1`); ordinary replay pools use host-visible,
+coherent Vulkan allocations. Core buffer robustness and dynamic uniform descriptors can be selected independently,
+including a static support buffer and dynamic driver buffer matching this capture. Every mode retains physical
+address guards, reset inputs and complete-pool output comparisons.
+
+The exact production `7f7ff0f36b54d90f` module, including HMMA vector-gather lowering, still takes about **5.56 ms** in
+guarded replay versus **25.58 ms** in the preceding full game. Imported allocation, robustness, dynamic descriptor
+layout, including the completion barrier, and selectively inlining only the guard wrappers do not explain the gap.
+The guarded module extracted anew from the production bundle is byte-identical to the previous guarded replay;
+the build-stage-mismatch hypothesis is rejected. Replaying the original module against a fresh frame-350 capture
+from the cache experiment also reproduces every output byte and the same fast guarded timing, ruling out those
+captured inputs as the explanation. The remaining instrumentation/compiler-context effect is **open**.
+
+### A generic lookup cache improves the ordinary game
+
+The [general mechanism](../../../docs/reference/shaders.md#repeated-raw-pointer-accesses-search-every-pool-again)
+uses an invocation-private last index and checks both pool bounds before reusing it. Misses retain the full search;
+the final range check, relocation, page-log policy and neural arithmetic remain. Production eligibility follows
+recognized mixed raw-read/write structure, with no game or shader-key branch.
+
+A one-module diagnostic first reduces upsampling to **10.89 ms** and frame-600 p50 to **246.09 ms**. The final complete
+build enables the same generic cache in both eligible modules:
+
+| Ordinary full-game measurement | Before this follow-up | Final cache build |
+|---|---:|---:|
+| `7f7ff0f36b54d90f` upsampling | 25.58 ms | 10.89 ms |
+| `d15370a382630d4e` | 8.57 ms | 4.50 ms |
+| Total timed steps | 248.20 ms | 228.77 ms |
+| Frame-600 p50 | 261.05 ms | 241.64 ms |
+| Frame-600 p95 | 264.40 ms | 245.51 ms |
+| GPU p50 / p95 | 258.11 / 261.02 ms | 238.60 / 242.68 ms |
+| Approximate frame rate | 3.83 fps | 4.14 fps |
+
+This recovers the upsampling regression documented above. It is **7.4% less frame time and 8.0% more fps** than the
+previous build. Relative to the clean 315.51 ms baseline before page-log optimization, frame time is **23.4% lower**
+and frame rate **30.6% higher**. All fourteen compute dispatches remain active, with the normal game allocator.
+The bounded 180-second run exits through its configured TERM timeout, with no red error lines. Frame 350 is saved
+for visual inspection.
+
+The cache's guarded `7f7f` replay improves from about **5.56 to 3.13 ms**, but guarded `d153` instead changes from
+about **2.82 to 6.71 ms**, despite improving in the ordinary game. These timings demonstrate why a guarded replay's
+performance direction must not select production changes without a full-game measurement. They are useful output
+proofs, not interchangeable hardware-throughput measurements.
+
+### What would 30 FPS require?
+
+At the current workload, 30 fps requires **33.33 ms per frame**, about **7.25 times** faster than the final run.
+One of the two dominant `e6be` dispatches alone still takes **34.17 ms**, already more than that entire budget.
+The pair costs about 68.4 ms, reconstruction another 28.8 ms, and the other convolution passes remain substantial.
+Logging and pool lookup improvements cannot by themselves establish a route to 30 fps.
+
+There is a reason to test a larger change: the tablet exposes native F16 cooperative matrix operations, while the
+current translation lowers HMMA into scalar operations and operand gathers. Its reported `64x16x16`, `64x32x16`
+and `64x64x16` tiles do not directly match guest `16x8x16` fragments. A native implementation needs new packing,
+reuse across logical warps, and checks of lane layout and K16 rounding on actual nonzero tensors. The next decisive
+experiment is one captured convolution layer with native tiling, including packing overhead and an independent
+numerical reference. **30 fps remains plausible enough to investigate, but is not demonstrated or promised.**
+
+### Rebuild, tests and artifacts
+
+Chain **`cf82d6110b10`** builds **2,417 of 2,428** entries. Only the two mixed-memory modules change from the prior
+complete bundle; every other module, all reflection records, keys, stages and flags are byte-identical. Independent
+validation of every final module retains the same seven pre-existing vector-extract failures. The eight opcode-243
+and three reflection-overflow build failures remain unchanged. The Android host compiles **267 sources with zero
+failures**. The existing isolated allocator workaround prepares the native compiler cache; the full game uses its
+normal allocator.
+
+All four independent baseline/cached, ordinary/imported-memory GPU comparisons pass, including whole-pool canaries
+and reset repetitions. Real captured outputs remain byte-identical. **39** focused Python tests and **13** chain tests
+pass, and focused lint, tool-lock and diff checks pass. Five-title regression is attempted for OOT, Mario Kart World,
+Bananza, Raiders and Fortune's Weave but their packaged Mac builds are unavailable. The required full Mac shader
+rebuild again stops on unsupported mesh metadata. Existing broader ABI, documentation and lint findings remain
+outside this change; this follow-up establishes no additional game or Mac/iOS validation.
+
+Artifacts are external under `bringup-20261116/runtime-memory/`: `report.json`, exact production-module extraction,
+the one-module native experiment and its capture, `validation/`, `timing-controls/`, independent lookup fixtures,
+full bundle comparisons, compiler-cache preparation, and final `cache-final/` logs and screenshot. Exact commands
+and exit codes are retained. Changes remain uncommitted.
+
+## Follow-up (2026-11-16): native cooperative convolution experiment
+
+### A measured gain remains diagnostic because numerical equivalence is open
+
+A native F16 `64x16x16` cooperative-matrix kernel now runs a complete captured `270x480x32 -> 32` convolution.
+It includes 3x3 halo loading, tensor packing, all eighteen K16 accumulations, bias/ReLU and output packing.
+The tablet again reports only F16 accumulators for its F16-input native tiles; it offers no F32 accumulator variant.
+This is an explicit experimental kernel using this captured driver ABI and dimensions, not a production translator rule.
+
+The ordinary game compares two bundles on the **same newly compiled host**, with the normal allocator and no dispatch skips.
+Exactly one of the 2,417 shader modules changes (`e6be82d835fbe4d3`, used twice per movie frame).
+Its local size becomes `64x1x1`; its other reflection records and flags remain unchanged.
+Every other module and reflection record is byte-identical. Both bounded runs exit through their configured 180-second TERM timeout.
+
+| Frame-600 interval / timed step | Original shader | Native diagnostic |
+|---|---:|---:|
+| Frame p50 / p95 | 241.54 / 246.42 ms | 229.23 / 232.94 ms |
+| GPU p50 / p95 | 238.61 / 242.95 ms | 226.16 / 229.58 ms |
+| Approximate frame rate | 4.14 fps | 4.36 fps |
+| First / second `e6be` dispatch | 34.26 / 34.24 ms | 27.86 / 27.75 ms |
+| Total timed steps | 229.35 ms | 216.75 ms |
+
+This is **5.1% less frame time**. All fourteen compute dispatches remain active, and neither run logs a red error.
+The diagnostic frame-350 screenshot shows the moonlit field without visible corruption. It does not establish
+numerical equivalence or player-controlled gameplay. The ordinary shader bundle remains the baseline.
+
+### Integer and memory checks pass; fractional agreement needs more work
+
+The independent synthetic integer convolution matches every output exactly. It exercises zero padding, negative inputs,
+bias/ReLU and a partial final tile. Both real captures and the fractional fixture preserve all input bytes and both
+64-byte output canaries. Repeated GPU submissions reset inputs and reproduce their initial outputs.
+An additional original-descriptor replay guards every raw physical load/store and compares the complete backing pool:
+**zero bytes change outside the output tensor**, and its output matches the direct-buffer native kernel bit for bit.
+
+Native arithmetic does not reproduce the current scalar K16 reference for fractional values:
+
+| Input | Maximum difference from captured/reference output | Full-output values differing by more than 0.01 |
+|---|---:|---:|
+| First real `e6be` capture | 0.0107421875 | 1 |
+| Second real `e6be` capture | 0.015625 | 82 |
+| Synthetic fractional halves | 0.017578125 | 12 |
+
+Against 4,101 deterministic sampled pixels, the second native layer differs from the independent CPU model by at most
+0.013671875, versus 0.005859375 for the current shader. Six sampled values exceed 0.01 with native arithmetic;
+none do with the current shader. Native F16 accumulation order/precision needs investigation before promotion.
+The [GLSL cooperative-matrix contract](https://docs.vulkan.org/glslext/latest/glslext/khr/GLSL_KHR_cooperative_matrix.html)
+allows implementation-dependent operation order. Matching the present CPU or scalar model would itself remain
+separate from proving the original Ampere hardware's rounding behavior.
+
+### Standalone speed does not explain full-game speed
+
+After sixteen warmups and twenty-four samples, direct-buffer native replays take **4.09 ms** and **4.16 ms** for the two captures.
+Pipeline compilation, transfers and readback are excluded; packing executes inside the timestamps.
+A controlled comparison with the current looping kernel uses identical inputs and produces identical output at both grids:
+`2025x2x1` takes **4.16 ms**, while the game's `120x1x1` grid takes **6.37 ms**.
+Launch geometry explains part of the gap, but does not explain the full game's roughly 27.8 ms native dispatches.
+The guarded raw replay takes about 82.7 ms and is an output proof, not a throughput estimate.
+Raw access/compiler context and native accumulation remain the next separate questions. No route to 30 fps is established.
+
+### Checks and artifacts
+
+The Android host compiles **267 sources with zero failures**. Fourteen focused Python tests pass, including independent
+CPU convolution, native Vulkan-memory-model guard validation, alias rejection and diagnostic bundle preservation.
+Focused lint and diff checks pass. The requested five-title regression covers OOT, Mario Kart World, Bananza, Raiders
+and Fortune's Weave because the host's feature setup is shared; it exits 2 because these packaged Mac builds are absent.
+Documentation checks retain the same three existing failures: a missing game note/row, the debugging guide's word limit,
+and unrelated broken links. None names a new link from this experiment.
+No Mac/iOS or broader gameplay validation is claimed.
+
+Reproduction tools and numerical checks are in [probes/README.md](../../../../probes/README.md#native-cooperative-convolution-experiment).
+Artifacts are external under `bringup-20261116/cooperative-matrix/`: `report.json`, `commands.json`, `grid-commands.json`,
+the original and native diagnostic bundle hashes, source snapshots, exact captured tensors, synthetic proofs, replay outputs,
+full-game/baseline logs, `frame350.png`, the isolated host and exact run commands. Chain `cf82d6110b10` is unchanged.
+Changes remain uncommitted.
+
+## Follow-up (2026-11-16): native arithmetic and inactive write logs
+
+### Both numerical effects are measured; the native kernel remains diagnostic
+
+The [native arithmetic finding](../../../docs/reference/shaders.md#native-f16-cooperative-matrices-round-products-and-additions-separately)
+now explains this experiment's fractional behavior. Separate scalar, native and half-packing GPU probes identify
+per-product/per-add half rounding and toward-zero final packing. The resulting CPU model matches all sampled native
+values exactly in both original `e6be` captures, the fractional fixture and a fresh game capture.
+It does not match the current float32-FMA/K16 model or establish original Ampere behavior.
+The production translator therefore keeps its existing lowering.
+
+### The inactive atomic log loop explains the raw-kernel timing gap
+
+All comparisons use the same first real capture, `120x1x1` workgroups, sixteen warmups and twenty-four GPU samples.
+Owned-buffer fixtures assign only the replay's own allocation addresses and preserve whole-tensor bounds checks.
+Every variant produces identical output; every byte outside the output tensor stays unchanged, and the log stays empty.
+The [general finding](../../../docs/reference/shaders.md#inactive-multi-probe-atomic-logging-slows-a-cooperative-kernel)
+records the compiler-context limitation and why copied-pool logging must remain intact.
+
+| Controlled variant | Median GPU time |
+|---|---:|
+| Direct descriptors | 6.36 ms |
+| Owned physical addresses | 6.39 ms |
+| Original raw map and log helper | 27.65 ms |
+| Raw read-only qualifiers | 27.65 ms |
+| Fixed lookup entry, full bounds checks | 27.36 ms |
+| Early-return / no-inline helper shapes | 27.66–27.69 ms |
+| Original lookup, logging omitted | 6.40 ms |
+| Inactive non-atomic log probes | 6.46 ms |
+| One inactive atomic | 6.40 ms |
+
+Physical addressing and lookup are not the missing 21 ms. The inactive multi-probe atomic loop triggers the penalty;
+the driver's precise code-generation mechanism remains open. The non-atomic and single-atomic controls are diagnostics,
+not substitutes for correct copied-pool publication.
+
+### A separate full-game diagnostic reaches 5.36 fps
+
+The no-log kernel changes only the same `e6be` module in a copy of the complete bundle. It uses the existing isolated
+cooperative-capable host with the normal allocator, a copied save and private caches. The frame-350 capture independently
+confirms that its destination is coherent: all **2,140 valid map entries** have the no-write-log flag set.
+Its sampled output matches the measured native CPU model exactly. Neither comparison changes arithmetic relative to
+the preceding native experiment; both remain numerically different from the production shader.
+
+| Ordinary full-game measurement | Previous native diagnostic | No-log native diagnostic |
+|---|---:|---:|
+| Frame-600 p50 / p95 | 229.23 / 232.94 ms | 186.47 / 191.08 ms |
+| GPU p50 / p95 | 226.16 / 229.58 ms | 183.49 / 187.47 ms |
+| Approximate frame rate | 4.36 fps | 5.36 fps |
+| First / second `e6be` dispatch | 27.86 / 27.75 ms | 6.45 / 6.43 ms |
+| Total timed steps | 216.75 ms | 174.24 ms |
+
+The frame-900 interval is 185.73 ms p50 / 190.69 ms p95. All fourteen compute dispatches remain active; there are no red
+errors, and the bounded run exits through its configured 180-second TERM timeout. The saved frame shows the moonlit
+field without visible corruption. Relative to the same-host original shader run at 241.54 ms, frame time is 22.8% lower;
+relative to the preceding native diagnostic it is 18.7% lower. These gains belong to the diagnostic experiment.
+A production implementation still needs compatible arithmetic and a safe static specialization for destinations that
+do not require logging; omitting logs for copied pools is not valid. No 30 fps result is established.
+
+### Checks and artifacts
+
+Eleven focused Python tests pass, including exact rounding counterexamples and existing CPU convolution, guard and
+memory-snapshot checks. The updated replay builds with NDK clang and `-Wall -Wextra -Werror`; all generated modules
+independently validate. Focused lint and diff checks pass. The required five-title regression again finds no packaged
+Mac builds for OOT, Mario Kart World, Bananza, Raiders or Fortune's Weave. Existing unrelated documentation failures remain.
+
+Artifacts are external under `bringup-20261116/cooperative-followup/`: `report.json`, `commands.json`, arithmetic
+models, owned-buffer comparisons, exact source and runner snapshots, the diagnostic bundle, `game-fast/` capture/logs,
+and `frame350.png`. [Probe instructions](../../../../probes/README.md#native-cooperative-convolution-experiment)
+cover the new arithmetic and owned-allocation modes. Chain `cf82d6110b10` is unchanged. Changes remain uncommitted.
+
+## Follow-up (2026-11-17): cooperative-only log specialization
+
+### Runtime selection now preserves copied-pool tracking
+
+The runtime implementation of the [inactive logging finding](../../../docs/reference/shaders.md#inactive-multi-probe-atomic-logging-slows-a-cooperative-kernel)
+keeps a separate log-free module and pipeline for cooperative compute programs. It selects that module only when the
+complete current map contains coherent allocations. Copied pools retain the original module, including overflow handling;
+the completion wait remains in both paths. Pool generation changes invalidate the decision. The transform refuses
+unknown uses of the reserved log pointer and leaves arithmetic instructions intact.
+
+Broad application to the ordinary gather kernels is **rejected**: a bounded test reaches roughly 2.1–2.3 seconds of GPU
+work per frame. This is a new compiler-context regression, not a correct performance result. The final eligibility rule
+requires an actual cooperative-matrix type, so the production gather modules remain byte-identical.
+A fresh original-bundle run returns to **240.12 ms p50 / 245.29 ms p95** at frame 300, with no red errors.
+This selection rule is structural; it contains no game or shader-key condition.
+
+The new native backend fixture tests coherent, copied, lazy-copied and mixed pools, then removes/replaces the destination
+at the same guest address and switches between copied and coherent backing. Eighty native checks and twenty ordinary
+scalar checks pass with Khronos validation active and zero API errors. The scalar fixture confirms that its original
+module stays selected. A/B matrix scalar constructors fail native compilation on this driver; the fixture uses the
+same shared-memory matrix-load interface as the convolution.
+
+### Two more native dispatches raise the diagnostic to 6.93 fps
+
+The `a8b4fb48fee0ccf8` kernel is a `540x960x16 -> 16` stride-1 convolution. A complete captured-pool replay of the
+native implementation takes **5.19 ms** at its ordinary `720x1x1` launch grid. Every byte outside the output tensor stays
+unchanged. Its sampled output matches the measured native half-product/half-add/toward-zero model exactly; its maximum
+difference from the existing shader is 0.0074462890625, with mean absolute difference 0.00019353.
+
+The final private bundle replaces only `a8b4` and `e6be` relative to the complete production baseline. All other modules,
+reflection records and flags remain unchanged; the two selected modules use `64x1x1` local size. Unlike the previous
+no-log experiment, both modules retain the full tracked path in their bundle. The host selects the coherent variant
+at replay time. No shader operation or neural dispatch is skipped.
+
+| Full-game measurement | Previous one-module native diagnostic | Two-module native diagnostic |
+|---|---:|---:|
+| Frame-600 p50 / p95 | 186.47 / 191.08 ms | 144.20 / 148.42 ms |
+| GPU p50 / p95 | 183.49 / 187.47 ms | 141.21 / 144.81 ms |
+| Approximate frame rate | 5.36 fps | 6.93 fps |
+| First / second `a8b4` dispatch | 26.03 / 25.97 ms | 5.23 / 5.24 ms |
+| First / second `e6be` dispatch | 6.45 / 6.43 ms | 6.41 / 6.42 ms |
+| Total timed steps | 174.24 ms | 131.82 ms |
+
+Frame-900 p50/p95 is 143.82/147.87 ms, and frame 1200 is 142.16/147.52 ms. The run uses the normal allocator and
+exits through its configured 180-second TERM timeout, with all fourteen compute dispatches active and no red errors.
+The frame-350 moonlit field has no visible corruption. The comparable frame-600 interval is **22.7% shorter** than
+the preceding native diagnostic, or **29.3% more fps**.
+
+The fresh `a8b4` capture contains 2,140 valid map entries, all coherent. Its 65,616 sampled output values match the native
+CPU model exactly. Captures now also save the **actual selected SPIR-V module**, so replay need not infer a coherent
+variant from the source bundle. That captured module independently validates and contains no logging atomics.
+
+### A float32 alternative still needs arithmetic investigation
+
+The tiled `FLOAT32_K16` candidate measures 15.55 ms on the original `e6be` capture and matches its explicit FMA/K16 CPU
+model exactly. It differs from the current shader in 1,462,794 output bytes, with maximum absolute error 0.001953125.
+That is insufficient for promotion. The candidate, both native convolutions and their rounding models remain diagnostic;
+the production translator still selects the original lowering. Original Ampere rounding is not established.
+The next largest measured costs are reconstruction at 28.77 ms and the first convolution at 27.03 ms.
+
+### Checks and artifacts
+
+The final Android host compiles **267 sources with zero failures**. Seventeen focused Python tests pass, including
+sanitizer checks of the exact runtime transform and refusal of unsupported log reads/atomics. Every raw-writing compute
+module in the baseline was independently transformed and validated during the audit; the final runtime applies that
+transform only to cooperative modules. Focused lint and diff checks pass. The five-title regression again lacks packaged
+Mac builds for OOT, Mario Kart World, Bananza, Raiders and Fortune's Weave. Existing unrelated documentation failures remain.
+
+Artifacts are external under `bringup-20261117/coherent-specialization/`: `report.json`, `commands.json`, `audit/`,
+the rejected broad-run logs, final original-bundle control, active-layer backend proofs, `a8/`, `precision/`, `native-two.dmsv`,
+`game-two-native/` with its actual module capture, `frame350.png`, and isolated runtime/source snapshots.
+Chain `cf82d6110b10` is unchanged. This checkpoint includes the runtime, translator, diagnostics and evidence above;
+native arithmetic remains diagnostic and is not selected by the production translator.

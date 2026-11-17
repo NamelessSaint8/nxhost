@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include "gfx_vk_spv_atlas.inc"
 #include "gfx_vk_spv_limits.inc"
+#include "gfx_vk_spv_gmem.inc"
 
 typedef struct __attribute__((packed)) { uint64_t key; uint32_t stage, spv_off, spv_len, refl_off, refl_len, pad; } bent;
 static const uint8_t *g_bundle; static uint32_t g_nent; static const bent *g_ent;
@@ -188,6 +189,12 @@ vkshader_t *vk_shader(uint64_t key, int stage) {
     const uint8_t *r = g_bundle + e->refl_off; uint32_t hdr[5]; memcpy(hdr, r, 20);
     s->nbind = (int)hdr[0]; s->c1_len = hdr[1]; memcpy(s->local, hdr + 2, 12);
     s->b = (const dmsv_bind *)(r + 20); s->c1 = r + 20 + 20 * s->nbind;
+    for(int i=0;i<s->nbind;i++){
+        const dmsv_bind *b=&s->b[i];
+        if(b->kind==RK_GMEM_LOG)s->raw_writer=1;
+        if(b->kind==RK_SBUF_UBO && b->reg==252)die("[RED] obsolete raw global-memory reflection: rebuild the Android shader bundle");
+        if((b->kind==RK_GMEM_MAP || b->kind==RK_GMEM_LOG) && (b->desc!=RD_SSBO || b->count!=1 || !V.has_bda))die("[RED] invalid or unsupported raw global-memory binding");
+    }
     for(int i=0;i<s->nbind;i++)if(s->b[i].kind==RK_WORKGROUP){
         if(!(e->pad&8) || s->workgroup_spill || s->b[i].desc!=RD_SSBO || s->b[i].off<=0 || s->b[i].off%4)die("[RED] invalid workgroup spill reflection");s->workgroup_spill=(uint32_t)s->b[i].off;
     }
@@ -220,6 +227,7 @@ vkshader_t *vk_shader(uint64_t key, int stage) {
         die("[RED] compute shader %016llx needs %llu shared bytes, device limit %u: rebuild the bundle with dmsv_workgroup.py",(unsigned long long)key,(unsigned long long)shared,V.props.limits.maxComputeSharedMemorySize);}
     int f64_used = 0; uint32_t xb = 4;
     for (uint32_t i = 5; i < nw;) { uint32_t n = w[i] >> 16, op = w[i] & 0xffff; if (!n) break; if (op == 71 && n >= 4 && w[i + 2] == 34) w[i + 3] = (uint32_t)s->set;   // OpDecorate DescriptorSet
+        if(op==4456)s->cooperative=1; // OpTypeCooperativeMatrixKHR
         if (op == 22 && n == 3 && w[i + 2] == 64) f64_used = 1;   // OpTypeFloat 64
         if (op == 16 && n >= 3 && w[i + 2] == 11) s->xfb = 1;     // OpExecutionMode Xfb: a vertex shader that captures transform feedback (shader_vk.py xfb_layout)
         if (op == 16 && n >= 3 && (w[i + 2] == 12 || w[i + 2] == 14 || w[i + 2] == 15)) s->depth_repl = 1;   // OpExecutionMode DepthReplacing / DepthGreater / DepthLess
@@ -467,6 +475,32 @@ VkShaderModule vk_shader_module(vkshader_t *s, uint64_t um, uint64_t im, uint32_
     s->var[s->nvar++] = (vkshader_variant){um, im, xo, fd, m, pm, ou, oi};
     pthread_mutex_unlock(&g_sh_mu);
     return m;
+}
+VkShaderModule vk_shader_compute_module(vkshader_t *s,uint64_t um,uint64_t im,int coherent) {
+    // The cost is proven for cooperative matrices. Removing these inactive
+    // atomics regresses the existing scalar/gather kernels on Adreno; keep
+    // those byte-identical until their compiler behavior is understood.
+    if(coherent && s->stage==5 && s->cooperative){
+        pthread_mutex_lock(&g_sh_mu);
+        if(!s->coherent_checked){
+            uint32_t bindings[96],nb=0,nw=0;
+            for(int i=0;i<s->nbind;i++)if(s->b[i].kind==RK_GMEM_LOG)bindings[nb++]=s->b[i].binding;
+            uint32_t *words=spv_gmem_unlogged(s->spv,s->nspv,bindings,nb,&nw);
+            if(words){
+                vkshader_t *copy=malloc(sizeof *copy);
+                if(copy){
+                    *copy=*s;copy->spv=words;copy->nspv=nw;copy->var=NULL;copy->nvar=copy->capvar=0;copy->coherent=NULL;copy->coherent_checked=1;
+                    VkShaderModuleCreateInfo ci={VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,NULL,0,(size_t)nw*4,words};
+                    if(vkCreateShaderModule(V.dev,&ci,NULL,&copy->mod)==VK_SUCCESS){s->coherent=copy;VKLOG("shader %016llx: coherent raw-store module ready",(unsigned long long)s->key);}
+                    else {free(copy);free(words);}
+                }else free(words);
+            }
+            s->coherent_checked=1;
+        }
+        vkshader_t *copy=s->coherent;pthread_mutex_unlock(&g_sh_mu);
+        if(copy)s=copy;
+    }
+    return vk_shader_module(s,um,im,0,0,0,0,0);
 }
 // static buffers: Ryujinx's support buffer (render scales 1.0, nothing else set: as nvn_mtl.m support_buf) and 64 KB of zeros (unbound uniform slots, driver segments nobody reads)
 static VkBuffer static_buf(int which) {

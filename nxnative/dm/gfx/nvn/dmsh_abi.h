@@ -75,7 +75,10 @@
 // holding an address by a binary search over the table's starts and accesses the address plus the pool's delta through a physical storage buffer pointer
 #define DMSH_GMEM_MAP_CB_SLOT 0xFF
 #define DMSH_GMEM_MAP_ENTRIES 4096       // entries of the table (GlobalToStorage.GmemMapLog2 = 12), sorted by start: entry 0 is empty (start 0, end 0) and unused entries start at ~0
-#define DMSH_GMEM_MAP_ENTRY 32           // bytes of an entry: start, end (exclusive) and delta (the pool's Metal GPU address minus its guest address), 64 bits each, then 8 bytes of padding
+#define DMSH_GMEM_MAP_ENTRY 32           // bytes: uint64 start, end (exclusive), GPU address delta; uint32 flags, reserved
+// The host may suppress page tracking only when it does not consume that pool's
+// log. Zero flags preserve tracking on existing hosts and copied Android pools.
+#define DMSH_GMEM_MAP_NO_WRITE_LOG 1
 // Where such a store or atomic lands is known only when the GPU runs it, so each one also puts its guest page (address >> 12) in a write log, reserved under the same slot at offset 1
 // (Ryujinx GlobalToStorage.GmemLogCbOffset, GmemLogLog2): 32-bit words, word 0 set when a page found no free slot, then a hash set of 1 << DMSH_GMEM_LOG_LOG2 pages (0 = empty).
 // The host learns the pages from it

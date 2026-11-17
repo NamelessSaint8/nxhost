@@ -11,6 +11,7 @@
 #include "nvn_hmap.h"
 #include "nvn_dirty.h"
 #include "nvn_timestamp.h"
+#include "dmsh_abi.h"
 #include <android/hardware_buffer.h>
 #include <dlfcn.h>
 #include <errno.h>
@@ -91,7 +92,7 @@ void vk_init(void) {
     VkExtensionProperties *ex = calloc(ne, sizeof *ex); vkEnumerateDeviceExtensionProperties(V.pd, NULL, &ne, ex);
     const char *want[] = {"VK_KHR_swapchain", "VK_ANDROID_external_memory_android_hardware_buffer", "VK_EXT_queue_family_foreign", "VK_EXT_custom_border_color",
                           "VK_EXT_robustness2", "VK_EXT_depth_clip_control", "VK_EXT_provoking_vertex", "VK_EXT_index_type_uint8", "VK_EXT_transform_feedback",
-                          "VK_GOOGLE_display_timing", "VK_EXT_mesh_shader"};
+                          "VK_GOOGLE_display_timing", "VK_EXT_mesh_shader", "VK_KHR_cooperative_matrix"};
     const char *on[64]; uint32_t non = 0;
     for (unsigned i = 0; i < sizeof want / sizeof *want; i++) if (has_ext(ex, ne, want[i])) on[non++] = want[i]; else VKLOG("device has no %s", want[i]);
     if(has_ext(ex,ne,"VK_KHR_pipeline_library") && has_ext(ex,ne,"VK_EXT_graphics_pipeline_library")){on[non++]="VK_KHR_pipeline_library";on[non++]="VK_EXT_graphics_pipeline_library";}
@@ -132,7 +133,8 @@ void vk_init(void) {
         {"VK_KHR_shader_terminate_invocation", VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_TERMINATE_INVOCATION_FEATURES}, {"VK_EXT_inline_uniform_block", VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INLINE_UNIFORM_BLOCK_FEATURES},
         {"VK_EXT_pipeline_creation_cache_control", VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_CREATION_CACHE_CONTROL_FEATURES}, {"VK_KHR_shader_integer_dot_product", VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_FEATURES},
         {"VK_EXT_private_data", VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIVATE_DATA_FEATURES},
-        {"VK_EXT_graphics_pipeline_library",VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT}};   // (VK_EXT_image_robustness: robustImageAccess stays off, as on 1.3)
+        {"VK_EXT_graphics_pipeline_library",VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT},
+        {"VK_KHR_cooperative_matrix",VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR}};   // (VK_EXT_image_robustness: robustImageAccess stays off, as on 1.3)
     uint32_t nxf = sizeof XF / sizeof *XF; featx_t xf[sizeof XF / sizeof *XF]; memset(xf, 0, sizeof xf); VkBaseOutStructure *xs = NULL;
     for (int i = (int)nxf - 1; i >= 0; i--) if (XF[i].ext ? is_on(on, non, XF[i].ext) : !v12) { xf[i].h.sType = XF[i].s; xf[i].h.pNext = xs; xs = &xf[i].h; }
     VkPhysicalDeviceVulkan13Features f13 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, xs};
@@ -180,6 +182,7 @@ void vk_init(void) {
     // enable: everything the shaders may use that the device has
     VkPhysicalDeviceFeatures en = ff.features; en.robustBufferAccess = 0; en.shaderFloat64 = 0;
     f12.bufferDeviceAddressCaptureReplay = 0; f12.bufferDeviceAddressMultiDevice = 0;
+    V.has_bda=v12?f12.bufferDeviceAddress:featx(xf,nxf,VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES)[0];
     featx(xf, nxf, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES)[1] = featx(xf, nxf, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES)[2] = 0;   // (its extension's: the same two)
     f13.robustImageAccess = 0;
     fcb.pNext = NULL; fr2.pNext = V.has_custom_border ? (void *)&fcb : NULL; fdc.pNext = V.has_robust2 ? (void *)&fr2 : (V.has_custom_border ? (void *)&fcb : NULL);
@@ -276,7 +279,7 @@ static int recv_fds(int sock, int *fds, int max) {
 static const VkBufferUsageFlags POOL_USAGE0 = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT |
     VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
-#define POOL_USAGE (POOL_USAGE0 | (V.has_xfb ? VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT : 0))   // any pool range may be a transform feedback buffer
+#define POOL_USAGE (POOL_USAGE0 | (V.has_xfb ? VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT : 0) | (V.has_bda ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT : 0))
 // Zero copy: the pages of [mem, mem+size) become an AHardwareBuffer's, imported as a VkBuffer. 0 on success
 static int pool_zero_copy(vkpool_t *p, uint8_t *mem, uint64_t size) {
     AHardwareBuffer_Desc d = {(uint32_t)size, 1, 1, AHARDWAREBUFFER_FORMAT_BLOB,
@@ -304,7 +307,8 @@ static int pool_zero_copy(vkpool_t *p, uint8_t *mem, uint64_t size) {
     if (vkGetAndroidHardwareBufferPropertiesANDROID(V.dev, ahb, &ap)) { AHardwareBuffer_release(ahb); return -16; }
     if (vkCreateBuffer(V.dev, &bi, NULL, &p->buf)) { AHardwareBuffer_release(ahb); return -17; }
     VkMemoryDedicatedAllocateInfo ded = {VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, NULL, VK_NULL_HANDLE, p->buf};   // the driver requires a dedicated allocation for an imported AHardwareBuffer
-    VkImportAndroidHardwareBufferInfoANDROID imp = {VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID, &ded, ahb};
+    VkMemoryAllocateFlagsInfo address_flags={VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,&ded,V.has_bda?VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT:0};
+    VkImportAndroidHardwareBufferInfoANDROID imp = {VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID, &address_flags, ahb};
     VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &imp, ap.allocationSize, vk_mem_type(ap.memoryTypeBits, 0, 0)};
     if (vk_memory_allocate(V.dev, &ai, NULL, &p->mem)) { vkDestroyBuffer(V.dev, p->buf, NULL); AHardwareBuffer_release(ahb); return -18; }
     if (vkBindBufferMemory(V.dev, p->buf, p->mem, 0)) { vk_memory_free(V.dev, p->mem, NULL); vkDestroyBuffer(V.dev, p->buf, NULL); AHardwareBuffer_release(ahb); return -19; }
@@ -360,7 +364,8 @@ static int pool_make_buffer(vkpool_t *p){
         VkBufferCreateInfo bi = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, NULL, 0, size, POOL_USAGE, VK_SHARING_MODE_EXCLUSIVE};
         VKCHK(vkCreateBuffer(V.dev, &bi, NULL, &p->buf));
         VkMemoryRequirements req; vkGetBufferMemoryRequirements(V.dev, p->buf, &req);
-        VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, NULL, req.size,
+        VkMemoryAllocateFlagsInfo address_flags={VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,NULL,V.has_bda?VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT:0};
+        VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &address_flags, req.size,
             vk_mem_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 0)};
         VKCHK(vk_memory_allocate(V.dev, &ai, NULL, &p->mem)); VKCHK(vkBindBufferMemory(V.dev, p->buf, p->mem, 0));
         void *m; VKCHK(vkMapMemory(V.dev, p->mem, 0, VK_WHOLE_SIZE, 0, &m)); p->shadow = m;
@@ -460,6 +465,11 @@ vkpool_t *vk_pool_of(uint64_t addr, uint64_t len) {
     return r;
 }
 uint32_t vk_pool_gen(void) { return __atomic_load_n(&g_pool_gen, __ATOMIC_ACQUIRE); }   // pools added or removed (gfx_vk_exec.c's descriptor set memo: vk_pool_of's results hold while it is unchanged)
+vkpool_t *vk_pool_of_buffer(VkBuffer buffer){
+    vkpool_t *found=NULL;pthread_rwlock_rdlock(&g_pool_mu);
+    for(int i=0;i<g_npool;i++)if(g_pool[i]->buf==buffer){found=g_pool[i];break;}
+    pthread_rwlock_unlock(&g_pool_mu);return found;
+}
 void vk_pool_memory_census(void){
     struct {int flags;uint64_t bytes,gpu,unused,count;} groups[64]={0};unsigned count=0;uint64_t file_bytes=0,copied_used=0,copied_unused=0;
     pthread_rwlock_rdlock(&g_pool_mu);
@@ -472,15 +482,10 @@ void vk_pool_memory_census(void){
     VKLOG("copied pool census: %.2f MiB used by GPU bindings, %.2f MiB never bound",copied_used/1048576.0,copied_unused/1048576.0);
     for(unsigned i=0;i<count;i++)VKLOG("pool census: flags %#x, registered %.2f MiB, direct GPU buffer %.2f MiB (never bound %.2f MiB), %llu ranges",groups[i].flags,groups[i].bytes/1048576.0,groups[i].gpu/1048576.0,groups[i].unused/1048576.0,(unsigned long long)groups[i].count);
 }
-VkBuffer vk_pool_buffer(vkpool_t *p){
-    if(__atomic_load_n(&p->lazy,__ATOMIC_ACQUIRE)){
-        pthread_rwlock_wrlock(&g_pool_mu);
-        pool_materialize_locked(p);
-        pthread_rwlock_unlock(&g_pool_mu);
-    }
+static void pool_use_locked(vkpool_t *p){
+    pool_materialize_locked(p);
     if(!p->buf)die("[RED] [vk] direct GPU buffer access to a GPU_NO_ACCESS pool");
     if(p->shadow && !__atomic_load_n(&p->gpu_used,__ATOMIC_ACQUIRE)){
-        pthread_rwlock_wrlock(&g_pool_mu);
         if(!p->gpu_used){
             // No earlier GPU work can reference an unbound buffer. Publish
             // canonical bytes at its first binding without draining unrelated
@@ -491,8 +496,14 @@ VkBuffer vk_pool_buffer(vkpool_t *p){
             memcpy(p->shadow,lo,size);p->synced=1;p->stamp0=p->stamp=stamp;g_shadow_pools=1;
             __atomic_store_n(&p->gpu_used,1,__ATOMIC_RELEASE);
         }
-        pthread_rwlock_unlock(&g_pool_mu);
     }
+    __atomic_store_n(&p->gpu_used,1,__ATOMIC_RELAXED);
+}
+VkBuffer vk_pool_buffer(vkpool_t *p){
+    if(__atomic_load_n(&p->lazy,__ATOMIC_ACQUIRE) || (p->shadow && !__atomic_load_n(&p->gpu_used,__ATOMIC_ACQUIRE))){
+        pthread_rwlock_wrlock(&g_pool_mu);pool_use_locked(p);pthread_rwlock_unlock(&g_pool_mu);
+    }
+    if(!p->buf)die("[RED] [vk] direct GPU buffer access to a GPU_NO_ACCESS pool");
     __atomic_store_n(&p->gpu_used,1,__ATOMIC_RELAXED);return p->buf;
 }
 int vk_buf_at(uint64_t addr, uint64_t len, VkBuffer *buf, VkDeviceSize *off) {
@@ -582,6 +593,8 @@ struct vksub {
     dfree_t *df; int ndf, capdf;
     post_op *post; int npost, cappost;
     struct { uint64_t lo, hi; } gw[64]; int ngw;   // GPU writes into pool memory in this submission (sub_gpu_wrote), for pools_copy_back: nearby ones merged, and once full each joins the nearest
+    VkDescriptorBufferInfo gmem_map; uint32_t gmem_gen; int gmem_valid,gmem_coherent;
+    const uint32_t **gmem_logs; unsigned ngmem_logs, capgmem_logs;
 };
 enum { GW_SUB = 64 };
 static uint64_t g_cb_bytes, g_cb_ns; static int g_cb_full;   // pools_copy_back's totals (its line every 300 submissions)
@@ -784,7 +797,8 @@ void *vk_scratch(VkDeviceSize n, VkDeviceSize align, VkBuffer *buf, VkDeviceSize
     VkBufferCreateInfo bi = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, NULL, 0, b->size, POOL_USAGE, VK_SHARING_MODE_EXCLUSIVE};
     VKCHK(vkCreateBuffer(V.dev, &bi, NULL, &b->b));
     VkMemoryRequirements req; vkGetBufferMemoryRequirements(V.dev, b->b, &req);
-    VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, NULL, req.size, vk_mem_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 0)};
+    VkMemoryAllocateFlagsInfo address_flags={VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,NULL,V.has_bda?VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT:0};
+    VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &address_flags, req.size, vk_mem_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 0)};
     VKCHK(vk_memory_allocate(V.dev, &ai, NULL, &b->m)); VKCHK(vkBindBufferMemory(V.dev, b->b, b->m, 0));
     void *m; VKCHK(vkMapMemory(V.dev, b->m, 0, VK_WHOLE_SIZE, 0, &m)); b->p = m;
     uint64_t live=__atomic_add_fetch(&g_scratch_live,b->size,__ATOMIC_RELAXED),peak=__atomic_load_n(&g_scratch_peak,__ATOMIC_RELAXED);
@@ -936,7 +950,7 @@ void mtl_sub_begin(void) {
     static int next; g_cur=next;next=(next+1)%submission_slots();vksub_t *s=&g_slot[g_cur];
     slot_recycle(s);
     vk_memory_census();   // replay-thread snapshot: no concurrent image uploads
-    s->npost = 0; s->up_used = 0; s->ngw = 0;
+    s->npost = 0; s->up_used = 0; s->ngw = 0; s->gmem_valid=0; s->ngmem_logs=0;
     VkCommandBufferBeginInfo bi = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
     s->main = s->mains[0]; s->nmain_used = 1; s->cb_err = 0; s->up = s->ups[0]; s->nup_used = 1; s->nmain_sent = 0;
     VKCHK(vkBeginCommandBuffer(s->main, &bi)); g_cmd_gen++;
@@ -1060,6 +1074,7 @@ static void sub_gpu_wrote(uint64_t a, uint64_t n) {   // into the open submissio
     if (best >= 0 && (bd <= 65536 || s->ngw == GW_SUB)) { if (lo < s->gw[best].lo) s->gw[best].lo = lo; if (hi > s->gw[best].hi) s->gw[best].hi = hi; }
     else { s->gw[s->ngw].lo = lo; s->gw[s->ngw].hi = hi; s->ngw++; }
 }
+#include "gfx_vk_gmem.inc"
 void vk_gpu_wrote(uint64_t a, uint64_t n) {
     uint64_t f = g_fence + 1;
     for (int i = g_ngw - 1; i >= 0 && g_gw[i].fence == f; i--) if (g_gw[i].lo <= a && a + n <= g_gw[i].hi) return;

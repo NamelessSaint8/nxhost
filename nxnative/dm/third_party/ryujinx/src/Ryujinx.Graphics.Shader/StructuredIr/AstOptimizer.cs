@@ -23,10 +23,12 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
                 {
                     if (node is AstAssignment assignment && assignment.Destination is AstOperand propVar)
                     {
-                        // Calls can write out parameters or memory. Retain the call
-                        // even when its return value is unused, and keep it before
-                        // later reads of those outputs instead of propagating it.
-                        if (assignment.Source is AstOperation sourceOp && sourceOp.Inst == Instruction.Call)
+                        // Calls/atomics have side effects, and mutable reads must
+                        // observe memory at their original instruction. Inlining a
+                        // single-use shared load into a later spill store can move
+                        // it past an intervening shared store or barrier (LDSM
+                        // weight fragments in OOT's 64-channel convolution).
+                        if (assignment.Source is AstOperation sourceOp && MustEvaluateAtDefinition(sourceOp))
                         {
                             continue;
                         }
@@ -51,6 +53,17 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
             }
 
             RemoveEmptyBlocks(mainBlock, targetLanguage);
+        }
+
+        private static bool MustEvaluateAtDefinition(AstOperation operation)
+        {
+            if (operation.Inst == Instruction.Load)
+            {
+                return operation.StorageKind is not (StorageKind.Input or StorageKind.InputPerPatch or StorageKind.ConstantBuffer);
+            }
+
+            return operation.Inst is Instruction.Call or Instruction.ImageLoad or Instruction.ImageAtomic or Instruction.TextureSample ||
+                   operation.Inst.IsAtomic();
         }
 
         private static bool UsedByCall(AstOperand propVar)
