@@ -17,6 +17,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / 'probes'))
 import hmma_shuffle
+import hmma_cooperative
 
 
 @unittest.skipUnless(os.environ.get('DMSH_TEST_XLATE') and
@@ -69,6 +70,33 @@ class ShuffleContract(unittest.TestCase):
             hmma_shuffle.build(self.folder / 'lane-128.spv', self.folder / 'bad.spv')
         with self.assertRaises(ValueError):
             hmma_shuffle.instrument_source((self.folder / 'hmma-128.comp').read_text())
+
+    def native_source(self):
+        source = (self.folder / 'hmma-reuse-128.comp').read_text()
+        # The fixture's STS readback wrapper has no matrix operations itself.
+        return source[:source.rindex('void main()')].replace('void translated_main()', 'void main()')
+
+    def test_native_helper_preserves_interface_and_dependent_calls(self):
+        source, calls = hmma_cooperative.compose(self.native_source(), [32, 2, 1])
+        target = self.folder/'native.spv'
+        result = hmma_shuffle.compile_source(source, target, compact=False)
+        self.assertEqual(self.reflect(target), self.reflect(self.folder/'hmma-reuse-128.vk.spv'))
+        self.assertEqual(calls, 6)
+        self.assertEqual(result['helper_calls'], 6)
+        module = hmma_shuffle.hmma_spv.Module(target.read_bytes())
+        self.assertTrue(any(x[0]&65535 == 4456 for x in module.ins))
+
+    def test_native_helper_rejects_incomplete_waves_and_divergence(self):
+        source = self.native_source()
+        for local in ([32, 1, 1], [96, 1, 1], [256, 1, 1]):
+            with self.subTest(local=local), self.assertRaises(ValueError):
+                hmma_cooperative.compose(source, local)
+        for control in ('if (gl_LocalInvocationIndex == 0u) return;', 'if (true) {'):
+            unsafe = source.replace('void main()\n{', 'void main()\n{\n'+control, 1)
+            with self.subTest(control=control), self.assertRaises(ValueError):
+                hmma_cooperative.compose(unsafe, [32, 2, 1])
+        with self.assertRaises(ValueError):
+            hmma_cooperative.build(self.folder/'lane-128.spv', self.folder/'bad-native.spv')
 
 
 if __name__ == '__main__':

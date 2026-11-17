@@ -1452,3 +1452,151 @@ the rejected broad-run logs, final original-bundle control, active-layer backend
 `game-two-native/` with its actual module capture, `frame350.png`, and isolated runtime/source snapshots.
 Chain `cf82d6110b10` is unchanged. This checkpoint includes the runtime, translator, diagnostics and evidence above;
 native arithmetic remains diagnostic and is not selected by the production translator.
+
+## Follow-up (2026-11-17): first convolution reaches 8.27 fps
+
+The preceding runtime/translator checkpoint is committed as `1d0a24ac`. The next
+diagnostic replaces `ba079f68ae288dba`, the first convolution, alongside the two
+previous native modules. Its input is a `1920x1080` RGBA8 UNORM texture: four
+row-major pixels form sixteen channels at each `960x540` output position. The
+kernel applies a zero-padded 3x3 convolution, sixteen output channels, bias and
+ReLU. Every fourth weight input is zero (alpha padding). The independent CPU
+checker establishes the unshuffle order rather than inferring it from a rendered
+picture.
+
+An owned full-pool replay takes **6.46 ms median / 6.66 ms p95**, with every byte
+outside the destination unchanged. All **65,616 sampled values** match the native
+half-product/half-add/toward-zero model exactly. Relative to the existing shader,
+maximum absolute difference is 0.004150390625 and mean difference is 0.00007702.
+The tracked kernel retains bounds checks and copied-pool logging; the runtime
+selects the coherent specialization under the same complete-map rule.
+
+| Full-game measurement | Two-module native diagnostic | Three-module native diagnostic |
+|---|---:|---:|
+| Frame-600 p50 / p95 | 144.20 / 148.42 ms | 120.89 / 124.73 ms |
+| GPU p50 / p95 | 141.21 / 144.81 ms | 118.51 / 121.84 ms |
+| Approximate frame rate | 6.93 fps | 8.27 fps |
+| First convolution | 27.03 ms | 6.58 ms |
+| Total timed steps | 131.82 ms | 111.75 ms |
+
+The comparable interval is **16.2% shorter**, or **19.3% more fps**. Frame-900
+p50/p95 is 120.41/124.31 ms; frame 1200 is 119.88/123.06 ms. The normal-allocator
+run reaches frame 1500 and exits gracefully through the configured 180-second TERM
+timeout. All fourteen compute dispatches remain active, none are skipped, and no
+red errors are logged. The fresh first-convolution capture again matches the
+native model exactly at 65,616 sampled values. The saved moonlit-field frame has
+no visible corruption. These results remain diagnostic: neither CPU-model agreement
+nor visual inspection establishes original Ampere numerical equivalence.
+
+### Generic native reconstruction packing is rejected
+
+The remaining largest pass is `4f41ccf24f163e0d`, at about 28.79 ms. A separate
+experiment retains its original sampling, weights, image writes, all 46 HMMA calls
+and `128x1x1` workgroup. It packs each pair of logical warp products into diagonal
+blocks of a native `64x16` output. Seven integer fixtures match 768 reference
+words exactly, including dependent and aliased calls; a further two-subgroup
+fixture matches 256 distinct words with intact canaries.
+
+On the same non-black captured inputs, current reconstruction takes **28.77 ms**
+and generic native packing takes **88.51 ms**. Both source pools stay unchanged.
+The current shader reproduces the captured image byte for byte; native packing
+changes 121,645 of 14,745,600 output bytes by at most one byte value. It is slower
+and numerically different, so it is excluded from the three-module game bundle.
+Further reconstruction work needs a different tile/data-reuse strategy; replacing
+each existing helper call independently does not provide a performance gain.
+
+### Checks and artifacts
+
+Twenty-three focused tests pass, including the new unshuffle reference and native
+helper interface/convergence checks. Generated SPIR-V validates independently;
+focused lint and diff checks pass. The required five-title check again reports no
+packaged Mac builds for OOT, Mario Kart World, Bananza, Raiders or Fortune's Weave.
+Existing unrelated documentation failures remain.
+
+Artifacts are external under `bringup-20261117/remaining-kernels/`: `report.json`,
+`commands.json`, `first/`, `fresh-first-model.json`, `native-three.dmsv`,
+`game-three/`, `frame350.png`, `reconstruction-proof/`, `reconstruction-native/`,
+`regression/` and source snapshots. Chain `cf82d6110b10` is unchanged. The follow-up
+probe and documentation edits remain uncommitted after the requested checkpoint.
+
+## Follow-up (2026-11-17): wider convolution tiles reach 8.62 fps
+
+The `e6be82d835fbe4d3` native diagnostic now packs all 32 output channels into a
+`64x32x16` cooperative tile. The prior `64x16x16` layout packed the same input
+twice for two output-channel tiles. The wider layout reuses that input packing;
+its K16 product/add order, bias, ReLU, bounds checks and tracked write path remain
+the same. It changes no production translation rule.
+
+On the original complete-pool capture, an N16/N32/N32/N16 comparison gives
+**6.39 / 3.73 / 3.73 / 6.39 ms** median over sixteen samples each, after eight
+warmups. All four resulting pools are byte-identical, and every byte outside the
+output tensor stays unchanged. Integer and fractional synthetic convolutions
+also produce byte-identical N16/N32 outputs, retain their canaries and inputs,
+and match the independent native half-product/half-add model. These include
+padding and a partial final 64-pixel tile.
+
+| Full-game measurement | Previous three-module native diagnostic | Wider convolution tile |
+|---|---:|---:|
+| Frame-600 p50 / p95 | 120.89 / 124.73 ms | 116.05 / 120.07 ms |
+| GPU p50 / p95 | 118.51 / 121.84 ms | 113.22 / 116.40 ms |
+| Approximate frame rate | 8.27 fps | 8.62 fps |
+| First / second `e6be` dispatch | 6.44 / 6.43 ms | 3.77 / 3.76 ms |
+| Total timed steps | 111.75 ms | 106.60 ms |
+
+The comparable interval is **4.0% shorter**, or **4.2% more fps**. Frame-900
+p50/p95 is 113.91/118.81 ms; frame 1200 is 113.79/118.57 ms. The normal-allocator
+run reaches frame 1500 and ends through its configured 180-second TERM timeout.
+All fourteen compute dispatches remain active, none are skipped, and no red
+errors are logged. Existing late-route texture-alias notices also occur in the
+preceding run. The moonlit frame-350 picture shows no visible corruption.
+
+The fresh in-game convolution capture matches the native CPU model exactly at
+**131,232 sampled values**; all captured pool bytes outside its output stay
+unchanged. Its actual selected module validates and contains no logging atomics.
+Relative to `native-three.dmsv`, only `e6be` code changes: all 2,416 other modules,
+reflection records and flags are unchanged. Native arithmetic remains diagnostic,
+with original Ampere numerical equivalence still open.
+
+### Reconstruction tile sharing is established, but both candidates lose
+
+An instrumented scalar reconstruction checks every operand at all 46 matrix
+calls over 14,400 workgroups: each call records 1,843,200 invocations. The first
+44 calls form 22 pairs with identical A fragments within each pair. Across the
+four logical warps, each pair shares either A or both B tiles, allowing a full
+native tile through transposition or row packing. Verification builds check the
+selected sharing condition again during the actual paired execution, with zero
+faults. The final two matrix calls retain the original arithmetic.
+
+Both full-workgroup and padded-subgroup mappings pass independent integer and
+fractional CPU matrix models, including dependent accumulation and intact
+canaries. A deliberately invalid sharing fixture sets the fault flag in both
+mappings. Alternating baseline/candidate/candidate/baseline measurements still
+reject them: **52.27 ms** for full-workgroup packing and **99.07 ms** for separate
+subgroups, against **28.77 ms** for the current gather shader. Both candidates
+change 120,884 of 14,745,600 image bytes, by at most one byte value. Neither enters
+the game bundle. Shortening the synchronization scope alone does not recover
+performance in these layouts.
+
+An exact-arithmetic cache experiment also provides no gain: retention limits
+2, 3, 4 and 8 emit identical modules and replay at about 28.77 ms, with outputs
+byte-identical to the captured image. Raising the current two-tile limit has no
+effect on this call sequence. Reconstruction remains the largest pass; the two
+`0a56002cdc7e1fce` passes together cost about 21.2 ms and are the next substantial
+unmodified workload.
+
+### Checks and artifacts
+
+Twenty-seven focused tests pass. New checks cover paired-call dependencies,
+intervening side effects, output aliasing, verification-binding collisions,
+both executable tile layouts and wider convolution grid/tensor preservation.
+Generated modules independently validate; focused lint and diff checks pass.
+The five-title Mac regression still lacks packaged builds for OOT, Mario Kart
+World, Bananza, Raiders and Fortune's Weave. The same unrelated documentation
+failures remain.
+
+Artifacts are external under `bringup-20261117/reconstruction-tiles/`:
+`report.json`, `commands.json`, `sharing/`, both matrix proof folders,
+`paired/`, `subgroup/`, `exact-cache/`, `wide-convolution/`,
+`native-three-wide.dmsv`, `game-wide/`, `frame350.png`, `regression/` and source
+snapshots. Chain `cf82d6110b10` is unchanged; probe and documentation edits remain
+part of this checkpoint. Native arithmetic remains diagnostic.

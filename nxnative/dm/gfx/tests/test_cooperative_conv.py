@@ -51,6 +51,46 @@ class BundleIsolation(unittest.TestCase):
 @unittest.skipUnless(importlib.util.find_spec('numpy') and shutil.which('glslangValidator')
                      and shutil.which('spirv-val'), 'requires numpy and SPIR-V tools')
 class NativeFixtures(unittest.TestCase):
+    def test_wider_tile_preserves_tensors_and_rejects_partial_channels(self):
+        from make_cooperative_conv import build
+        from make_cooperative_conv_proof import fixture
+        with tempfile.TemporaryDirectory() as folder:
+            p = Path(folder)
+            fixture(p)
+            build(p/'fixture', p/'wide', (9, 13, 32), 32, 32)
+            for binding in range(4):
+                self.assertEqual((p/'wide'/f'layer.b{binding}.before.bin').read_bytes(),
+                                 (p/'experiment'/f'layer.b{binding}.before.bin').read_bytes())
+            self.assertIn('dispatch native-conv 2 1 1', (p/'wide/layer.tsv').read_text())
+            self.assertEqual((p/'wide/captured-output.bin').read_bytes(),
+                             (p/'experiment/captured-output.bin').read_bytes())
+            with self.assertRaises(ValueError):
+                build(p/'fixture', p/'invalid', (9, 13, 32), 16, 32)
+            self.assertFalse((p/'invalid').exists())
+
+    def test_first_convolution_rgba_unshuffle_channel_order(self):
+        import numpy as np
+        from check_first_conv_capture import check
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)/'capture'
+            image = ((np.arange(4*6*4).reshape(4, 6, 4)//3)%2*255).astype('u1')
+            Path(f'{base}.b2.before.bin').write_bytes(image.tobytes())
+            weights = np.zeros((9, 16, 16), '<f2')
+            weights[4] = np.eye(16, dtype='<f2')
+            Path(f'{base}.b3.before.bin').write_bytes(weights.tobytes())
+            Path(f'{base}.b4.before.bin').write_bytes(bytes(32))
+            expected = (image.reshape(2, 2, 3, 2, 4).transpose(0, 2, 1, 3, 4).reshape(2, 3, 16)/255).astype('<f2')
+            raw = bytes([0xa5])*16+expected.tobytes()+bytes([0x5a])*16
+            Path(f'{base}.p0.after.bin').write_bytes(raw)
+            driver = np.zeros(1024, '<u4');driver[196] = 4096+16
+            Path(f'{base}.b1.before.bin').write_bytes(driver.tobytes())
+            base.with_suffix('.tsv').write_text(f'capture 2\nimage 2 1 6 4 37 37 4 0 0 0 0\npool 0 4096 {len(raw)}\n')
+            for model in ('half-mul-add', 'fma-k16'):
+                self.assertEqual(check(base, arithmetic=model)['max_absolute_error'], 0)
+            changed = expected.copy();changed[0, 0, 0] = 1-changed[0, 0, 0]
+            Path(f'{base}.p0.after.bin').write_bytes(raw[:16]+changed.tobytes()+raw[-16:])
+            self.assertEqual(check(base)['max_absolute_error'], 1)
+
     def test_half_rounding_and_nonfused_product_counterexample(self):
         import numpy as np
         from check_conv_capture import round_half

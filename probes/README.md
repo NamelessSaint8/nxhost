@@ -859,3 +859,44 @@ convolution probe. Its half accumulator conversion and final packing are checked
 independently; matching this CPU model does not establish byte equality with the
 game's existing shader. Neither this mode nor the native kernel is selected by
 the production translator.
+
+`TEXTURE_INPUT` with `RAW_LAYOUT` and `CI=16` reads four row-major RGBA pixels
+as sixteen channels before the convolution. It requires a `2*WIDTH` by
+`2*HEIGHT` texture at binding 2; weights, bias and destination keep the raw ABI.
+`check_first_conv_capture.py CAPTURE [--output FULL_POOL]` independently checks
+the RGBA8 UNORM unshuffle, zero padding and measured native arithmetic at sampled
+corners, center and seeded random pixels. Its `fma-k16` option is a separate
+numerical model. Check the full pool outside the destination after owned replay.
+
+`hmma_cooperative.py SCALAR_HELPER_SPV DEST` is a separate diagnostic packing
+experiment. It retains the caller's sampling, weights, image writes and local
+size, placing two logical `16x8` results in a native `64x16` tile. It requires
+one or two complete physical wave64 subgroups and rejects nested calls or early
+exits from main. Native half arithmetic differs from the production helper.
+Integer GPU fixtures check fragment order, dependent/aliased calls, both result
+words and isolated subgroups; executable contract tests check the descriptor
+interface. This generic packing is **rejected for OOT reconstruction performance**:
+88.51 ms versus 28.77 ms on identical captured inputs. Do not use the convolution
+bundle tool for this module: that tool sets local size to 64, whereas this
+experiment preserves the original local size.
+
+`hmma_cooperative_pair.py SCALAR_HELPER_SPV DEST --sharing aabb...` fuses
+consecutive matrix calls with identical A fragments in a `128x1x1` group.
+Each letter selects an independently established shared operand across logical
+warps. `a` transposes the product to combine varying B tiles; `b` combines A rows
+against two shared B tiles. The tool rejects dependencies, intervening side
+effects, nested calls and early exits. `--verify` reserves a 512-byte SSBO at
+binding 31: words 0–63 must stay zero, and words 64–127 count completed groups per
+pair. Always run this check over the whole capture before the timing build.
+`--scope subgroup` uses separate padded tiles for the two physical subgroups;
+the default uses one full tile and workgroup synchronization. Both are diagnostic
+native-half models. On the measured reconstruction capture they take about 99.07
+and 52.27 ms respectively, so neither is used in the game bundle.
+
+The convolution builder accepts `--tile-n 32` to reuse one packed input tile for
+32 output channels. The shader's `TILE_N` defaults to 16; output channels must be
+divisible by the chosen tile width. Grid partitioning, weight packing, accumulator
+dimensions and output indexing change together. Compare full output pools between
+tile widths and check padding/canaries and the independent native-half reference.
+This option preserves the preceding diagnostic native arithmetic; it does not
+establish guest numerical equivalence.

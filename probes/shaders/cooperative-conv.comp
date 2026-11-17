@@ -5,6 +5,12 @@
 // Diagnostic whole-layer convolution, not a production guest-shader replacement.
 // Packing, halo loads, K16 accumulation and output packing are timed together.
 layout(local_size_x=64) in;
+#ifndef TILE_N
+#define TILE_N 16
+#endif
+#if (TILE_N != 16 && TILE_N != 32 && TILE_N != 64) || (CO % TILE_N != 0)
+#error Output channels must contain whole supported native N tiles
+#endif
 #if defined(RAW_LAYOUT) || defined(ADDRESS_LAYOUT)
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
@@ -20,6 +26,12 @@ uint64_t pair(uint lo,uint hi) { return uint64_t(lo)|(uint64_t(hi)<<32); }
 layout(set=0,binding=1,std140) uniform Driver { uvec4 driver[256]; };
 layout(set=0,binding=5,std430) readonly buffer Map { uint words[]; };
 layout(set=0,binding=6,std430) buffer Log { uint pages[]; };
+#ifdef TEXTURE_INPUT
+#if CI != 16
+#error Texture input requires four RGBA pixels per sixteen-channel block
+#endif
+layout(set=0,binding=2) uniform sampler2D sourceTexture;
+#endif
 uint64_t sourceAddress,weightAddress,biasAddress,outputAddress,outputGuest;
 uint outputFlags;
 uint driverWord(uint i) { return driver[i/4][i%4]; }
@@ -41,7 +53,15 @@ uint64_t resolve(uint word,uint bytes,out uint flags) {
     if(guest<base||guest>=end||uint64_t(bytes)>end-guest||driverWord(word+2)<bytes)return uint64_t(0);
     return guest+pair(words[entry+4],words[entry+5]);
 }
-float inputHalf(uint i) { return unpackHalf2x16(ReadWord(sourceAddress+uint64_t(i/2)*4).value)[i%2]; }
+float inputHalf(uint i) {
+#ifdef TEXTURE_INPUT
+    uint pixel=i/16,channel=i%16;
+    ivec2 p=ivec2((pixel%WIDTH)*2+(channel/4)%2,(pixel/WIDTH)*2+channel/8);
+    return texelFetch(sourceTexture,p,0)[channel%4];
+#else
+    return unpackHalf2x16(ReadWord(sourceAddress+uint64_t(i/2)*4).value)[i%2];
+#endif
+}
 float weightHalf(uint i) { return unpackHalf2x16(ReadWord(weightAddress+uint64_t(i/2)*4).value)[i%2]; }
 vec2 biasPair(uint channel) { return unpackHalf2x16(ReadWord(biasAddress+uint64_t(channel)*2).value); }
 void outputPair(uint index,uint value) {
@@ -100,8 +120,8 @@ vec2 biasPair(uint channel) { return unpackHalf2x16(bias[channel/2]); }
 void outputPair(uint index,uint value) { result[16+index]=value; }
 #endif
 shared float16_t packedA[64*16];
-shared float16_t packedB[16*16];
-shared float16_t packedD[64*16];
+shared float16_t packedB[16*TILE_N];
+shared float16_t packedD[64*TILE_N];
 void main() {
     uint lane=gl_LocalInvocationIndex;
 #ifdef ADDRESS_LAYOUT
@@ -109,7 +129,12 @@ void main() {
 #endif
 #ifdef RAW_LAYOUT
     uint unused;
+#ifdef TEXTURE_INPUT
+    if(textureSize(sourceTexture,0)!=ivec2(WIDTH*2,HEIGHT*2))return;
+    sourceAddress=uint64_t(1); // texture fetches replace the raw source tensor
+#else
     sourceAddress=resolve(200,HEIGHT*WIDTH*CI*2,unused);
+#endif
     weightAddress=resolve(204,9*CI*CO*2,unused);
     biasAddress=resolve(208,CO*2,unused);
     outputAddress=resolve(196,HEIGHT*WIDTH*CO*2,outputFlags);
@@ -117,17 +142,17 @@ void main() {
     if(sourceAddress==uint64_t(0)||weightAddress==uint64_t(0)||biasAddress==uint64_t(0)||outputAddress==uint64_t(0))return;
 #endif
     uint group=gl_WorkGroupID.x*gl_NumWorkGroups.y+gl_WorkGroupID.y;
-    for(uint tile=group;tile<((HEIGHT*WIDTH+63)/64)*(CO/16);tile+=gl_NumWorkGroups.x*gl_NumWorkGroups.y) {
-    uint firstPixel=(tile/(CO/16))*64;
-    uint firstChannel=(tile%(CO/16))*16;
+    for(uint tile=group;tile<((HEIGHT*WIDTH+63)/64)*(CO/TILE_N);tile+=gl_NumWorkGroups.x*gl_NumWorkGroups.y) {
+    uint firstPixel=(tile/(CO/TILE_N))*64;
+    uint firstChannel=(tile%(CO/TILE_N))*TILE_N;
 #ifdef FLOAT32_K16
-    precise vec4 accumulator[4];
-    for(uint col=0;col<4;col++)accumulator[col]=vec4(0);
+    precise vec4 accumulator[TILE_N/4];
+    for(uint col=0;col<TILE_N/4;col++)accumulator[col]=vec4(0);
 #else
     coopmat<float16_t, gl_ScopeSubgroup, 64,16,gl_MatrixUseA> a;
-    coopmat<float16_t, gl_ScopeSubgroup, 16,16,gl_MatrixUseB> b;
-    coopmat<float16_t, gl_ScopeSubgroup, 64,16,gl_MatrixUseAccumulator> d;
-    d=coopmat<float16_t,gl_ScopeSubgroup,64,16,gl_MatrixUseAccumulator>(0.0);
+    coopmat<float16_t, gl_ScopeSubgroup, 16,TILE_N,gl_MatrixUseB> b;
+    coopmat<float16_t, gl_ScopeSubgroup, 64,TILE_N,gl_MatrixUseAccumulator> d;
+    d=coopmat<float16_t,gl_ScopeSubgroup,64,TILE_N,gl_MatrixUseAccumulator>(0.0);
 #endif
     for(uint tap=0;tap<9;tap++) for(uint k0=0;k0<CI;k0+=16) {
         for(uint i=lane;i<64*16;i+=64) {
@@ -139,14 +164,14 @@ void main() {
                 value=inputHalf((uint(y)*WIDTH+uint(x))*CI+k0+i%16);
             packedA[i]=float16_t(value);
         }
-        for(uint i=lane;i<16*16;i+=64)
-            packedB[i]=float16_t(weightHalf((tap*CI+k0+i/16)*CO+firstChannel+i%16));
+        for(uint i=lane;i<16*TILE_N;i+=64)
+            packedB[i]=float16_t(weightHalf((tap*CI+k0+i/TILE_N)*CO+firstChannel+i%TILE_N));
         barrier();
 #ifdef FLOAT32_K16
-        for(uint col=0;col<4;col++) {
+        for(uint col=0;col<TILE_N/4;col++) {
             precise vec4 sum=accumulator[col];
             for(uint k=0;k<16;k++) {
-                uint at=k*16+col*4;
+                uint at=k*TILE_N+col*4;
                 vec4 weight=vec4(packedB[at],packedB[at+1],packedB[at+2],packedB[at+3]);
                 sum=fma(vec4(float(packedA[lane*16+k])),weight,sum);
             }
@@ -154,22 +179,23 @@ void main() {
         }
 #else
         coopMatLoad(a,packedA,0,16,gl_CooperativeMatrixLayoutRowMajor);
-        coopMatLoad(b,packedB,0,16,gl_CooperativeMatrixLayoutRowMajor);
+        coopMatLoad(b,packedB,0,TILE_N,gl_CooperativeMatrixLayoutRowMajor);
         d=coopMatMulAdd(a,b,d);
 #endif
         barrier();
     }
 #ifdef FLOAT32_K16
-    for(uint col=0;col<16;col++)packedD[lane*16+col]=float16_t(accumulator[col/4][col%4]);
+    for(uint col=0;col<TILE_N;col++)packedD[lane*TILE_N+col]=float16_t(accumulator[col/4][col%4]);
 #else
-    coopMatStore(d,packedD,0,16,gl_CooperativeMatrixLayoutRowMajor);
+    coopMatStore(d,packedD,0,TILE_N,gl_CooperativeMatrixLayoutRowMajor);
 #endif
     barrier();
-    for(uint i=lane;i<64*8;i+=64) {
-        uint pixel=firstPixel+i/8;
-        uint channel=firstChannel+(i%8)*2;
+    for(uint i=lane;i<64*(TILE_N/2);i+=64) {
+        uint pixel=firstPixel+i/(TILE_N/2);
+        uint channel=firstChannel+(i%(TILE_N/2))*2;
         if(pixel<HEIGHT*WIDTH) {
-            vec2 v=vec2(packedD[(i/8)*16+(i%8)*2],packedD[(i/8)*16+(i%8)*2+1]);
+            uint at=(i/(TILE_N/2))*TILE_N+(i%(TILE_N/2))*2;
+            vec2 v=vec2(packedD[at],packedD[at+1]);
             v=max(v+biasPair(channel),vec2(0));
             outputPair((pixel*CO+channel)/2,packHalf2x16(v));
         }
