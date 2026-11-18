@@ -13,15 +13,22 @@ import subprocess
 import numpy as np
 
 
-def tensors(capture, height, width, ci, co):
+def tensors(capture, height, width, ci, co, stride=1):
+    if stride not in (1, 2) or height%stride or width%stride:
+        raise ValueError('supported stride and integral output dimensions required')
+    kernel = 3 if stride == 1 else 2
     rows = [r.split() for r in capture.with_suffix('.tsv').read_text().splitlines()]
     pools = [(int(r[1]), int(r[2]), int(r[3])) for r in rows if r[0] == 'pool']
     driver = np.fromfile(f'{capture}.b1.before.bin', '<u4')
+    if len(driver) < 211:
+        raise ValueError('truncated driver pointer table')
     result = []
     for word, count, phase in ((200, height*width*ci, 'before'),
-                               (204, 9*ci*co, 'before'), (208, co, 'before'),
-                               (196, height*width*co, 'after')):
+                               (204, kernel*kernel*ci*co, 'before'), (208, co, 'before'),
+                               (196, (height//stride)*(width//stride)*co, 'after')):
         address = int(driver[word]) | int(driver[word+1]) << 32
+        if address%4 or int(driver[word+2]) < count*2:
+            raise ValueError('unaligned or undersized driver tensor')
         index, base, size = next(p for p in pools if p[1] <= address < p[1]+p[2])
         offset = address-base
         if count*2 > size-offset:
@@ -37,15 +44,15 @@ def tensors(capture, height, width, ci, co):
     return result
 
 
-def build(capture, out, shape, co, tile_n=16, paired=False):
+def build(capture, out, shape, co, tile_n=16, paired=False, stride=1):
     h, w, ci = shape
     if min(h, w, ci, co) <= 0 or ci % 16 or co % 16:
         raise ValueError('positive H/W and whole K16/N16 channels required')
     if tile_n not in (16, 32, 64) or co % tile_n:
         raise ValueError('output channels must contain whole supported native N tiles')
-    values = tensors(capture, h, w, ci, co)
+    values = tensors(capture, h, w, ci, co, stride)
     out.mkdir(parents=True, exist_ok=True)
-    manifest = ['capture 1', f'dispatch native-conv {(h*w+63)//64} {co//tile_n} 1']
+    manifest = ['capture 1', f'dispatch native-conv {((h//stride)*(w//stride)+63)//64} {co//tile_n} 1']
     for binding, data in enumerate(values):
         if binding == 3:
             (out/'captured-output.bin').write_bytes(data)
@@ -54,7 +61,7 @@ def build(capture, out, shape, co, tile_n=16, paired=False):
         manifest.append(f'buffer {binding} 7 {len(data)}')
     (out/'layer.tsv').write_text('\n'.join(manifest)+'\n')
     source = Path(__file__).parent/'shaders/cooperative-conv.comp'
-    defines = ['-DPAIRED_LOADS=1'] if paired else []
+    defines = (['-DPAIRED_LOADS=1'] if paired else [])+[f'-DSTRIDE={stride}']
     subprocess.run(['glslangValidator', '-V', '--target-env', 'vulkan1.2',
                     f'-DHEIGHT={h}', f'-DWIDTH={w}', f'-DCI={ci}', f'-DCO={co}', f'-DTILE_N={tile_n}',
                     *defines, str(source), '-o', str(out/'native.spv')], check=True)
@@ -64,7 +71,8 @@ def build(capture, out, shape, co, tile_n=16, paired=False):
                     *defines, str(source), '-o', str(out/'native.raw.spv')], check=True)
     subprocess.run(['spirv-val', '--target-env', 'vulkan1.2', str(out/'native.raw.spv')], check=True)
     (out/'experiment.json').write_text(json.dumps(dict(capture=str(capture), shape=shape,
-        channels=co, tile_n=tile_n, paired_loads=paired, output_bytes=len(values[3]), kernel=3, stride=1), indent=2)+'\n')
+        channels=co, tile_n=tile_n, paired_loads=paired, output_bytes=len(values[3]),
+        kernel=3 if stride==1 else 2, stride=stride), indent=2)+'\n')
 
 
 if __name__ == '__main__':
@@ -75,5 +83,6 @@ if __name__ == '__main__':
     p.add_argument('--channels', type=int, required=True)
     p.add_argument('--tile-n', type=int, choices=(16, 32, 64), default=16)
     p.add_argument('--paired-loads', action='store_true')
+    p.add_argument('--stride', type=int, choices=(1, 2), default=1)
     a = p.parse_args()
-    build(a.capture, a.out, a.shape, a.channels, a.tile_n, a.paired_loads)
+    build(a.capture, a.out, a.shape, a.channels, a.tile_n, a.paired_loads, a.stride)

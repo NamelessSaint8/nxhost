@@ -913,6 +913,20 @@ dense oracle and the preceding module, including input regions, padding and
 canaries. Benchmark coherent raw modules with the exact runtime log transform,
 then measure the selected tracked modules in the full game.
 
+`make_cooperative_conv.py ... --stride 2` selects a non-overlapping 2x2 kernel
+with no padding and half-sized spatial output. The default remains a zero-padded
+3x3 stride-1 kernel. Tensor extraction, driver extent checks, weight bounds,
+output allocation, tile count and output indexing all follow the selected stride.
+Odd input dimensions are rejected for stride 2. `--shape` always describes the
+input tensor; `check_cooperative_conv.py` reads the recorded stride when checking
+the output. The raw module still distributes tiles across the supplied launch
+grid. Texture-input convolution currently requires stride 1.
+
+`make_cooperative_conv_proof.py OUT --stride 2 --channels 64` builds integer and
+fractional fixtures with a partial final output tile. Check every output channel,
+all input regions and both canaries against a dense native-half oracle before
+timing real pools; native half arithmetic remains distinct from float32 FMA.
+
 `make_cooperative_conv_proof.py OUT --channels 64` generates integer and fractional
 fixtures covering all 64 output channels. The default remains 32. Rebuild each
 fixture with `make_cooperative_conv.py OUT/integer/fixture DEST --shape 9 13 32
@@ -943,6 +957,12 @@ pixel tiles. Compare every pool byte against each fixture's dense oracle.
 `check_upsample_capture.py CAPTURE --shape H W CI --channels CO --output FULL_POOL`
 checks corners, center and seeded sampled pixels independently. Its `fma-k16`
 alternative is explicit; neither model establishes original Ampere equivalence.
+
+`make_cooperative_upsample_proof.py OUT --inputs CI --channels CO` expands the
+same residual-order and phase proofs to other whole K16/N16 channel counts.
+Defaults remain CI32/CO16. Check complete pools across tile widths, including
+the residual tensor and partial pixel tiles, before selecting a real-capture
+variant from timings.
 
 ## Native cooperative output-image convolution
 

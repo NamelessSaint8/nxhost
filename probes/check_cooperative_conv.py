@@ -24,7 +24,7 @@ def inspect(experiment, replay, samples=4096):
     if not np.isfinite(native).all() or not np.count_nonzero(native):
         raise ValueError('nonfinite or entirely zero output')
     delta = np.abs(native-captured)
-    args = (metadata['capture'], metadata['shape'], metadata['channels'])
+    args = (metadata['capture'], metadata['shape'], metadata['channels'], metadata.get('stride', 1))
     return dict(canaries=True, inputs_unchanged=True, nonzero_values=int(np.count_nonzero(native)),
                 vs_capture=dict(max_absolute_error=float(delta.max()), mean_absolute_error=float(delta.mean()),
                                 values_over_001=int((delta>.01).sum()), exact_fraction=float((delta==0).mean())),

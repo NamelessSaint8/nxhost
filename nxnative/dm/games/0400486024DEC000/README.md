@@ -1931,3 +1931,115 @@ remains uncommitted after the requested checkpoint. Reconstruction still costs
 about 29 ms. The next unconverted passes are `e2eebd7ba18fe35f` at 5.72 ms and
 `d15370a382630d4e` at 4.55 ms; their captures fit the existing stride-2 convolution
 and residual upsampling references, with numerical equivalence still to establish.
+
+## Follow-up (2026-11-18): multiscale passes reach 15.22 fps
+
+Checkpoint `db67e8c1` commits the paired convolution packing work. The next
+diagnostic replaces the two remaining downsample convolutions and the first
+residual upsampler:
+
+| Shader | Operation | Input features | Output features |
+|---|---|---|---|
+| `e2eebd7ba18fe35f` | 2x2 stride-2 convolution, bias/ReLU | `540x960x16` | `270x480x32` |
+| `9442573ee4ace011` | 2x2 stride-2 convolution, bias/ReLU | `270x480x32` | `135x240x64` |
+| `d15370a382630d4e` | Four-phase residual upsampling, bias/ReLU | `135x240x64` | `270x480x32` |
+
+The downsample kernels use non-overlapping row-major taps without padding. The
+upsampler uses `4x64x32` half weights and a separate skip tensor at driver word
+212, which initializes matrix C before K16 accumulation. Captured ranges,
+shader data flow and independent sampled references establish these layouts.
+The convolution probe now derives weight bounds, output extents, tiles and
+indices from stride; stride 1 keeps its preceding 3x3 behavior. The existing
+upsample kernel needs no shader change for the larger channel counts.
+
+### Independent proofs and tile selection
+
+Eighteen GPU fixtures cover integer and fractional inputs, N16/N32/N64 tiles,
+partial pixel tiles and all output channels. Twelve check stride-2 scalar/paired
+packing against a dense native-half oracle, including both output canaries and
+all immutable inputs. Six check complete residual-upsample pools against an
+independent dense phase oracle, including residual initialization and all
+untouched regions. Every byte matches.
+
+Real captures come from the preceding paired-convolution game. Each timing uses
+eight warmups and sixteen timestamp samples:
+
+| Captured pass | Original before | Native N16 | Native N32 | Native N64 | Original after |
+|---|---:|---:|---:|---:|---:|
+| `e2ee` | 5.655 ms | **0.937 ms** | 0.944 ms | Unsupported | 5.655 ms |
+| `9442` | 2.346 ms | 0.893 ms | **0.616 ms** | 0.662 ms | 2.341 ms |
+| `d153` | Compiler failure | **1.390 ms** | 1.807 ms | 1.458 ms | Compiler failure |
+
+N16/N32/N16 are selected. Within each pass, every native tile width produces the
+same complete pool, and every byte outside its destination stays unchanged.
+The two original downsample replays reproduce their captured pools byte for
+byte. All native outputs match the independent half-product/half-add/RTZ model
+at sampled positions, covering 524,928 values across the three selected passes.
+
+Standalone compilation of original `d153` raises Adreno `std::bad_alloc` in this
+replay fixture, with both default and required-64 subgroup settings. The cause
+remains open. Its original performance is established by the preceding full-game
+run; no standalone original-upsample speedup is claimed. Native outputs are
+compared with the saved original output on identical captured inputs.
+
+### Numerical limits
+
+These replacements change arithmetic from the current float32-FMA/K16 lowering.
+On identical captured inputs, the full-tensor comparisons are:
+
+| Pass | Maximum absolute difference | Mean absolute difference | Values differing by more than 0.01 |
+|---|---:|---:|---:|
+| `e2ee` | 0.0029296875 | 0.00011329 | 0 / 4,147,200 |
+| `9442` | 0.00830078125 | 0.00017216 | 0 / 2,073,600 |
+| `d153` | 0.009765625 | 0.00017632 | 0 / 4,147,200 |
+
+These isolated comparisons do not bound accumulated differences through the new
+chain. Native arithmetic remains diagnostic; original Ampere numerical
+equivalence is still open. The production translator keeps its existing lowering.
+
+### Full-game gain
+
+| Full-game measurement | Paired convolution diagnostic | Nine-module native diagnostic |
+|---|---:|---:|
+| Frame-600 p50 / p95 | 75.69 / 79.10 ms | 65.70 / 68.79 ms |
+| GPU p50 / p95 | 73.04 / 75.77 ms | 62.97 / 65.52 ms |
+| Approximate frame rate | 13.21 fps | 15.22 fps |
+| First downsample | 5.72 ms | 0.97 ms |
+| Second downsample | 2.39 ms | 0.64 ms |
+| First residual upsample | 4.55 ms | 1.45 ms |
+| Total timed steps | 67.97 ms | 58.42 ms |
+
+The comparable interval is **13.2% shorter**, or **15.2% more fps**. Frame-900
+p50/p95 is 65.19/68.65 ms, frame 1200 is 63.84/68.05 ms, and frame 2100 is
+65.06/69.25 ms. Frame 2700 is 65.61/70.09 ms. Full-frame capture contributes a
+1.28-second outlier in the frame-600 interval; later intervals contain no capture
+work. The normal-allocator run retains all fourteen compute dispatches without
+skips or red errors and exits gracefully through the configured 180-second TERM
+timeout. The saved moonlit frame shows no visible corruption.
+
+All three fresh chained outputs match the native model exactly at 524,928 sampled
+values, and every feature-pool byte outside each destination remains unchanged.
+Each captured module validates and is byte-identical to the exact runtime
+coherent-log transform of its selected tracked module. Only the three named
+modules change relative to `native-six-paired.dmsv`; all 2,414 others and all flags
+remain. Reflection changes only local size to `64x1x1`, from `32x2x1` for `e2ee`
+and `d153`, and `32x4x1` for `9442`.
+
+### Checks, artifacts and next cost
+
+Forty focused tests pass, including explicit stride-2 tap-order counterexamples,
+output extents, driver bounds/alignment, metadata-based reference selection,
+odd-dimension rejection and the wider fractional upsample oracle. Generated
+SPIR-V independently validates; focused lint and diff checks pass. The five-title
+Mac regression still lacks packaged builds for OOT, Mario Kart World, Bananza,
+Raiders and Fortune's Weave. The same three unrelated documentation failures
+remain.
+
+Artifacts are external under `bringup-20261118/multiscale/`: `report.json`, `commands.json`,
+`proof-report.json`, `real-report.json`, `original/`, `proof/`, `real/`,
+`native-nine.dmsv`, `game-native-nine/`, `frame350.png`, `regression/` and source
+snapshots. Chain `cf82d6110b10` and the host remain
+unchanged. This follow-up remains uncommitted after the requested checkpoint.
+Reconstruction `4f41ccf24f163e0d` now accounts for about half of timed GPU work:
+29.03 ms out of 58.42 ms. Its sampling and data reuse are the next substantial
+performance target.

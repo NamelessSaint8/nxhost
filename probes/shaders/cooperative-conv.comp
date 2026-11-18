@@ -8,6 +8,22 @@ layout(local_size_x=64) in;
 #ifndef TILE_N
 #define TILE_N 16
 #endif
+#ifndef STRIDE
+#define STRIDE 1
+#endif
+#if (STRIDE != 1 && STRIDE != 2) || (HEIGHT % STRIDE) || (WIDTH % STRIDE) || (CI % 16)
+#error Whole K16 inputs and supported integral output dimensions are required
+#endif
+#if STRIDE == 1
+#define KERNEL 3
+#define PADDING 1
+#else
+#define KERNEL 2
+#define PADDING 0
+#endif
+#define OUTPUT_HEIGHT (HEIGHT/STRIDE)
+#define OUTPUT_WIDTH (WIDTH/STRIDE)
+#define OUTPUT_PIXELS (OUTPUT_HEIGHT*OUTPUT_WIDTH)
 #if (TILE_N != 16 && TILE_N != 32 && TILE_N != 64) || (CO % TILE_N != 0)
 #error Output channels must contain whole supported native N tiles
 #endif
@@ -27,8 +43,8 @@ layout(set=0,binding=1,std140) uniform Driver { uvec4 driver[256]; };
 layout(set=0,binding=5,std430) readonly buffer Map { uint words[]; };
 layout(set=0,binding=6,std430) buffer Log { uint pages[]; };
 #ifdef TEXTURE_INPUT
-#if CI != 16
-#error Texture input requires four RGBA pixels per sixteen-channel block
+#if CI != 16 || STRIDE != 1
+#error Texture input requires stride one and four RGBA pixels per sixteen-channel block
 #endif
 layout(set=0,binding=2) uniform sampler2D sourceTexture;
 #endif
@@ -146,7 +162,7 @@ shared float16_t packedD[64*TILE_N];
 void main() {
     uint lane=gl_LocalInvocationIndex;
 #ifdef ADDRESS_LAYOUT
-    if(ranges[0].z<HEIGHT*WIDTH*CI*2||ranges[1].z<9*CI*CO*2||ranges[2].z<CO*2||ranges[3].z<HEIGHT*WIDTH*CO*2+128)return;
+    if(ranges[0].z<HEIGHT*WIDTH*CI*2||ranges[1].z<KERNEL*KERNEL*CI*CO*2||ranges[2].z<CO*2||ranges[3].z<OUTPUT_PIXELS*CO*2+128)return;
 #endif
 #ifdef RAW_LAYOUT
     uint unused;
@@ -156,14 +172,14 @@ void main() {
 #else
     sourceAddress=resolve(200,HEIGHT*WIDTH*CI*2,unused);
 #endif
-    weightAddress=resolve(204,9*CI*CO*2,unused);
+    weightAddress=resolve(204,KERNEL*KERNEL*CI*CO*2,unused);
     biasAddress=resolve(208,CO*2,unused);
-    outputAddress=resolve(196,HEIGHT*WIDTH*CO*2,outputFlags);
+    outputAddress=resolve(196,OUTPUT_PIXELS*CO*2,outputFlags);
     outputGuest=pair(driverWord(196),driverWord(197));
     if(sourceAddress==uint64_t(0)||weightAddress==uint64_t(0)||biasAddress==uint64_t(0)||outputAddress==uint64_t(0))return;
 #endif
     uint group=gl_WorkGroupID.x*gl_NumWorkGroups.y+gl_WorkGroupID.y;
-    for(uint tile=group;tile<((HEIGHT*WIDTH+63)/64)*(CO/TILE_N);tile+=gl_NumWorkGroups.x*gl_NumWorkGroups.y) {
+    for(uint tile=group;tile<((OUTPUT_PIXELS+63)/64)*(CO/TILE_N);tile+=gl_NumWorkGroups.x*gl_NumWorkGroups.y) {
     uint firstPixel=(tile/(CO/TILE_N))*64;
     uint firstChannel=(tile%(CO/TILE_N))*TILE_N;
 #ifdef FLOAT32_K16
@@ -175,15 +191,15 @@ void main() {
     coopmat<float16_t, gl_ScopeSubgroup, 64,TILE_N,gl_MatrixUseAccumulator> d;
     d=coopmat<float16_t,gl_ScopeSubgroup,64,TILE_N,gl_MatrixUseAccumulator>(0.0);
 #endif
-    for(uint tap=0;tap<9;tap++) for(uint k0=0;k0<CI;k0+=16) {
+    for(uint tap=0;tap<KERNEL*KERNEL;tap++) for(uint k0=0;k0<CI;k0+=16) {
 #ifdef PAIRED_LOADS
         // All indices are even: whole K16 inputs and whole native N tiles.
         for(uint i=lane;i<64*8;i+=64) {
             uint pixel=firstPixel+i/8;
-            int y=int(pixel/WIDTH)+int(tap/3)-1;
-            int x=int(pixel%WIDTH)+int(tap%3)-1;
+            int y=int(pixel/OUTPUT_WIDTH)*STRIDE+int(tap/KERNEL)-PADDING;
+            int x=int(pixel%OUTPUT_WIDTH)*STRIDE+int(tap%KERNEL)-PADDING;
             vec2 value=vec2(0);
-            if(pixel<HEIGHT*WIDTH && y>=0 && y<HEIGHT && x>=0 && x<WIDTH)
+            if(pixel<OUTPUT_PIXELS && y>=0 && y<HEIGHT && x>=0 && x<WIDTH)
                 value=inputPair((uint(y)*WIDTH+uint(x))*CI+k0+(i%8)*2);
             packedA[i*2]=float16_t(value.x);packedA[i*2+1]=float16_t(value.y);
         }
@@ -194,10 +210,10 @@ void main() {
 #else
         for(uint i=lane;i<64*16;i+=64) {
             uint pixel=firstPixel+i/16;
-            int y=int(pixel/WIDTH)+int(tap/3)-1;
-            int x=int(pixel%WIDTH)+int(tap%3)-1;
+            int y=int(pixel/OUTPUT_WIDTH)*STRIDE+int(tap/KERNEL)-PADDING;
+            int x=int(pixel%OUTPUT_WIDTH)*STRIDE+int(tap%KERNEL)-PADDING;
             float value=0.0;
-            if(pixel<HEIGHT*WIDTH && y>=0 && y<HEIGHT && x>=0 && x<WIDTH)
+            if(pixel<OUTPUT_PIXELS && y>=0 && y<HEIGHT && x>=0 && x<WIDTH)
                 value=inputHalf((uint(y)*WIDTH+uint(x))*CI+k0+i%16);
             packedA[i]=float16_t(value);
         }
@@ -231,7 +247,7 @@ void main() {
     for(uint i=lane;i<64*(TILE_N/2);i+=64) {
         uint pixel=firstPixel+i/(TILE_N/2);
         uint channel=firstChannel+(i%(TILE_N/2))*2;
-        if(pixel<HEIGHT*WIDTH) {
+        if(pixel<OUTPUT_PIXELS) {
             uint at=(i/(TILE_N/2))*TILE_N+(i%(TILE_N/2))*2;
             vec2 v=vec2(packedD[at],packedD[at+1]);
             v=max(v+biasPair(channel),vec2(0));

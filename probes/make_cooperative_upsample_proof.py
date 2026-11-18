@@ -9,8 +9,10 @@ from check_conv_capture import round_half
 from make_cooperative_upsample import build
 
 
-def fixture(out, fractional=False):
-    h, w, ci, co = 9, 13, 32, 16
+def fixture(out, fractional=False, inputs=32, channels=16):
+    if min(inputs, channels) <= 0 or inputs%16 or channels%16:
+        raise ValueError('positive whole K16/N16 channels required')
+    h, w, ci, co = 9, 13, inputs, channels
     rng = np.random.default_rng(1118)
     if fractional:
         source = rng.uniform(-1, 1, (h, w, ci)).astype('<f2')
@@ -58,6 +60,8 @@ def fixture(out, fractional=False):
 if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('out', type=Path)
+    p.add_argument('--inputs', type=int, default=32)
+    p.add_argument('--channels', type=int, default=16)
     a = p.parse_args()
-    fixture(a.out/'integer')
-    fixture(a.out/'fractional', True)
+    fixture(a.out/'integer', inputs=a.inputs, channels=a.channels)
+    fixture(a.out/'fractional', True, a.inputs, a.channels)

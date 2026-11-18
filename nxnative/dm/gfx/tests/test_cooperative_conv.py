@@ -51,6 +51,62 @@ class BundleIsolation(unittest.TestCase):
 @unittest.skipUnless(importlib.util.find_spec('numpy') and shutil.which('glslangValidator')
                      and shutil.which('spirv-val'), 'requires numpy and SPIR-V tools')
 class NativeFixtures(unittest.TestCase):
+    def test_stride_two_tile_extents_oracle_and_rejections(self):
+        import json
+        import numpy as np
+        from check_conv_capture import check
+        from check_cooperative_conv import inspect
+        from make_cooperative_conv import build, tensors
+        from make_cooperative_conv_proof import fixture
+        with tempfile.TemporaryDirectory() as folder:
+            p = Path(folder)
+            fixture(p, fractional=True, channels=64, stride=2)
+            values = tensors(p/'fixture', 18, 26, 32, 64, 2)
+            self.assertEqual([len(v) for v in values], [18*26*32*2, 4*32*64*2, 64*2, 9*13*64*2])
+            self.assertEqual(check(p/'fixture', (18, 26, 32), 64, stride=2)['max_absolute_error'], 0)
+            for n in (16, 32, 64):
+                out = p/f'n{n}'
+                build(p/'fixture', out, (18, 26, 32), 64, n, True, 2)
+                self.assertIn(f'dispatch native-conv 2 {64//n} 1', (out/'layer.tsv').read_text())
+                meta = json.loads((out/'experiment.json').read_text())
+                self.assertEqual((meta['kernel'], meta['stride'], meta['output_bytes']), (2, 2, 9*13*64*2))
+            replay = p/'reference'
+            for b in range(3):
+                Path(f'{replay}.b{b}.after.bin').write_bytes((out/f'layer.b{b}.before.bin').read_bytes())
+            Path(f'{replay}.b3.after.bin').write_bytes(bytes([0xa5])*64+values[3]+bytes([0x5a])*64)
+            self.assertEqual(inspect(out, replay)['captured_vs_cpu']['max_absolute_error'], 0)
+            for shape, stride in (((17, 26, 32), 2), ((18, 26, 32), 3)):
+                with self.assertRaises(ValueError):
+                    build(p/'fixture', p/'bad', shape, 64, stride=stride)
+            driver_path = Path(f'{p}/fixture.b1.before.bin')
+            driver = np.fromfile(driver_path, '<u4')
+            for word, value in ((202, 2), (206, 2), (198, 2), (200, int(driver[200])+2)):
+                changed = driver.copy();changed[word] = value
+                driver_path.write_bytes(changed.tobytes())
+                with self.assertRaises(ValueError):
+                    tensors(p/'fixture', 18, 26, 32, 64, 2)
+
+    def test_stride_two_nonoverlapping_row_major_taps(self):
+        import numpy as np
+        from check_conv_capture import check
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)/'capture'
+            x = np.zeros((4, 6, 16), '<f2');x[:, :, 0] = np.arange(24).reshape(4, 6)
+            weights = np.zeros((4, 16, 16), '<f2')
+            for tap in range(4):weights[tap, 0, tap] = 1
+            expected = np.zeros((2, 3, 16), '<f2')
+            for tap in range(4):expected[:, :, tap] = x[tap//2::2, tap%2::2, 0]
+            driver = np.zeros(1024, '<u4');before = bytearray(bytes(64));offsets = []
+            for word, value in ((200, x), (204, weights), (208, np.zeros(16, '<f2')), (196, np.zeros_like(expected))):
+                at = len(before);offsets.append(at);driver[word:word+3] = [at, 1, value.nbytes]
+                before.extend(value.tobytes());before.extend(bytes(64))
+            after = bytearray(before);after[offsets[-1]:offsets[-1]+expected.nbytes] = expected.tobytes()
+            base.with_suffix('.tsv').write_text(f'capture 2\npool 0 {1<<32} {len(before)}\n')
+            Path(f'{base}.b1.before.bin').write_bytes(driver.tobytes())
+            Path(f'{base}.p0.before.bin').write_bytes(before);Path(f'{base}.p0.after.bin').write_bytes(after)
+            for mode in ('fma-k16', 'half-mul-add'):
+                self.assertEqual(check(base, (4, 6, 16), 16, stride=2, arithmetic=mode)['max_absolute_error'], 0)
+
     def test_paired_loads_preserve_replay_contract_and_raw_guards(self):
         import json
         import subprocess

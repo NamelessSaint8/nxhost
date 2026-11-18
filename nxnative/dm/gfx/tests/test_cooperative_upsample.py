@@ -12,6 +12,24 @@ sys.path.insert(0, str(ROOT/'probes'))
 
 @unittest.skipUnless(importlib.util.find_spec('numpy'), 'requires numpy')
 class UpsampleReference(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('glslangValidator') and shutil.which('spirv-val'), 'requires SPIR-V tools')
+    def test_wider_fractional_fixture_and_partial_channel_rejection(self):
+        import numpy as np
+        from check_upsample_capture import load_tensors, reference
+        from make_cooperative_upsample_proof import fixture
+        with tempfile.TemporaryDirectory() as folder:
+            p = Path(folder)
+            base = fixture(p, True, inputs=64, channels=32)
+            x, w, b, c, actual = load_tensors(base, (9, 13, 64), 32)
+            ys, xs = np.indices((18, 26)).reshape(2, -1)
+            expected = reference(x.reshape(9, 13, 64), w.reshape(4, 64, 32), b,
+                                 c.reshape(18, 26, 32), ys, xs)
+            np.testing.assert_array_equal(expected, actual.reshape(-1, 32))
+            for inputs, channels in ((24, 32), (64, 24), (0, 32)):
+                with self.assertRaises(ValueError):
+                    fixture(p/'bad', inputs=inputs, channels=channels)
+                self.assertFalse((p/'bad').exists())
+
     def test_four_subpixels_channels_bias_and_relu(self):
         import numpy as np
         from check_upsample_capture import reference
