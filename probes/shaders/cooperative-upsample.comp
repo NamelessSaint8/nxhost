@@ -1,0 +1,106 @@
+#version 460
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+// Diagnostic K16 upsampling: four row-major subpixels, residual C, bias/ReLU.
+// Native half arithmetic is an explicit model, not a production guest lowering.
+layout(local_size_x=64) in;
+#ifndef TILE_N
+#define TILE_N 16
+#endif
+#if CI % 16 || CO % 16 || (TILE_N != 16 && TILE_N != 32 && TILE_N != 64) || ((4*CO) % TILE_N)
+#error Whole K16 channels and native output tiles are required
+#endif
+layout(buffer_reference,buffer_reference_align=4) buffer Word { uint value; };
+layout(set=0,binding=1,std140) uniform Driver { uvec4 driver[256]; };
+layout(set=0,binding=4,std430) readonly buffer Map { uint words[]; };
+layout(set=0,binding=6,std430) buffer Log { uint pages[]; };
+uint64_t sourceAddress,weightAddress,biasAddress,residualAddress,outputAddress,outputGuest;
+uint outputFlags;
+uint driverWord(uint i) { return driver[i/4][i%4]; }
+uint64_t pair(uint lo,uint hi) { return uint64_t(lo)|(uint64_t(hi)<<32); }
+uint64_t resolve(uint word,uint bytes,out uint flags) {
+    uint64_t guest=pair(driverWord(word),driverWord(word+1));
+    uint index=0;
+    for(uint step=2048;step>0;step/=2) {
+        uint candidate=index+step;
+        if(pair(words[candidate*8],words[candidate*8+1])<=guest)index=candidate;
+    }
+    uint entry=index*8;
+    uint64_t base=pair(words[entry],words[entry+1]),end=pair(words[entry+2],words[entry+3]);
+    flags=words[entry+6];
+    if(guest<base||guest>=end||uint64_t(bytes)>end-guest||driverWord(word+2)<bytes)return uint64_t(0);
+    return guest+pair(words[entry+4],words[entry+5]);
+}
+float halfAt(uint64_t base,uint index) {
+    return unpackHalf2x16(Word(base+uint64_t(index/2)*4).value)[index%2];
+}
+uint outputIndex(uint pixel,uint column) {
+    uint phase=column/CO,channel=column%CO;
+    return (((pixel/WIDTH)*2+phase/2)*(WIDTH*2)+(pixel%WIDTH)*2+phase%2)*CO+channel;
+}
+void outputPair(uint index,uint value) {
+    if((outputFlags&1)==0) {
+        uint page=uint((outputGuest+uint64_t(index)*4)>>12),hash=(page*2654435761u)>>22;
+        bool published=false;
+        for(uint i=0;i<8;i++) {
+            uint old=atomicCompSwap(pages[1+((hash+i)&1023)],0,page);
+            if(old==0||old==page){published=true;break;}
+        }
+        if(!published)atomicOr(pages[0],1);
+    }
+    Word(outputAddress+uint64_t(index)*4).value=value;
+}
+shared float16_t packedA[64*16],packedB[16*TILE_N],packedD[64*TILE_N];
+void main() {
+    uint unused,lane=gl_LocalInvocationIndex;
+    sourceAddress=resolve(200,HEIGHT*WIDTH*CI*2,unused);
+    weightAddress=resolve(204,4*CI*CO*2,unused);
+    biasAddress=resolve(208,CO*2,unused);
+    residualAddress=resolve(212,HEIGHT*WIDTH*4*CO*2,unused);
+    outputAddress=resolve(196,HEIGHT*WIDTH*4*CO*2,outputFlags);
+    outputGuest=pair(driverWord(196),driverWord(197));
+    if(sourceAddress==uint64_t(0)||weightAddress==uint64_t(0)||biasAddress==uint64_t(0)||residualAddress==uint64_t(0)||outputAddress==uint64_t(0))return;
+    uint group=gl_WorkGroupID.x*gl_NumWorkGroups.y+gl_WorkGroupID.y;
+    for(uint tile=group;tile<((HEIGHT*WIDTH+63)/64)*(4*CO/TILE_N);tile+=gl_NumWorkGroups.x*gl_NumWorkGroups.y) {
+        uint firstPixel=(tile/(4*CO/TILE_N))*64,firstColumn=(tile%(4*CO/TILE_N))*TILE_N;
+        for(uint i=lane;i<64*TILE_N;i+=64) {
+            uint pixel=firstPixel+i/TILE_N;
+            packedD[i]=float16_t(pixel<HEIGHT*WIDTH ? halfAt(residualAddress,outputIndex(pixel,firstColumn+i%TILE_N)) : 0);
+        }
+        barrier();
+        coopmat<float16_t,gl_ScopeSubgroup,64,16,gl_MatrixUseA> a;
+        coopmat<float16_t,gl_ScopeSubgroup,16,TILE_N,gl_MatrixUseB> b;
+        coopmat<float16_t,gl_ScopeSubgroup,64,TILE_N,gl_MatrixUseAccumulator> d;
+        coopMatLoad(d,packedD,0,TILE_N,gl_CooperativeMatrixLayoutRowMajor);
+        for(uint k0=0;k0<CI;k0+=16) {
+            for(uint i=lane;i<64*16;i+=64) {
+                uint pixel=firstPixel+i/16;
+                packedA[i]=float16_t(pixel<HEIGHT*WIDTH ? halfAt(sourceAddress,pixel*CI+k0+i%16) : 0);
+            }
+            for(uint i=lane;i<16*TILE_N;i+=64) {
+                uint col=firstColumn+i%TILE_N;
+                packedB[i]=float16_t(halfAt(weightAddress,((col/CO)*CI+k0+i/TILE_N)*CO+col%CO));
+            }
+            barrier();
+            coopMatLoad(a,packedA,0,16,gl_CooperativeMatrixLayoutRowMajor);
+            coopMatLoad(b,packedB,0,TILE_N,gl_CooperativeMatrixLayoutRowMajor);
+            d=coopMatMulAdd(a,b,d);
+            barrier();
+        }
+        coopMatStore(d,packedD,0,TILE_N,gl_CooperativeMatrixLayoutRowMajor);
+        barrier();
+        for(uint i=lane;i<64*(TILE_N/2);i+=64) {
+            uint row=i/(TILE_N/2),col=(i%(TILE_N/2))*2,pixel=firstPixel+row;
+            if(pixel<HEIGHT*WIDTH) {
+                uint channel=(firstColumn+col)%CO;
+                vec2 v=vec2(packedD[row*TILE_N+col],packedD[row*TILE_N+col+1]);
+                vec2 bias=unpackHalf2x16(Word(biasAddress+uint64_t(channel)*2).value);
+                outputPair(outputIndex(pixel,firstColumn+col)/2,packHalf2x16(max(v+bias,vec2(0))));
+            }
+        }
+        barrier();
+    }
+}

@@ -51,6 +51,26 @@ class BundleIsolation(unittest.TestCase):
 @unittest.skipUnless(importlib.util.find_spec('numpy') and shutil.which('glslangValidator')
                      and shutil.which('spirv-val'), 'requires numpy and SPIR-V tools')
 class NativeFixtures(unittest.TestCase):
+    def test_n64_fixture_preserves_all_channels_and_rejects_unsupported_count(self):
+        import numpy as np
+        from make_cooperative_conv import build, tensors
+        from make_cooperative_conv_proof import fixture
+        with tempfile.TemporaryDirectory() as folder:
+            p = Path(folder)
+            fixture(p, fractional=True, channels=64)
+            source, weights, bias, output = tensors(p/'fixture', 9, 13, 32, 64)
+            self.assertEqual(len(source), 9*13*32*2)
+            self.assertEqual(len(weights), 9*32*64*2)
+            self.assertEqual(len(bias), 64*2)
+            self.assertEqual(len(output), 9*13*64*2)
+            self.assertTrue(np.isfinite(np.frombuffer(output, '<f2')).all())
+            build(p/'fixture', p/'wide', (9, 13, 32), 64, 64)
+            self.assertIn('dispatch native-conv 2 1 1', (p/'wide/layer.tsv').read_text())
+            self.assertEqual((p/'wide/captured-output.bin').read_bytes(), output)
+            with self.assertRaises(ValueError):
+                fixture(p/'invalid', channels=24)
+            self.assertFalse((p/'invalid').exists())
+
     def test_wider_tile_preserves_tensors_and_rejects_partial_channels(self):
         from make_cooperative_conv import build
         from make_cooperative_conv_proof import fixture

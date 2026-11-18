@@ -8,8 +8,10 @@ import numpy as np
 from make_cooperative_conv import build
 
 
-def fixture(out, fractional=False):
-    h, w, ci, co = 9, 13, 32, 32
+def fixture(out, fractional=False, channels=32):
+    if channels <= 0 or channels % 16:
+        raise ValueError('requires positive whole N16 output channels')
+    h, w, ci, co = 9, 13, 32, channels
     rng = np.random.default_rng(709)
     if fractional:
         x = rng.uniform(-1, 1, (h, w, ci)).astype('<f2')
@@ -55,6 +57,7 @@ def fixture(out, fractional=False):
 if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('out', type=Path)
+    p.add_argument('--channels', type=int, default=32)
     a = p.parse_args()
-    fixture(a.out/'integer')
-    fixture(a.out/'fractional', True)
+    fixture(a.out/'integer', channels=a.channels)
+    fixture(a.out/'fractional', True, channels=a.channels)

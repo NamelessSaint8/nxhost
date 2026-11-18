@@ -1600,3 +1600,157 @@ Artifacts are external under `bringup-20261117/reconstruction-tiles/`:
 `native-three-wide.dmsv`, `game-wide/`, `frame350.png`, `regression/` and source
 snapshots. Chain `cf82d6110b10` is unchanged; probe and documentation edits remain
 part of this checkpoint. Native arithmetic remains diagnostic.
+
+## Follow-up (2026-11-17): both 64-channel passes reach 9.81 fps
+
+Checkpoint `38d059fc` commits the preceding probe, test and documentation work.
+The next diagnostic replaces both uses of `0a56002cdc7e1fce`, a zero-padded 3x3
+`135x240x64 -> 64` convolution followed by bias/ReLU. A fresh full-frame capture
+uses the preceding three-module native bundle, including the wider `e6be` tile,
+so both test inputs contain the current upstream feature data.
+
+### N32 wins over the larger native tile
+
+Six GPU fixtures cover integer and fractional 64-output-channel convolutions
+with N16, N32 and N64 tiles. Each three-way comparison produces byte-identical
+complete output buffers, preserves both canaries and all inputs, and matches
+the independent native-half model. Partial final pixel tiles are included.
+
+Both real dispatches then replay from complete owned pools, with eight warmups
+and sixteen timestamp samples per measurement:
+
+| Captured dispatch | First N16 | N32 | N64 | Final N16 |
+|---|---:|---:|---:|---:|
+| Sequence 6 | 6.142 ms | 3.738 ms | 4.002 ms | 6.137 ms |
+| Sequence 7 | 6.136 ms | 3.731 ms | 4.007 ms | 6.140 ms |
+
+All tile widths produce byte-identical full pools within each dispatch; every
+byte outside its destination stays unchanged. Each selected output matches the
+native CPU model exactly at 262,464 sampled values. N32 is selected for the game
+experiment; the 64-wide tile is correct under this model but slower.
+
+### Full-game gain and numerical limits
+
+| Full-game measurement | Previous three-module native diagnostic | Four-module native diagnostic |
+|---|---:|---:|
+| Frame-600 p50 / p95 | 116.05 / 120.07 ms | 101.91 / 104.41 ms |
+| GPU p50 / p95 | 113.22 / 116.40 ms | 99.14 / 101.60 ms |
+| Approximate frame rate | 8.62 fps | 9.81 fps |
+| First / second `0a56` dispatch | 10.64 / 10.56 ms | 3.81 / 3.80 ms |
+| Total timed steps | 106.60 ms | 93.50 ms |
+
+The comparable interval is **12.2% shorter**, or **13.9% more fps**. Frame-900
+p50/p95 is 101.16/103.99 ms, and frame 1200 is 99.67/103.90 ms. The run reaches
+frame 1800, uses the normal allocator and ends through the configured 180-second
+TERM timeout. All fourteen compute dispatches stay active, none are skipped,
+and no red errors are logged. Full-frame capture causes a 1.4-second outlier in
+the frame-600 interval; later intervals contain no capture work.
+
+Fresh in-game captures check both chained native dispatches, including the second
+pass's changed input from the first native pass. Together, **524,928 sampled
+values** match the native model exactly. Bytes outside each output remain
+unchanged, and both selected modules validate without logging atomics.
+Only this shader key changes relative to the preceding bundle; all other 2,416
+modules and flags are retained. Its reflection only changes local size from
+`32x4x1` to `64x1x1`.
+
+The numerical difference from the current float32-FMA/K16 shader is larger at
+this depth. On identical captured inputs, the first pass differs by at most
+0.021484375 (mean 0.00053087), and the second by 0.078125 (mean 0.00096031).
+The first pass has 558 of 2,073,600 values differing by more than 0.01; the second
+has 22,925. Original Ampere numerical equivalence remains open. The saved
+moonlit frame has no visible corruption, but the two full-game captures have
+different first-pass source tensors, so their final pixels cannot establish
+controlled numerical equivalence. Native arithmetic remains diagnostic and is
+not selected by the production translator.
+
+### Checks, artifacts and next costs
+
+Twenty-eight focused tests pass, including the expanded 64-channel fixture and
+rejection of partial N16 channel counts. Generated SPIR-V independently validates;
+focused lint and diff checks pass. The five-title Mac check still has no packaged
+builds for OOT, Mario Kart World, Bananza, Raiders or Fortune's Weave. Existing
+unrelated documentation failures remain.
+
+Artifacts are external under `bringup-20261117/pointwise/`: `report.json`,
+`commands.json`, the fresh original `capture/`, `proof/`, `real/`,
+`native-four.dmsv`, `selection.json`, `game-native-four/`, `frame350.png`,
+`regression/` and source snapshots. The folder name predates identification of
+the 3x3 kernel. Chain `cf82d6110b10` is unchanged; follow-up fixture/test and
+documentation edits remain uncommitted after the requested checkpoint.
+Reconstruction remains about 28.7 ms, followed by `7f7ff0f36b54d90f` at 10.9 ms
+and `5a7d69b067a7f011` at 7.9 ms.
+
+## Follow-up (2026-11-17): residual upsampling reaches 10.80 fps
+
+`7f7ff0f36b54d90f` expands `270x480x32` features into `540x960x16`. Four
+row-major subpixel matrices share each source pixel. Its weights are
+`4x32x16` half values; the larger captured SSBO range also contains neighboring
+data. Driver word 212 supplies a separate skip tensor. The shader initializes
+matrix C from that residual, accumulates K16 fragments, then applies shared bias
+and ReLU. Moving the residual to a final add changes native rounding; a new
+counterexample test distinguishes those orders.
+
+The diagnostic packs source pixels and phase/channel columns into native
+cooperative tiles. It retains tensor bounds checks, the original launch grid,
+copied-pool logging and residual order. The existing structural coherent-map
+specialization removes logging only when all map entries are coherent.
+
+### Small tiles win, with independent residual and phase checks
+
+Six GPU fixtures cover integer and fractional inputs across N16/N32/N64.
+Every complete output pool matches its dense CPU oracle byte for byte, including
+all untouched inputs and canaries. The cases include partial final pixel tiles,
+negative values and bias/ReLU. Separate reference tests check all four subpixel
+positions and channels with explicit expected values.
+
+The same fresh feature capture from the four-module native game then measures
+**1.850 / 1.928 / 2.269 / 1.849 ms** for N16/N32/N64/N16, after eight warmups and
+sixteen timestamp samples per measurement. All resulting full pools are
+byte-identical; bytes outside the output tensor stay unchanged. N16 is selected.
+Its 65,616 sampled values match the native half-product/half-add model exactly.
+Against the current shader on those same inputs, maximum absolute difference
+is 0.00213623046875, mean difference is 0.00009505, and no value differs by more
+than 0.01. The separate FMA/K16 reference stays within 0.00048828125 of the
+current shader. These comparisons establish the experiment's layout and arithmetic
+model, while original Ampere numerical equivalence remains open.
+
+### Full-game gain
+
+| Full-game measurement | Four-module native diagnostic | Five-module native diagnostic |
+|---|---:|---:|
+| Frame-600 p50 / p95 | 101.91 / 104.41 ms | 92.57 / 95.93 ms |
+| GPU p50 / p95 | 99.14 / 101.60 ms | 89.90 / 92.94 ms |
+| Approximate frame rate | 9.81 fps | 10.80 fps |
+| Upsampling dispatch | 11.09 ms | 1.90 ms |
+| Total timed steps | 93.50 ms | 83.90 ms |
+
+The comparable interval is **9.2% shorter**, or **10.1% more fps**. Frame-900
+p50/p95 is 91.87/95.11 ms, and frame 1200 is 90.50/94.61 ms. The run reaches
+frame 1800 and exits gracefully through its configured 180-second TERM timeout.
+It uses the normal allocator, retains all fourteen compute dispatches without
+skips, and logs no red errors. The saved moonlit frame shows no visible corruption.
+
+The fresh upsampling capture again matches the native CPU model exactly at
+65,616 sampled values, preserving every pool byte outside the output. Its actual
+selected module independently validates and contains no logging atomics.
+Only `7f7f` changes relative to `native-four.dmsv`; all other 2,416 modules and
+flags remain. Its reflection only changes local size from `32x1x1` to `64x1x1`.
+The host and production translator are unchanged; this remains a native-arithmetic
+diagnostic bundle.
+
+### Checks and artifacts
+
+Thirty-two focused tests pass, including residual-rounding and phase-order
+counterexamples, complete fixture outputs, invalid driver extents, alignment,
+missing captured ranges and unsupported launch grids. Generated modules validate
+independently; focused lint and diff checks pass. The five-title Mac regression
+still lacks packaged builds for OOT, Mario Kart World, Bananza, Raiders and
+Fortune's Weave. Existing unrelated documentation failures remain.
+
+Artifacts are external under `bringup-20261117/upsample/`: `report.json`,
+`commands.json`, `mapping.json`, `capture/`, `proof/`, `real/`,
+`native-five.dmsv`, `game-native-five/`, `frame350.png`, `regression/` and source
+snapshots. Chain `cf82d6110b10` is unchanged. Follow-up code and documentation
+are included in this checkpoint. Reconstruction is still about 28.7 ms; the final
+`5a7d69b067a7f011` pass is now next at 7.9 ms.

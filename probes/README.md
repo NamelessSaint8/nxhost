@@ -900,3 +900,34 @@ dimensions and output indexing change together. Compare full output pools betwee
 tile widths and check padding/canaries and the independent native-half reference.
 This option preserves the preceding diagnostic native arithmetic; it does not
 establish guest numerical equivalence.
+
+`make_cooperative_conv_proof.py OUT --channels 64` generates integer and fractional
+fixtures covering all 64 output channels. The default remains 32. Rebuild each
+fixture with `make_cooperative_conv.py OUT/integer/fixture DEST --shape 9 13 32
+--channels 64 --tile-n N` for each supported N before real-capture replay.
+Compare complete output buffers, both canaries, immutable inputs and the
+independent native arithmetic model. Choose the tile width from measurements;
+the largest supported shape need not be the fastest.
+
+## Native cooperative residual upsampling
+
+`make_cooperative_upsample.py CAPTURE OUT --shape H W CI --channels CO --tile-n N`
+builds a separate diagnostic for four row-major output subpixels per input
+pixel. Weights are phase/CI/CO. The residual initializes the accumulator before
+K16 multiplication; bias/ReLU and final packing follow. Native half arithmetic
+is a separate model from the production float32-FMA helper.
+
+The raw ABI uses driver words 196/200/204/208/212 for destination, source,
+weights, bias and residual, with map binding 4 and log binding 6. The builder
+requires finite bounded tensors in one complete captured pool. `owned.tsv`
+relocates that pool without losing its aliases; its backing allocation is
+coherent. Keep `native.raw.spv` tracked in diagnostic bundles. For owned timing,
+the exact coherent-log transform exposed by `spv_gmem.c` can produce a separate
+module; copied pools still require the tracked module.
+
+`make_cooperative_upsample_proof.py OUT` builds integer and fractional fixtures
+for N16/N32/N64, including residuals, negative values, bias/ReLU and partial
+pixel tiles. Compare every pool byte against each fixture's dense oracle.
+`check_upsample_capture.py CAPTURE --shape H W CI --channels CO --output FULL_POOL`
+checks corners, center and seeded sampled pixels independently. Its `fma-k16`
+alternative is explicit; neither model establishes original Ampere equivalence.
