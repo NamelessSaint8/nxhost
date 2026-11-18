@@ -12,10 +12,12 @@ import subprocess
 from check_upsample_capture import load_tensors
 
 
-def build(base, out, shape, channels, tile_n=16):
+def build(base, out, shape, channels, tile_n=16, load_width=1):
     h, w, ci = shape
     if tile_n not in (16, 32, 64) or 4*channels % tile_n:
         raise ValueError('requires whole supported native output tiles')
+    if load_width not in (1, 2, 4):
+        raise ValueError('load width must be one, two or four half channels')
     load_tensors(base, shape, channels)
     rows = [r.split() for r in Path(str(base)+'.tsv').read_text().splitlines()]
     pools = [r for r in rows if r[0]=='pool']
@@ -37,10 +39,10 @@ def build(base, out, shape, channels, tile_n=16):
     source = Path(__file__).parent/'shaders/cooperative-upsample.comp'
     target = out/'native.raw.spv'
     subprocess.run(['glslangValidator', '-V', '--target-env', 'vulkan1.2',
-                    f'-DHEIGHT={h}', f'-DWIDTH={w}', f'-DCI={ci}', f'-DCO={channels}', f'-DTILE_N={tile_n}',
+                    f'-DHEIGHT={h}', f'-DWIDTH={w}', f'-DCI={ci}', f'-DCO={channels}', f'-DTILE_N={tile_n}', f'-DLOAD_WIDTH={load_width}',
                     str(source), '-o', str(target)], check=True)
     subprocess.run(['spirv-val', '--target-env', 'vulkan1.2', str(target)], check=True)
-    result = dict(capture=str(base), shape=list(shape), channels=channels, tile_n=tile_n,
+    result = dict(capture=str(base), shape=list(shape), channels=channels, tile_n=tile_n, load_width=load_width,
                   grid=grid, residual='initial accumulator', diagnostic_only=True)
     (out/'experiment.json').write_text(json.dumps(result, indent=2)+'\n')
     return result
@@ -53,5 +55,6 @@ if __name__ == '__main__':
     p.add_argument('--shape', type=int, nargs=3, required=True)
     p.add_argument('--channels', type=int, required=True)
     p.add_argument('--tile-n', type=int, choices=(16, 32, 64), default=16)
+    p.add_argument('--load-width', type=int, choices=(1, 2, 4), default=1)
     a = p.parse_args()
-    print(json.dumps(build(a.capture, a.out, a.shape, a.channels, a.tile_n), indent=2))
+    print(json.dumps(build(a.capture, a.out, a.shape, a.channels, a.tile_n, a.load_width), indent=2))

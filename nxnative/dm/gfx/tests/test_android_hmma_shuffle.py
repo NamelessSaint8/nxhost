@@ -18,6 +18,8 @@ ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / 'probes'))
 import hmma_shuffle
 import hmma_cooperative
+import hmma_packed
+import hmma_vector
 
 
 @unittest.skipUnless(os.environ.get('DMSH_TEST_XLATE') and
@@ -70,6 +72,69 @@ class ShuffleContract(unittest.TestCase):
             hmma_shuffle.build(self.folder / 'lane-128.spv', self.folder / 'bad.spv')
         with self.assertRaises(ValueError):
             hmma_shuffle.instrument_source((self.folder / 'hmma-128.comp').read_text())
+
+    def test_packed_helper_preserves_calls_interface_and_rejects_unknown_contract(self):
+        baseline = self.reflect(self.folder/'hmma-reuse-128.vk.spv')
+        module = hmma_shuffle.hmma_spv.Module((self.folder/'hmma-reuse-128.spv').read_bytes())
+        contract = hmma_shuffle.hmma_spv.hmma_helper(module)
+        array = module.pointee(module.vars[contract['scratch']][0])[1]
+        words = module.consts[module.types[array][3]][1][0]
+        source = (self.folder/'hmma-reuse-128.comp').read_text()
+        for mode in ('packed', 'stream'):
+            for unroll in (False, True):
+                target = self.folder/f'{mode}-{unroll}.spv'
+                result = hmma_shuffle.compile_source(hmma_packed.compose(source, words, mode, unroll), target)
+                self.assertEqual(self.reflect(target), baseline)
+                self.assertEqual(result['helper_calls'], 6)
+        with self.assertRaises(ValueError):
+            hmma_packed.build(self.folder/'lane-128.spv', self.folder/'bad-packed.spv')
+        with self.assertRaises(ValueError):
+            hmma_packed.build(self.folder/'hmma-reuse-128.spv', self.folder/'hmma-reuse-128.spv')
+        for words, mode in ((128, 'packed'), (256, 'unknown'), (257, 'stream')):
+            with self.assertRaises(ValueError):
+                hmma_packed.helper(words, mode)
+        with self.assertRaises(ValueError):
+            hmma_packed.helper(512, arithmetic='unknown')
+        source = (self.folder/'hmma-reuse-128.comp').read_text()
+        with self.assertRaises(ValueError):
+            hmma_packed.compose(source+'\nshared uint dm_packed_rows[4];', 512)
+
+    def test_vector_half_models_keep_interface_and_explicit_precision(self):
+        source = (self.folder/'hmma-varied-128.comp').read_text()
+        baseline = self.reflect(self.folder/'hmma-varied-128.vk.spv')
+        for arithmetic in ('fma16', 'muladd16'):
+            target = self.folder/(arithmetic+'.spv')
+            hmma_shuffle.compile_source(hmma_packed.compose(source, 512, arithmetic=arithmetic), target)
+            self.assertEqual(self.reflect(target), baseline)
+            module = hmma_shuffle.hmma_spv.Module(target.read_bytes())
+            self.assertTrue(any(x[0]&65535 == 22 and x[2] == 16 for x in module.ins))
+            if arithmetic == 'muladd16':
+                self.assertTrue(any(x[0]&65535 == 71 and x[2] == 42 for x in module.ins))
+
+    def test_fma_vectorization_keeps_cached_operand_interface_and_external_uses(self):
+        source = (self.folder/'hmma-reuse-128.vk.spv').read_bytes()
+        baseline = self.reflect(self.folder/'hmma-reuse-128.vk.spv')
+        for width, expected in ((2, 12), (4, 6)):
+            binary, regions = hmma_vector.transform(source, width)
+            self.assertEqual(regions, expected)
+            target = self.folder/f'vectors-{width}.spv'
+            target.write_bytes(binary)
+            subprocess.run(['spirv-val', '--target-env', 'vulkan1.2', str(target)], check=True)
+            self.assertEqual(self.reflect(target), baseline)
+        module = hmma_shuffle.hmma_spv.Module(source)
+        # An extra consumer of one chain must prevent that chain's removal,
+        # even though this unused copy would itself be removable by a DCE pass.
+        at = next(i for i, x in enumerate(module.ins) if x[0]&65535==12 and len(x)==8 and x[4]==50)
+        value = module.ins[at]
+        module.ins.insert(at+1, [4<<16|83, value[1], module.new_id(), value[2]])
+        _, regions = hmma_vector.transform(module.data(), 2)
+        self.assertEqual(regions, 11)
+        lane = (self.folder/'lane-128.spv').read_bytes()
+        self.assertEqual(hmma_vector.transform(lane), (lane, 0))
+        with self.assertRaises(ValueError):
+            hmma_vector.transform(source, 3)
+        with self.assertRaises(ValueError):
+            hmma_vector.build(self.folder/'hmma-reuse-128.vk.spv', self.folder/'hmma-reuse-128.vk.spv')
 
     def native_source(self):
         source = (self.folder / 'hmma-reuse-128.comp').read_text()

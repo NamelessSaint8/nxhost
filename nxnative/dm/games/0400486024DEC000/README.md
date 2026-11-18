@@ -2043,3 +2043,243 @@ unchanged. This follow-up remains uncommitted after the requested checkpoint.
 Reconstruction `4f41ccf24f163e0d` now accounts for about half of timed GPU work:
 29.03 ms out of 58.42 ms. Its sampling and data reuse are the next substantial
 performance target.
+
+## Follow-up (2026-11-18): reconstruction arithmetic and scheduling controls
+
+Checkpoint `be7df166` commits the multiscale gains. Reconstruction still costs
+about 29 ms, so this round tests operand lifetime, cache retention, arithmetic
+and FMA scheduling on its fresh `native-nine.dmsv` capture. All experiments keep
+sampling, weights, output writes, 46 logical matrix operations and `128x1x1`
+workgroups. The reconstruction module in the game bundle remains unchanged.
+
+### Exact FMA alternatives do not recover a substantial gain
+
+The packed helper keeps half words compact until arithmetic; streaming reads
+them within the K16 loop. Both preserve float32 FMA order and direct half packing.
+Independent proofs cover integer and fractional inputs, subnormals, both result
+words, output order, dependent calls and aliased registers. All 36 candidate
+fixture outputs and canaries match the scalar helper byte for byte.
+
+Each real-capture timing uses eight warmups and sixteen timestamp samples:
+
+| Reconstruction variant | Median GPU time |
+|---|---:|
+| Current cached scalar lowering, controls | 28.749–28.755 ms |
+| Packed operands | 42.790 ms |
+| Packed, unroll hint | 45.409 ms |
+| Streaming operands | 77.356 ms |
+| Streaming, unroll hint | 74.807 ms |
+| Packed, inline hint | 42.792 ms |
+| Packed, unroll and inline hints | 45.330 ms |
+| No converted-tile retention | 34.811 ms |
+| One retained converted tile | 34.011 ms |
+| Two-component FMA vectors, cache preserved | 28.679 / 28.679 ms |
+| Four-component FMA vectors, cache preserved | 28.687 / 28.688 ms |
+
+Every variant in this table produces the same complete 14,745,600-byte image
+as the captured current shader. Both source pools and the weight buffer remain
+unchanged. The vector pass retains the original operand gathers and cache,
+replacing independent sixteen-term scalar chains with vector FMAs. Sixteen
+rewritten matrix fixtures and two unchanged controls match scalar results and
+canaries exactly. Additional tests reject external consumers, unsupported widths
+and source overwrites. Four-component packing moves only direct scalar aliases
+past the neighboring pack, with no intervening writes, barriers or branches.
+
+The repeatable vectorization saving is only about 0.07 ms. It does not justify
+an FPS claim or a reconstruction replacement in the game bundle. The slower
+cache-retention controls confirm that removing reuse is costly in this workload;
+they do not establish the driver's register or scheduling mechanism.
+
+### Vector half arithmetic is also slower
+
+Both the source-level half `fma` variant and explicit half multiplication/addition
+take about **47.24 ms**. Eighteen matrix fixtures pass the separately rounded
+half-product/half-add model, including subnormals. A further 131,072-value audit
+per variant covers random matrices, zero C, one-product, tiny-increment and
+cancellation cases. Every output matches RNE half products followed by RNE half
+additions. Fused half-FMA differs at 61,747 values; the cancellation case yields
+zero rather than the fused result `-2^-20`. These observations apply to the
+tested programs on Adreno 840 driver `0x8034a01f`.
+
+On the real image, both half variants change 11,974 RGB bytes across 11,854
+pixels, by at most one byte value. Alpha and both source pools remain unchanged.
+They are excluded on performance grounds and remain distinct numerical models
+from the current float32-FMA shader. Original Ampere equivalence remains open.
+
+Artifacts are external under `bringup-20261118/reconstruction-packed/`:
+`report.json`, `commands.json`, `build-report.json`, `proof-report.json`,
+`half-proof-report.json`, `vector-arithmetic-report.json`, `bench-report.json`,
+`second-bench-report.json`, `vector-proof-report.json`, `vector-bench-report.json`,
+`proof/`, `real/`, `vector-arithmetic/` and source snapshots. The next experiment
+targets the first convolution's repeated RGBA texture fetches.
+
+## Follow-up (2026-11-18): whole-texel packing reaches 15.64 fps
+
+The first convolution's paired loader fetches the same RGBA texel twice to
+unpack four channels. `QUAD_LOADS` fetches it once and fills all four shared
+half values. The buffer variant reads two adjacent words for the same four
+channels. Neither changes native accumulation, bias/ReLU, output packing,
+bounds checks or copied-pool logging.
+
+### Texture fetch reduction wins; buffer packing mostly loses
+
+Thirteen GPU fixtures cover integer/fractional tensors, both strides,
+N16/N32/N64 tiles and RGBA8 texture unshuffle. Complete outputs, canaries and
+inputs match independent dense native-half oracles. The texture fixture matches
+every byte of its expected pool, including untouched regions.
+
+Nine fresh convolution captures from the preceding game then use alternating
+baseline/quad/quad/baseline replays, each with eight warmups and sixteen samples.
+Every complete output pool is byte-identical across variants and reproduces the
+captured pool. Every byte outside its destination stays unchanged, and 1,377,936
+sampled output values match the native CPU model exactly.
+
+| Shader | Baseline median | Quad median | Selection |
+|---|---:|---:|---|
+| First convolution `ba079` | 4.731 ms | 3.065 ms | Select |
+| `a8b4`, both uses | about 3.26 ms | about 3.39 ms | Keep paired |
+| `e6be`, both uses | about 2.35 ms | about 2.41 ms | Keep paired |
+| `0a56`, both uses | about 2.29 ms | about 2.31 ms | Keep paired |
+| `e2ee` downsample | 0.940 ms | 0.934 ms | Keep paired |
+| `9442` downsample | 0.616 ms | 0.592 ms | Keep paired |
+
+The selected first convolution saves **1.666 ms** in replay. For the buffer
+interfaces, quad packing still reads two words; it does not halve the physical
+load count. The small downsample savings fall below this experiment's 0.05 ms
+selection threshold. Only the first convolution enters the game bundle.
+
+### Matched full-game comparison
+
+Both runs copy the same preceding save/cache, use the normal allocator and
+capture only the first convolution at frame 350. The baseline runs for 90 seconds;
+the selected variant runs for 180 seconds. Their comparable frame-600 interval is:
+
+| Measurement | Fresh baseline | Quad texture loading |
+|---|---:|---:|
+| Frame p50 / p95 | 65.45 / 68.05 ms | 63.93 / 67.15 ms |
+| GPU p50 / p95 | 62.71 / 65.28 ms | 61.23 / 64.00 ms |
+| Approximate frame rate | 15.28 fps | 15.64 fps |
+| First convolution | 4.83 ms | 3.10 ms |
+| Total timed steps | 58.09 ms | 56.25 ms |
+
+The matched interval is **2.3% shorter**, or **2.4% more fps**. Against the
+preceding checkpoint's 15.22 fps, the new result is 2.8% higher. Frame-900
+p50/p95 is 63.24/66.84 ms, frame 1200 is 61.73/65.94 ms, and frame 1500 is
+61.48/66.52 ms; frame 2700 is 63.83/67.05 ms. Both runs exit gracefully through
+their configured TERM timeout. The candidate reaches frame 2700 with all fourteen
+compute dispatches active, none skipped and no red errors. The saved moonlit
+frame shows no visible corruption. Reconstruction remains about 28.9 ms; its experimental
+replacements above are excluded. Quad packing adds no numerical difference to
+the preceding native diagnostic, whose original Ampere equivalence remains open.
+
+Both fresh first-convolution captures match the native model exactly at 65,616
+sampled values each, with every byte outside the destination unchanged. Their
+actual modules validate and match their respective replay modules byte for byte.
+Only `ba079` changes relative to `native-nine.dmsv`; all other 2,416 modules,
+reflection records and flags remain identical, including local size `64x1x1`.
+
+### Checks and artifacts
+
+Forty-four focused tests pass, including paired/quad conflict rejection, both
+raw words' guards, replay extents at both strides, texture/address-table/float32
+interfaces, packed arithmetic modes and conservative FMA-vectorization admission.
+Generated SPIR-V independently validates; focused lint and diff checks pass.
+The five-title Mac regression still lacks packaged builds for OOT, Mario Kart
+World, Bananza, Raiders and Fortune's Weave. The same three unrelated documentation
+failures remain.
+
+Artifacts are external under `bringup-20261118/quad-packing/`: `report.json`,
+`commands.json`, `proof-report.json`, `real-report.json`, `selection.json`, `proof/`,
+`real/`, `native-nine-quad.dmsv`, `game-baseline/`, `game-quad/`, screenshots,
+`regression/` and source snapshots. Chain `cf82d6110b10`, the host and production
+translator remain unchanged. The residual-upsample follow-up below tests its remaining
+single-half loads; reconstruction requires a broader data-layout investigation.
+
+## Follow-up (2026-11-18): residual packing saves another 1.1 ms
+
+Both residual upsamplers load each half channel separately when filling shared
+source, weight and accumulator matrices. `LOAD_WIDTH=2` unpacks each word once;
+width four reads two adjacent words for four channels per iteration. Whole
+K16/N16 channel counts keep groups inside their source rows, weight rows and
+residual subpixels, including N64 tiles spanning multiple phases. The residual
+still initializes C before multiplication. Accumulation order, bias/ReLU,
+output packing, driver bounds and copied-pool logging stay unchanged.
+
+### Complete-pool proofs and tile selection
+
+Twenty-four GPU fixtures cover CI32/CO16 and CI64/CO32, integer/fractional
+inputs, N16/N32/N64, both packing widths and partial final pixel tiles. Every
+pool byte matches the dense native-half oracle, including residuals, other
+inputs and canaries. These packing variants add no numerical change to the
+preceding native diagnostic; equivalence to original Ampere arithmetic remains
+open.
+
+The two real captures come from the preceding nine-native-pass run. First-conv
+quad packing preserves those inputs bit-for-bit. Each pass tests six packed
+variants, bracketed by baseline replays, then repeats the winner and baseline.
+Every run uses eight warmups and sixteen timestamp samples. All twenty complete
+output pools reproduce their captures exactly and preserve every byte outside
+the destination. The independent CPU model checks 196,848 sampled values across
+the two selected outputs with zero error.
+
+| Pass | Baseline | N16 paired / quad | N32 paired / quad | N64 paired / quad |
+|---|---:|---:|---:|---:|
+| `d153`, CI64/CO32 | 1.393 ms | 1.048 / 0.931 ms | 1.379 / 1.147 ms | 1.084 / 0.896 ms |
+| `7f7f`, CI32/CO16 | 1.849 ms | 1.433 / 1.326 ms | 1.520 / 1.392 ms | 1.804 / 1.666 ms |
+
+The repeated winners are **N64/quad at 0.894 ms** for `d153` and **N16/quad at
+1.324 ms** for `7f7f`. Final baseline medians remain 1.392 and 1.849 ms. Packing
+therefore saves about **1.02 ms** in replay. Quad packing changes the best tile
+for `d153`; selecting a width without retuning N would miss part of the gain.
+
+### Full-game results include the capture interval
+
+The baseline uses `native-nine-quad.dmsv`; the candidate replaces only the two
+upsamplers. Both copy the same save/cache, use the normal allocator and capture
+all fourteen dispatches at frame 350. The baseline runs for 90 seconds and the
+candidate for 180 seconds. Comparable intervals are:
+
+| Interval ending at | Baseline frame p50 / p95 | Packed frame p50 / p95 | Baseline / packed fps |
+|---|---:|---:|---:|
+| Frame 600 | 63.35 / 66.99 ms | 62.97 / 65.73 ms | 15.79 / 15.88 |
+| Frame 900 | 63.36 / 66.96 ms | 62.07 / 65.65 ms | 15.78 / 16.11 |
+| Frame 1200 | 61.96 / 66.21 ms | 60.74 / 64.97 ms | 16.14 / 16.46 |
+
+The first interval includes full-frame capture overhead and improves by only
+0.6% in fps. The subsequent intervals improve by **2.1% and 2.0%**. At frame 600,
+the upsamplers fall from 1.46/1.94 ms to 0.92/1.36 ms and total timed work falls
+from 56.78 to 55.64 ms. At frame 1200, they fall from 1.42/1.89 ms to
+0.90/1.33 ms, and timed work falls from 55.87 to 54.78 ms. Reconstruction
+stays at 29.04 ms at frame 600 and 28.74 ms at frame 1200. The roughly **1.1 ms** reduction
+in GPU work therefore agrees with replay, despite the smaller frame-600 gain.
+
+The candidate reaches frame 2700 at 62.89/67.20 ms p50/p95. Both runs exit
+gracefully through their configured TERM timeout, with no red errors or skipped
+dispatches. Cumulative counters confirm fourteen dispatches per frame throughout
+each measured interval; later UI draws can push a small compute pass out of the
+timing summary's sixteen slowest entries. The saved moonlit frame has no visible
+corruption.
+
+Fresh captures from both runs add four complete-pool comparisons. Replaying
+the selected packed modules reproduces every captured byte, including the
+baseline's scalar-load outputs. All bytes outside each destination stay unchanged;
+393,696 sampled output values match the native CPU model exactly. Actual captured
+modules validate and match their respective expected coherent-log variants.
+Only `d153` and `7f7f` change relative to `native-nine-quad.dmsv`; the other
+2,415 modules, every reflection record and every flag remain identical.
+
+### Checks and artifacts
+
+Forty-five focused tests pass. The new check covers packed widths at all three
+tile sizes, unchanged owned pools/grid, guarded physical accesses and invalid-width
+rejection before output creation. Focused lint, generated-SPIR-V validation and
+diff checks pass. The same three unrelated documentation failures remain;
+the five-title Mac regression still lacks the five packaged builds listed above.
+
+Artifacts are external under `bringup-20261118/upsample-packing/`: `report.json`,
+`commands.json`, `proof-report.json`, `real-report.json`, `fresh-report.json`,
+`proof/`, `real/`, `fresh/`, `native-nine-up-packed.dmsv`, `game-baseline/`,
+`game-packed/`, screenshots, `regression/` and source snapshots. Chain
+`cf82d6110b10`, the host and production translator remain unchanged.
+Reconstruction's roughly 29 ms remains the largest
+cost; the rejected arithmetic/scheduling variants above are still excluded.

@@ -913,6 +913,15 @@ dense oracle and the preceding module, including input regions, padding and
 canaries. Benchmark coherent raw modules with the exact runtime log transform,
 then measure the selected tracked modules in the full game.
 
+`--quad-loads` selects `QUAD_LOADS` instead of paired packing. Each source or
+weight load supplies four adjacent half channels. Buffer variants read two
+32-bit words; texture input fetches one whole RGBA texel. Whole K16 inputs and
+N16 output tiles prevent row crossings. Existing bounds, accumulation order,
+output packing and copied-pool logs remain. The builder rejects simultaneous
+paired and quad options. Validate complete outputs across strides and tile
+widths, then measure each interface: fewer texture fetches need not make the
+buffer variant faster.
+
 `make_cooperative_conv.py ... --stride 2` selects a non-overlapping 2x2 kernel
 with no padding and half-sized spatial output. The default remains a zero-padded
 3x3 stride-1 kernel. Tensor extraction, driver extent checks, weight bounds,
@@ -964,6 +973,15 @@ Defaults remain CI32/CO16. Check complete pools across tile widths, including
 the residual tensor and partial pixel tiles, before selecting a real-capture
 variant from timings.
 
+`--load-width 2` unpacks each source, weight and residual word once while
+filling the shared matrices. Width `4` reads two adjacent words for four half
+channels; the default `1` preserves scalar loading. Whole K16/N16 channels
+keep each group within one source row, weight row and residual subpixel, even
+when a tile spans phases. Residual initialization, native accumulation order,
+bias/output packing, bounds checks and copied-pool logging are unchanged.
+Compare complete pools against dense oracles for both channel sizes and partial
+tiles, then retune N16/N32/N64 on real captures: packing can change the best tile.
+
 ## Native cooperative output-image convolution
 
 `make_cooperative_output.py CAPTURE OUT --shape H W CI --paired-loads` builds a
@@ -997,3 +1015,32 @@ trace canaries. `--arithmetic fma-k16-rne` and `fma-k16-rtz` make the rounding m
 explicit. Compare whole output images and captured pools as well: sampled model
 agreement alone cannot establish full-image equality or original guest arithmetic.
 See the [OOT output-image findings](../nxnative/dm/games/0400486024DEC000/README.md#follow-up-2026-11-17-output-image-convolution-reaches-1137-fps).
+
+## Reconstruction arithmetic and scheduling probes
+
+`hmma_packed.py INPUT_SPV OUTPUT_SPV --mode packed|stream` requires the original
+translator's scalar matrix-helper contract and aligned per-warp scratch ABI.
+The default `--arithmetic fma32` preserves per-output FMA order, both packed
+results and direct final half packing. Packed mode loads contiguous half words
+before arithmetic; stream mode reads them within the loop. `--unroll` changes
+the loop control hint. The tool preserves descriptors and local workgroup size,
+uses a separate scratch array and refuses to overwrite its source module.
+
+`--arithmetic fma16` and `muladd16` are separate half-accumulator experiments.
+The latter explicitly separates the product from the addition. Source spelling
+alone does not establish the device's numerical behavior: compare fused and
+separately rounded CPU models with cancellation, fractional, tiny-increment and
+subnormal fixtures. Check complete results and canaries, then compare full
+captured images and immutable source pools. These modes do not establish guest
+arithmetic equivalence.
+
+`hmma_vector.py INPUT_SPV OUTPUT_SPV --width 2|4` works on scalar FMA chains
+already in the module. It preserves their operands, gathers, cache and K16
+per-component order while forming vector FMAs before the same final half packs.
+Only sixteen-term, single-consumer chains feeding a two-component half pack
+qualify. Width four also requires neighboring packs in one block, with no
+intervening writes, barriers, branches or non-alias use of the first pack.
+Direct bitcast/copy aliases may move with that pack. Other consumers or precision
+decorations reject the region; unsupported modules stay byte-identical.
+Both widths are diagnostics requiring independent validation and GPU output
+comparisons before a timing result can justify further use.

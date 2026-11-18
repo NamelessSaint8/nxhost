@@ -44,12 +44,14 @@ def tensors(capture, height, width, ci, co, stride=1):
     return result
 
 
-def build(capture, out, shape, co, tile_n=16, paired=False, stride=1):
+def build(capture, out, shape, co, tile_n=16, paired=False, stride=1, quad=False):
     h, w, ci = shape
     if min(h, w, ci, co) <= 0 or ci % 16 or co % 16:
         raise ValueError('positive H/W and whole K16/N16 channels required')
     if tile_n not in (16, 32, 64) or co % tile_n:
         raise ValueError('output channels must contain whole supported native N tiles')
+    if paired and quad:
+        raise ValueError('select paired or quad packing, not both')
     values = tensors(capture, h, w, ci, co, stride)
     out.mkdir(parents=True, exist_ok=True)
     manifest = ['capture 1', f'dispatch native-conv {((h//stride)*(w//stride)+63)//64} {co//tile_n} 1']
@@ -61,7 +63,7 @@ def build(capture, out, shape, co, tile_n=16, paired=False, stride=1):
         manifest.append(f'buffer {binding} 7 {len(data)}')
     (out/'layer.tsv').write_text('\n'.join(manifest)+'\n')
     source = Path(__file__).parent/'shaders/cooperative-conv.comp'
-    defines = (['-DPAIRED_LOADS=1'] if paired else [])+[f'-DSTRIDE={stride}']
+    defines = (['-DPAIRED_LOADS=1'] if paired else [])+(['-DQUAD_LOADS=1'] if quad else [])+[f'-DSTRIDE={stride}']
     subprocess.run(['glslangValidator', '-V', '--target-env', 'vulkan1.2',
                     f'-DHEIGHT={h}', f'-DWIDTH={w}', f'-DCI={ci}', f'-DCO={co}', f'-DTILE_N={tile_n}',
                     *defines, str(source), '-o', str(out/'native.spv')], check=True)
@@ -71,7 +73,7 @@ def build(capture, out, shape, co, tile_n=16, paired=False, stride=1):
                     *defines, str(source), '-o', str(out/'native.raw.spv')], check=True)
     subprocess.run(['spirv-val', '--target-env', 'vulkan1.2', str(out/'native.raw.spv')], check=True)
     (out/'experiment.json').write_text(json.dumps(dict(capture=str(capture), shape=shape,
-        channels=co, tile_n=tile_n, paired_loads=paired, output_bytes=len(values[3]),
+        channels=co, tile_n=tile_n, paired_loads=paired, quad_loads=quad, output_bytes=len(values[3]),
         kernel=3 if stride==1 else 2, stride=stride), indent=2)+'\n')
 
 
@@ -83,6 +85,7 @@ if __name__ == '__main__':
     p.add_argument('--channels', type=int, required=True)
     p.add_argument('--tile-n', type=int, choices=(16, 32, 64), default=16)
     p.add_argument('--paired-loads', action='store_true')
+    p.add_argument('--quad-loads', action='store_true')
     p.add_argument('--stride', type=int, choices=(1, 2), default=1)
     a = p.parse_args()
-    build(a.capture, a.out, a.shape, a.channels, a.tile_n, a.paired_loads, a.stride)
+    build(a.capture, a.out, a.shape, a.channels, a.tile_n, a.paired_loads, a.stride, a.quad_loads)

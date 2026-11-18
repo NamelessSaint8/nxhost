@@ -13,6 +13,36 @@ sys.path.insert(0, str(ROOT/'probes'))
 @unittest.skipUnless(importlib.util.find_spec('numpy'), 'requires numpy')
 class UpsampleReference(unittest.TestCase):
     @unittest.skipUnless(shutil.which('glslangValidator') and shutil.which('spirv-val'), 'requires SPIR-V tools')
+    def test_packed_load_widths_keep_pool_grid_and_guarded_accesses(self):
+        import json
+        import subprocess
+        from make_cooperative_upsample import build
+        from make_cooperative_upsample_proof import fixture
+        from raw_memory_guard import guard
+        with tempfile.TemporaryDirectory() as folder:
+            p = Path(folder)
+            base = fixture(p, True, inputs=64, channels=32)
+            for n in (16, 32, 64):
+                for width in (2, 4):
+                    out = p/f'n{n}-w{width}'
+                    result = build(base, out, (9, 13, 64), 32, n, width)
+                    self.assertEqual(result['load_width'], width)
+                    self.assertEqual(result['grid'], [2, 128//n, 1])
+                    for b in (0, 1, 4, 6):
+                        self.assertEqual((out/f'owned.b{b}.before.bin').read_bytes(),
+                                         (p/f'n{n}/owned.b{b}.before.bin').read_bytes())
+                    self.assertEqual(json.loads((out/'experiment.json').read_text())['load_width'], width)
+                    binary, accesses = guard((out/'native.raw.spv').read_bytes())
+                    self.assertEqual(accesses, 3 if width==2 else 4)
+                    target = out/'guarded.spv'
+                    target.write_bytes(binary)
+                    subprocess.run(['spirv-val', '--target-env', 'vulkan1.2', str(target)], check=True)
+            for width in (0, 3, 8):
+                with self.assertRaises(ValueError):
+                    build(base, p/'bad', (9, 13, 64), 32, load_width=width)
+                self.assertFalse((p/'bad').exists())
+
+    @unittest.skipUnless(shutil.which('glslangValidator') and shutil.which('spirv-val'), 'requires SPIR-V tools')
     def test_wider_fractional_fixture_and_partial_channel_rejection(self):
         import numpy as np
         from check_upsample_capture import load_tensors, reference

@@ -51,6 +51,39 @@ class BundleIsolation(unittest.TestCase):
 @unittest.skipUnless(importlib.util.find_spec('numpy') and shutil.which('glslangValidator')
                      and shutil.which('spirv-val'), 'requires numpy and SPIR-V tools')
 class NativeFixtures(unittest.TestCase):
+    def test_quad_loads_preserve_extents_and_guard_both_words(self):
+        import json
+        import subprocess
+        from make_cooperative_conv import build
+        from make_cooperative_conv_proof import fixture
+        from raw_memory_guard import guard
+        with tempfile.TemporaryDirectory() as folder:
+            p = Path(folder)
+            for stride in (1, 2):
+                base = p/f's{stride}'
+                fixture(base, fractional=True, channels=64, stride=stride)
+                for n in (16, 32, 64):
+                    out = base/f'quad{n}'
+                    build(base/'fixture', out, (9*stride, 13*stride, 32), 64, n, stride=stride, quad=True)
+                    for binding in range(4):
+                        self.assertEqual((out/f'layer.b{binding}.before.bin').read_bytes(),
+                                         (base/f'experiment/layer.b{binding}.before.bin').read_bytes())
+                    self.assertTrue(json.loads((out/'experiment.json').read_text())['quad_loads'])
+                    binary, accesses = guard((out/'native.raw.spv').read_bytes())
+                    self.assertEqual(accesses, 6)
+                    target = out/'guarded.spv';target.write_bytes(binary)
+                    subprocess.run(['spirv-val', '--target-env', 'vulkan1.2', str(target)], check=True)
+                with self.assertRaises(ValueError):
+                    build(base/'fixture', base/'bad', (9*stride, 13*stride, 32), 64, paired=True, stride=stride, quad=True)
+                self.assertFalse((base/'bad').exists())
+            for defines in (['-DRAW_LAYOUT=1', '-DTEXTURE_INPUT=1'], ['-DADDRESS_LAYOUT=1'], ['-DFLOAT32_K16=1']):
+                target = p/'interface.spv'
+                subprocess.run(['glslangValidator', '-V', '--target-env', 'vulkan1.2',
+                                '-DHEIGHT=9', '-DWIDTH=13', '-DCI=16', '-DCO=16', '-DQUAD_LOADS=1',
+                                *defines, str(ROOT/'probes/shaders/cooperative-conv.comp'),
+                                '-o', str(target)], check=True, capture_output=True)
+                subprocess.run(['spirv-val', '--target-env', 'vulkan1.2', str(target)], check=True)
+
     def test_stride_two_tile_extents_oracle_and_rejections(self):
         import json
         import numpy as np

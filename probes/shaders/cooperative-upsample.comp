@@ -10,6 +10,12 @@ layout(local_size_x=64) in;
 #ifndef TILE_N
 #define TILE_N 16
 #endif
+#ifndef LOAD_WIDTH
+#define LOAD_WIDTH 1
+#endif
+#if LOAD_WIDTH != 1 && LOAD_WIDTH != 2 && LOAD_WIDTH != 4
+#error Load width must be one, two or four half channels
+#endif
 #if CI % 16 || CO % 16 || (TILE_N != 16 && TILE_N != 32 && TILE_N != 64) || ((4*CO) % TILE_N)
 #error Whole K16 channels and native output tiles are required
 #endif
@@ -37,6 +43,17 @@ uint64_t resolve(uint word,uint bytes,out uint flags) {
 float halfAt(uint64_t base,uint index) {
     return unpackHalf2x16(Word(base+uint64_t(index/2)*4).value)[index%2];
 }
+#if LOAD_WIDTH > 1
+vec4 halfGroup(uint64_t base,uint index) {
+    vec2 lo=unpackHalf2x16(Word(base+uint64_t(index/2)*4).value);
+#if LOAD_WIDTH == 4
+    vec2 hi=unpackHalf2x16(Word(base+uint64_t(index/2)*4+4).value);
+#else
+    vec2 hi=vec2(0);
+#endif
+    return vec4(lo,hi);
+}
+#endif
 uint outputIndex(uint pixel,uint column) {
     uint phase=column/CO,channel=column%CO;
     return (((pixel/WIDTH)*2+phase/2)*(WIDTH*2)+(pixel%WIDTH)*2+phase%2)*CO+channel;
@@ -66,16 +83,43 @@ void main() {
     uint group=gl_WorkGroupID.x*gl_NumWorkGroups.y+gl_WorkGroupID.y;
     for(uint tile=group;tile<((HEIGHT*WIDTH+63)/64)*(4*CO/TILE_N);tile+=gl_NumWorkGroups.x*gl_NumWorkGroups.y) {
         uint firstPixel=(tile/(4*CO/TILE_N))*64,firstColumn=(tile%(4*CO/TILE_N))*TILE_N;
+#if LOAD_WIDTH > 1
+        // CO and TILE_N are multiples of sixteen, so each group stays inside
+        // one residual subpixel and one weight row, even when a tile spans phases.
+        for(uint i=lane;i<64*(TILE_N/LOAD_WIDTH);i+=64) {
+            uint pixel=firstPixel+i/(TILE_N/LOAD_WIDTH);
+            uint col=(i%(TILE_N/LOAD_WIDTH))*LOAD_WIDTH;
+            vec4 value=vec4(0);
+            if(pixel<HEIGHT*WIDTH)value=halfGroup(residualAddress,outputIndex(pixel,firstColumn+col));
+            for(uint j=0;j<LOAD_WIDTH;j++)packedD[i*LOAD_WIDTH+j]=float16_t(value[j]);
+        }
+#else
         for(uint i=lane;i<64*TILE_N;i+=64) {
             uint pixel=firstPixel+i/TILE_N;
             packedD[i]=float16_t(pixel<HEIGHT*WIDTH ? halfAt(residualAddress,outputIndex(pixel,firstColumn+i%TILE_N)) : 0);
         }
+#endif
         barrier();
         coopmat<float16_t,gl_ScopeSubgroup,64,16,gl_MatrixUseA> a;
         coopmat<float16_t,gl_ScopeSubgroup,16,TILE_N,gl_MatrixUseB> b;
         coopmat<float16_t,gl_ScopeSubgroup,64,TILE_N,gl_MatrixUseAccumulator> d;
         coopMatLoad(d,packedD,0,TILE_N,gl_CooperativeMatrixLayoutRowMajor);
         for(uint k0=0;k0<CI;k0+=16) {
+#if LOAD_WIDTH > 1
+            for(uint i=lane;i<64*(16/LOAD_WIDTH);i+=64) {
+                uint pixel=firstPixel+i/(16/LOAD_WIDTH);
+                uint channel=k0+(i%(16/LOAD_WIDTH))*LOAD_WIDTH;
+                vec4 value=vec4(0);
+                if(pixel<HEIGHT*WIDTH)value=halfGroup(sourceAddress,pixel*CI+channel);
+                for(uint j=0;j<LOAD_WIDTH;j++)packedA[i*LOAD_WIDTH+j]=float16_t(value[j]);
+            }
+            for(uint i=lane;i<16*(TILE_N/LOAD_WIDTH);i+=64) {
+                uint col=firstColumn+(i%(TILE_N/LOAD_WIDTH))*LOAD_WIDTH;
+                uint inputChannel=k0+i/(TILE_N/LOAD_WIDTH);
+                vec4 value=halfGroup(weightAddress,((col/CO)*CI+inputChannel)*CO+col%CO);
+                for(uint j=0;j<LOAD_WIDTH;j++)packedB[i*LOAD_WIDTH+j]=float16_t(value[j]);
+            }
+#else
             for(uint i=lane;i<64*16;i+=64) {
                 uint pixel=firstPixel+i/16;
                 packedA[i]=float16_t(pixel<HEIGHT*WIDTH ? halfAt(sourceAddress,pixel*CI+k0+i%16) : 0);
@@ -84,6 +128,7 @@ void main() {
                 uint col=firstColumn+i%TILE_N;
                 packedB[i]=float16_t(halfAt(weightAddress,((col/CO)*CI+k0+i/TILE_N)*CO+col%CO));
             }
+#endif
             barrier();
             coopMatLoad(a,packedA,0,16,gl_CooperativeMatrixLayoutRowMajor);
             coopMatLoad(b,packedB,0,TILE_N,gl_CooperativeMatrixLayoutRowMajor);
