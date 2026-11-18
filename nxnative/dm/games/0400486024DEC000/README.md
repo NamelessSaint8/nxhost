@@ -1754,3 +1754,86 @@ Artifacts are external under `bringup-20261117/upsample/`: `report.json`,
 snapshots. Chain `cf82d6110b10` is unchanged. Follow-up code and documentation
 are included in this checkpoint. Reconstruction is still about 28.7 ms; the final
 `5a7d69b067a7f011` pass is now next at 7.9 ms.
+
+## Follow-up (2026-11-17): output-image convolution reaches 11.37 fps
+
+Checkpoint `840e1e09` commits the preceding 64-channel convolution and residual
+upsampling work. The next experiment replaces `5a7d69b067a7f011`: a zero-padded
+3x3 `540x960x16 -> 16` convolution whose sixteen channels become four RGBA
+subpixels at `1080x1920`. For phase `p`, RG comes from channels `2p,2p+1` and BA
+from `8+2p,9+2p`. Each output adds the original RGBA8 image to the convolution,
+then half bias, before RGB10A2 UNORM conversion. There is no intermediate ReLU.
+Independent border and channel-layout comparisons distinguish this mapping from
+clamped padding and contiguous RGBA phase layouts.
+
+### Paired source loads cut packing cost
+
+Four complete GPU fixtures cover integer and fractional inputs under native
+half arithmetic and scalar float32 FMA with direct K16 half packing. Every trace
+and packed output byte matches its dense oracle; source buffers and trace canaries
+stay unchanged. The fixtures include descriptor prefixes, all phases/channels,
+negative values, fractional image values and a partial final pixel tile.
+
+On fresh captured inputs from the five-module native game, eight warmups and
+sixteen timestamp samples give **7.918 / 5.034 / 9.021 / 7.925 ms** for original,
+native, scalar FMA and original. Both original replays reproduce the captured
+image byte for byte. Reading each 32-bit source word once and unpacking both half
+values then reduces native packing cost: alternating scalar-load/paired-load/
+paired-load/scalar-load measurements are **5.028 / 2.804 / 2.804 / 5.037 ms**.
+Both synthetic fixtures and the real capture retain byte-identical full traces
+and packed outputs across the two load variants. Paired loads are selected.
+
+Against the current shader on identical captured inputs, native arithmetic changes
+27,173 of 2,073,600 pixels and 27,369 RGB components, each by at most one RGB10
+quantization step. Mean difference across all RGBA components is 0.003300 steps;
+alpha is unchanged. The scalar direct-pack alternative changes 40,713 components,
+also by at most one step. An external explicit-nearest-even conversion experiment
+reduces that count to 7,994 but takes 15.659 ms and still is not byte-identical.
+Both real traced arithmetic variants match their respective CPU models exactly
+at 65,616 sampled residual values and 16,404 packed color components. These
+comparisons establish the diagnostic models; original Ampere equivalence remains
+open, including the preceding native feature passes.
+
+### Full-game gain
+
+| Full-game measurement | Five-module native diagnostic | Six-module native diagnostic |
+|---|---:|---:|
+| Frame-600 p50 / p95 | 92.57 / 95.93 ms | 87.94 / 90.66 ms |
+| GPU p50 / p95 | 89.90 / 92.94 ms | 85.13 / 87.76 ms |
+| Approximate frame rate | 10.80 fps | 11.37 fps |
+| Output-image dispatch | 8.00 ms | 2.87 ms |
+| Total timed steps | 83.90 ms | 79.02 ms |
+
+The comparable interval is **5.0% shorter**, or **5.3% more fps**. Frame-900
+p50/p95 is 86.69/90.58 ms, frame 1200 is 85.74/89.85 ms, and frame 2100 is
+86.77/91.57 ms. The run uses the normal allocator, keeps all fourteen compute
+dispatches active, skips none and logs no red errors. It exits gracefully through
+the configured 180-second TERM timeout. The saved moonlit frame has no visible
+corruption.
+
+The fresh selected-module capture matches the native CPU model at all 16,404
+sampled packed color components. Every byte in input buffers 4/5/6 and the complete
+captured feature pool remains unchanged. The selected module independently
+validates. Only `5a7d` changes relative to `native-five.dmsv`; all other 2,416
+modules and flags remain. Reflection changes only local size from `32x1x1` to
+`64x1x1`. The host and production translator are unchanged; this remains a
+diagnostic bundle.
+
+### Checks, artifacts and next costs
+
+Thirty-six focused tests pass, covering phase mapping, border padding, RGB10A2
+packing, dense fractional oracles, trace canaries, paired builds, tensor extents,
+alignment, texture scale, image formats and unsupported launch grids. Generated
+SPIR-V independently validates; focused lint and diff checks pass. The five-title
+Mac regression still lacks packaged builds for OOT, Mario Kart World, Bananza,
+Raiders and Fortune's Weave. Existing unrelated documentation failures remain.
+
+Artifacts are external under `bringup-20261117/output-conv/`: `report.json`,
+`commands.json`, `mapping.json`, `proof-report.json`, `bench-report.json`,
+`paired-report.json`, `rne-report.json`, `capture/`, `proof/`, `real/`, `paired/`,
+`rne/`, `native-six.dmsv`, `game-native-six/`, `frame350.png`, `regression/` and
+source snapshots. Chain `cf82d6110b10` is unchanged. This follow-up remains
+uncommitted after the requested checkpoint. Reconstruction still costs about
+29 ms. Applying the verified paired source-word packing to the other native
+convolution kernels is the next structural experiment; its benefit there is
+unmeasured.

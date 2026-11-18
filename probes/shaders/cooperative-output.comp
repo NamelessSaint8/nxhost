@@ -1,0 +1,113 @@
+#version 460
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_KHR_memory_scope_semantics : require
+// Diagnostic 3x3 residual image convolution: CI -> four RGBA subpixels.
+// FLOAT32_K16 keeps float32 FMA and the original direct K16 half packing.
+layout(local_size_x=64) in;
+layout(set=0,binding=1,std140) uniform Driver { uvec4 driver[256]; };
+layout(set=0,binding=2) uniform sampler2D originalImage;
+layout(rgb10_a2,set=0,binding=3) uniform writeonly image2D outputImage;
+layout(set=0,binding=4,std430) readonly buffer Weights { uint weightWords[]; };
+layout(set=0,binding=5,std430) readonly buffer Features { uint featureWords[]; };
+layout(set=0,binding=6,std430) readonly buffer Bias { uint biasWords[]; };
+#ifdef TRACE_RESIDUAL
+layout(set=0,binding=7,std430) buffer Trace { uint traceWords[]; };
+#endif
+uint driverWord(uint i) { return driver[i/4][i%4]; }
+float featureHalf(uint i) { return unpackHalf2x16(featureWords[i/2])[i%2]; }
+float weightHalf(uint i) { return unpackHalf2x16(weightWords[i/2])[i%2]; }
+float biasHalf(uint i) { return unpackHalf2x16(biasWords[i/2])[i%2]; }
+shared float16_t packedA[64*16],packedB[16*16],packedD[64*16];
+void main() {
+    uint lane=gl_LocalInvocationIndex;
+    uint xoff=(driverWord(200)&255)/2,woff=(driverWord(204)&255)/2,boff=(driverWord(208)&255)/2;
+    if((driverWord(200)&3)!=0||(driverWord(204)&3)!=0||(driverWord(208)&3)!=0)return;
+    if(driverWord(202)<HEIGHT*WIDTH*CI*2||driverWord(206)<9*CI*16*2||driverWord(210)<32)return;
+    if(featureWords.length()<(xoff+HEIGHT*WIDTH*CI+1)/2||weightWords.length()<(woff+9*CI*16+1)/2||biasWords.length()<(boff+17)/2)return;
+    if(textureSize(originalImage,0)!=ivec2(WIDTH*2,HEIGHT*2)||imageSize(outputImage)!=ivec2(WIDTH*2,HEIGHT*2))return;
+#ifdef TRACE_RESIDUAL
+    if(traceWords.length()<HEIGHT*WIDTH*8+32)return;
+#endif
+    uint group=gl_WorkGroupID.x*gl_NumWorkGroups.y+gl_WorkGroupID.y;
+    for(uint tile=group;tile<(HEIGHT*WIDTH+63)/64;tile+=gl_NumWorkGroups.x*gl_NumWorkGroups.y) {
+        uint firstPixel=tile*64;
+#ifdef FLOAT32_K16
+        precise vec4 accumulator[4];
+        for(uint col=0;col<4;col++)accumulator[col]=vec4(0);
+#else
+        coopmat<float16_t,gl_ScopeSubgroup,64,16,gl_MatrixUseA> a;
+        coopmat<float16_t,gl_ScopeSubgroup,16,16,gl_MatrixUseB> b;
+        coopmat<float16_t,gl_ScopeSubgroup,64,16,gl_MatrixUseAccumulator> d;
+        d=coopmat<float16_t,gl_ScopeSubgroup,64,16,gl_MatrixUseAccumulator>(0.0);
+#endif
+        for(uint tap=0;tap<9;tap++)for(uint k0=0;k0<CI;k0+=16) {
+#ifdef PAIRED_LOADS
+            for(uint i=lane;i<64*8;i+=64) {
+                uint pixel=firstPixel+i/8;
+                int y=int(pixel/WIDTH)+int(tap/3)-1,x=int(pixel%WIDTH)+int(tap%3)-1;
+                vec2 value=vec2(0);
+                if(pixel<HEIGHT*WIDTH&&y>=0&&y<HEIGHT&&x>=0&&x<WIDTH)
+                    value=unpackHalf2x16(featureWords[(xoff+(uint(y)*WIDTH+uint(x))*CI+k0)/2+i%8]);
+                packedA[i*2]=float16_t(value.x);packedA[i*2+1]=float16_t(value.y);
+            }
+            for(uint i=lane;i<16*8;i+=64) {
+                vec2 value=unpackHalf2x16(weightWords[(woff+(tap*CI+k0)*16)/2+i]);
+                packedB[i*2]=float16_t(value.x);packedB[i*2+1]=float16_t(value.y);
+            }
+#else
+            for(uint i=lane;i<64*16;i+=64) {
+                uint pixel=firstPixel+i/16;
+                int y=int(pixel/WIDTH)+int(tap/3)-1,x=int(pixel%WIDTH)+int(tap%3)-1;
+                float value=0;
+                if(pixel<HEIGHT*WIDTH&&y>=0&&y<HEIGHT&&x>=0&&x<WIDTH)
+                    value=featureHalf(xoff+(uint(y)*WIDTH+uint(x))*CI+k0+i%16);
+                packedA[i]=float16_t(value);
+            }
+            for(uint i=lane;i<16*16;i+=64)packedB[i]=float16_t(weightHalf(woff+(tap*CI+k0+i/16)*16+i%16));
+#endif
+            barrier();
+#ifdef FLOAT32_K16
+            for(uint col=0;col<4;col++) {
+                precise vec4 sum=accumulator[col];
+                for(uint k=0;k<16;k++) {
+                    uint at=k*16+col*4;
+                    sum=fma(vec4(float(packedA[lane*16+k])),vec4(packedB[at],packedB[at+1],packedB[at+2],packedB[at+3]),sum);
+                }
+                accumulator[col]=vec4(unpackHalf2x16(packHalf2x16(sum.xy)),unpackHalf2x16(packHalf2x16(sum.zw)));
+            }
+#else
+            coopMatLoad(a,packedA,0,16,gl_CooperativeMatrixLayoutRowMajor);
+            coopMatLoad(b,packedB,0,16,gl_CooperativeMatrixLayoutRowMajor);
+            d=coopMatMulAdd(a,b,d);
+#endif
+            barrier();
+        }
+#ifdef FLOAT32_K16
+        for(uint col=0;col<16;col++)packedD[lane*16+col]=float16_t(accumulator[col/4][col%4]);
+#else
+        coopMatStore(d,packedD,0,16,gl_CooperativeMatrixLayoutRowMajor);
+#endif
+        barrier();
+#ifdef TRACE_RESIDUAL
+        for(uint i=lane;i<64*8;i+=64) {
+            uint pixel=firstPixel+i/8,col=(i%8)*2;
+            if(pixel<HEIGHT*WIDTH)traceWords[16+pixel*8+col/2]=packHalf2x16(vec2(packedD[(i/8)*16+col],packedD[(i/8)*16+col+1]));
+        }
+#endif
+        for(uint i=lane;i<64*4;i+=64) {
+            uint pixel=firstPixel+i/4,phase=i%4;
+            if(pixel<HEIGHT*WIDTH) {
+                uint at=(i/4)*16+phase*2;
+                vec4 residual=vec4(packedD[at],packedD[at+1],packedD[at+8],packedD[at+9]);
+                uint c=boff+phase*2;
+                vec4 bias=vec4(biasHalf(c),biasHalf(c+1),biasHalf(c+8),biasHalf(c+9));
+                ivec2 p=ivec2((pixel%WIDTH)*2+phase%2,(pixel/WIDTH)*2+phase/2);
+                precise vec4 sum=texelFetch(originalImage,p,0)+residual;
+                precise vec4 value=sum+bias;
+                imageStore(outputImage,p,value);
+            }
+        }
+        barrier();
+    }
+}

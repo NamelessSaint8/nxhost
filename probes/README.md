@@ -931,3 +931,37 @@ pixel tiles. Compare every pool byte against each fixture's dense oracle.
 `check_upsample_capture.py CAPTURE --shape H W CI --channels CO --output FULL_POOL`
 checks corners, center and seeded sampled pixels independently. Its `fma-k16`
 alternative is explicit; neither model establishes original Ampere equivalence.
+
+## Native cooperative output-image convolution
+
+`make_cooperative_output.py CAPTURE OUT --shape H W CI --paired-loads` builds a
+separate bounded 3x3 convolution with sixteen output channels, shuffled into four
+RGBA subpixels. It requires zero padding, RG/BA channel planes, an identity
+RGBA8 UNORM source image at binding 2 and an RGB10A2 destination at binding 3,
+both twice the feature dimensions. The final order is source image plus residual,
+then bias, followed by UNORM conversion. There is no intermediate ReLU.
+
+Read-only SSBOs 4/5/6 retain captured weights/features/bias. Their word-aligned
+offsets come from the low byte of driver words 204/200/208; declared extents and
+actual buffer lengths must contain the complete tensors. A captured translator
+support block must specify unit texture scale. The builder preserves the launch
+grid in a version-1 replay with separate descriptor snapshots; it requires no
+guest pointers or write logs. `--paired-loads` unpacks both half values from each
+32-bit source word while filling the shared matrices.
+
+`--arithmetic float32` selects explicit FMA with direct half packing at K16
+boundaries; the default uses native F16 cooperative tiles. Both remain diagnostic
+numerical models. `--trace` adds a binding-7 half tensor before bias and image
+combination, protected by 64-byte canaries. Disable tracing for timings and game
+bundles. `make_cooperative_output_proof.py OUT` generates integer and fractional
+fixtures with descriptor prefixes, all phases/channels and partial pixel tiles.
+Compare complete trace and packed-image bytes with the dense oracle, and verify
+all input buffers remain unchanged.
+
+`check_output_capture.py CAPTURE --shape H W CI --output IMAGE --trace TRACE`
+checks sampled corners, center and seeded pixels against an independent model.
+It reports packed RGB10A2 component differences in quantization units and checks
+trace canaries. `--arithmetic fma-k16-rne` and `fma-k16-rtz` make the rounding model
+explicit. Compare whole output images and captured pools as well: sampled model
+agreement alone cannot establish full-image equality or original guest arithmetic.
+See the [OOT output-image findings](../nxnative/dm/games/0400486024DEC000/README.md#follow-up-2026-11-17-output-image-convolution-reaches-1137-fps).
