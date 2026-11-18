@@ -137,6 +137,15 @@ mode is 0 for a CPU reference, 1 for a safe legacy negative control, 2 for a
 scalar GPU reference and 3 for a scalar GPU reference plus the CPU precision
 bound. `--hmma-reference` builds the additional cases without lowering.
 
+`--split-rows` runs the same twenty cases with the diagnostic split scratch
+layout. Within each translator-owned 256-word warp block, the first and second
+four-word vectors of each row go in separate 32-vector regions. Both layouts
+gather the same half words in K16 order, keep the same converted tiles and use
+the same barriers. To build a captured module, pass its original translator
+SPIR-V to `hmma_spv.lower(binary, split_rows=True)` and validate the resulting
+module. The diagnostic bundle tool's `--preserve-local-size` flag retains
+the reflection dimensions for a replacement built with the same launch size.
+
 `hmma_shuffle.py` is an experimental, independently written replacement for the
 translator's original matrix helper. It retains the logical 32-lane fragment
 layout, uses subgroup shuffles and keeps the loop and helper calls intact:
@@ -999,6 +1008,12 @@ grid in a version-1 replay with separate descriptor snapshots; it requires no
 guest pointers or write logs. `--paired-loads` unpacks both half values from each
 32-bit source word while filling the shared matrices.
 
+`--quad-loads` fills four feature or weight channels per iteration from two
+adjacent words. It keeps the same 32-bit alignment requirement because it
+reads the words separately. It also keeps the same tap order, partial tile
+handling and final image combination. The two packing flags are mutually
+exclusive and work with either arithmetic mode and optional residual tracing.
+
 `--arithmetic float32` selects explicit FMA with direct half packing at K16
 boundaries; the default uses native F16 cooperative tiles. Both remain diagnostic
 numerical models. `--trace` adds a binding-7 half tensor before bias and image
@@ -1044,3 +1059,18 @@ Direct bitcast/copy aliases may move with that pack. Other consumers or precisio
 decorations reject the region; unsupported modules stay byte-identical.
 Both widths are diagnostics requiring independent validation and GPU output
 comparisons before a timing result can justify further use.
+
+For a captured split-row HMMA module, test local SSA cleanup and redundancy
+elimination together. Preserve descriptor bindings and validate the result:
+
+~~~sh
+spirv-opt --target-env=vulkan1.2 --preserve-bindings \
+  --eliminate-local-single-block --eliminate-local-single-store --ssa-rewrite \
+  --eliminate-dead-code-aggressive --local-redundancy-elimination \
+  --redundancy-elimination SPLIT.spv -o CLEANUP.spv
+spirv-val --target-env vulkan1.2 CLEANUP.spv
+~~~
+
+Compare reflection, workgroup dimensions, complete images and source pools on
+the same input. Time each pass subset with bracketed controls. Fewer SPIR-V
+instructions or barriers alone do not predict a faster device binary.

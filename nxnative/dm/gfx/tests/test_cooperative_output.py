@@ -38,7 +38,7 @@ class OutputReference(unittest.TestCase):
         np.testing.assert_array_equal(combine(image, residual, np.zeros(16, 'f4'), ys, xs), expected)
 
     @unittest.skipUnless(shutil.which('glslangValidator') and shutil.which('spirv-val'), 'requires SPIR-V tools')
-    def test_dense_oracles_trace_canaries_and_paired_compilation(self):
+    def test_dense_oracles_trace_canaries_and_packed_compilation(self):
         from check_output_capture import check
         from make_cooperative_output import build
         from make_cooperative_output_proof import fixture
@@ -51,6 +51,13 @@ class OutputReference(unittest.TestCase):
                 self.assertEqual(report['max_quantization_units'], 0)
                 self.assertEqual(report['trace_max_absolute_error'], 0)
                 build(base, p/(mode+'-paired'), (9, 13, 32), mode, True, True)
+                quad = build(base, p/(mode+'-quad'), (9, 13, 32), mode, True, quad=True)
+                self.assertEqual(quad['grid'], [2, 1, 1])
+                self.assertEqual((p/(mode+'-quad')/'layer.tsv').read_bytes(),
+                                 (p/(mode+'-paired')/'layer.tsv').read_bytes())
+            with self.assertRaisesRegex(ValueError, 'paired or quad'):
+                build(base, p/'bad', (9, 13, 32), paired=True, quad=True)
+            self.assertFalse((p/'bad').exists())
             trace = p/'bad-trace'
             value = bytearray(Path(f'{base}.native.trace.bin').read_bytes())
             value[0] = 0

@@ -8,10 +8,12 @@ import subprocess
 from check_output_capture import load
 
 
-def build(base, out, shape, arithmetic='native', trace=False, paired=False):
+def build(base, out, shape, arithmetic='native', trace=False, paired=False, *, quad=False):
     h, w, ci = shape
     if arithmetic not in ('native', 'float32'):
         raise ValueError('requires native or float32 arithmetic')
+    if paired and quad:
+        raise ValueError('choose either paired or quad loads')
     load(base, shape)
     rows = [r.split() for r in Path(str(base)+'.tsv').read_text().splitlines()]
     grid = next((list(map(int, r[2:5])) for r in rows if r[0]=='dispatch'), [(h*w+63)//64, 1, 1])
@@ -53,13 +55,15 @@ def build(base, out, shape, arithmetic='native', trace=False, paired=False):
     defines = (['-DFLOAT32_K16=1'] if arithmetic=='float32' else [])+(['-DTRACE_RESIDUAL=1'] if trace else [])
     if paired:
         defines.append('-DPAIRED_LOADS=1')
+    if quad:
+        defines.append('-DQUAD_LOADS=1')
     source = Path(__file__).parent/'shaders/cooperative-output.comp'
     target = out/'output.spv'
     subprocess.run(['glslangValidator', '-V', '--target-env', 'vulkan1.2',
                     f'-DHEIGHT={h}', f'-DWIDTH={w}', f'-DCI={ci}', *defines, str(source), '-o', str(target)], check=True)
     subprocess.run(['spirv-val', '--target-env', 'vulkan1.2', str(target)], check=True)
     result = dict(capture=str(base), shape=list(shape), arithmetic=arithmetic, trace=trace, paired_loads=paired,
-                  grid=grid, diagnostic_only=True)
+                  quad_loads=quad, grid=grid, diagnostic_only=True)
     (out/'experiment.json').write_text(json.dumps(result, indent=2)+'\n')
     return result
 
@@ -71,6 +75,9 @@ if __name__ == '__main__':
     p.add_argument('--shape', type=int, nargs=3, required=True)
     p.add_argument('--arithmetic', choices=('native', 'float32'), default='native')
     p.add_argument('--trace', action='store_true')
-    p.add_argument('--paired-loads', action='store_true')
+    packing = p.add_mutually_exclusive_group()
+    packing.add_argument('--paired-loads', action='store_true')
+    packing.add_argument('--quad-loads', action='store_true')
     a = p.parse_args()
-    print(json.dumps(build(a.capture, a.out, a.shape, a.arithmetic, a.trace, a.paired_loads), indent=2))
+    print(json.dumps(build(a.capture, a.out, a.shape, a.arithmetic, a.trace, a.paired_loads,
+                           quad=a.quad_loads), indent=2))

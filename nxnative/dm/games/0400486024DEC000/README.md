@@ -2283,3 +2283,237 @@ Artifacts are external under `bringup-20261118/upsample-packing/`: `report.json`
 `cf82d6110b10`, the host and production translator remain unchanged.
 Reconstruction's roughly 29 ms remains the largest
 cost; the rejected arithmetic/scheduling variants above are still excluded.
+
+## Follow-up (2026-11-18): split scratch rows speed up reconstruction
+
+Moving the two vectors of each shared scratch row into separate regions reduces
+the reconstruction pass from **28.75 to 27.12 ms** in replay. The existing layout
+stores both vectors together, with a two-vector stride from row to row. The
+split layout puts 24 rows into each of two 32-vector regions in the same
+translator-owned 256-word warp block. That makes adjacent row indices adjacent
+within each region. The lowering still gathers the same words in K16 order and
+keeps the same converted tiles, synchronization, FMA sequence and half packing.
+
+The layout sweep uses a non-black frame-350 capture and brackets the variants
+with the current shader. Each timed run uses eight warmups and sixteen GPU
+timestamps, with the captured inputs restored between iterations.
+
+| Layout | One scratch region | Alternating scratch regions |
+|---|---:|---:|
+| Existing interleaved rows | 28.749 ms | 29.284 ms |
+| Three vectors per row | 31.266 ms | 30.959 ms |
+| Five vectors per row | 31.865 ms | Image mismatch |
+| Separate regions for each half-row | **27.118 ms** | 27.388 ms |
+| Scalar word planes | 52.440 ms | 42.950 ms |
+
+All timed variants reproduce the complete captured image and both source pools.
+The five-vector alternating variant fails the image comparison and is excluded.
+The split layout retains the existing allocation size. The sweep measures the
+cost of the new access pattern on Adreno 840. It does not identify a particular
+shared-memory bank conflict or scheduling change.
+
+The final diagnostic rebuild repeats at 27.119 and 27.122 ms between baseline
+medians of 28.751 and 28.750 ms. This removes **1.63 ms**, or **5.7%**, from the
+largest dispatch. The ordinary Android lowering is byte-identical on all 46
+calls in this module. The diagnostic bundle replaces only reconstruction and
+keeps its 128×1×1 workgroup.
+
+### Matched game measurements
+
+Both runs copy the same save and pipeline cache, use the normal allocator and
+capture only reconstruction at frame 350. The baseline uses the packed
+upsamplers from the preceding checkpoint. Its configured run is 90 seconds.
+The split variant's Android shell exits with status 255 around its 180-second
+timeout and leaves the host running. After frame 3300, a direct TERM lets the
+host drain GPU work and exit cleanly. The matched windows precede that event.
+
+| Interval ending at | Baseline frame p50 / p95 | Split frame p50 / p95 | Baseline / split fps |
+|---|---:|---:|---:|
+| Frame 600 | 62.93 / 66.30 ms | 61.13 / 64.21 ms | 15.89 / 16.36 |
+| Frame 900 | 62.20 / 65.61 ms | 60.32 / 63.91 ms | 16.08 / 16.58 |
+| Frame 1200 | 61.03 / 65.11 ms | 59.39 / 63.46 ms | 16.39 / 16.84 |
+
+At frame 1200, reconstruction falls from **28.74 to 27.13 ms** and total timed
+GPU work falls from **54.77 to 53.18 ms**. Across matched intervals the frame
+rate improves by 2.8–3.1%. The peak measured interval, ending at frame 1500
+in the longer run, is 58.63/62.57 ms p50/p95, or 17.06 fps at the median.
+
+### Validation
+
+Both runs log zero skipped dispatches and no red errors. Cumulative counters
+show fourteen compute dispatches per frame over the measured windows. Each
+fresh capture replays with the other layout and reproduces all 14,745,600
+reconstruction image bytes and both source pools exactly. The runtime-selected
+modules validate, and the captured moonlit frame shows no visible corruption.
+The diagnostic changes one of 2,417 bundle modules and preserves every
+reflection record and flag. The surrounding native convolution and upsample
+passes retain the diagnostic arithmetic described above.
+
+Fifty-one focused tests and twenty independent Android GPU checks pass. The GPU
+checks cover two logical warps, each matrix result, dependent tile reuse,
+aliased operands, fractional halves and subnormals. Lint and diff checks pass.
+Three existing documentation failures persist. The Mac regression reports
+missing packaged builds for all five selected games.
+
+Artifacts are external under `bringup-20261118/reconstruction-layout/`.
+They include `report.json`, `commands.json`, `bench.json`, `selected-bench.json`,
+`native-nine-split-rows.dmsv`, both game captures, GPU proofs, screenshots and
+source snapshots. The split layout remains an opt-in diagnostic.
+
+## Follow-up (2026-11-18): four-channel loads in output convolution
+
+The output convolution `5a7d69b067a7f011` fills four shared half channels from
+two adjacent 32-bit words per iteration. The paired version fills two channels
+per iteration. Both use the same word-aligned descriptor offsets, pad the same
+pixels, process the taps in the same order and combine the residual image in
+the same way.
+
+Four GPU fixtures cover integer and fractional inputs under both the native
+half and float32 K16 modes. Complete RGB10A2 images and intermediate residual
+traces match independent CPU oracles, including trace canaries. The weights,
+features and bias match their input bytes. On the latest full-frame capture
+of this pass, the paired shader matches the runtime-selected shader byte for
+byte. Every replay reproduces its 8,294,400-byte image exactly. The sampled
+native model matches all 16,404 color components.
+
+| Feature loads | Replay medians |
+|---|---:|
+| Paired controls | 2.800 / 2.800 ms |
+| Four channels | **2.661 / 2.662 ms** |
+| Four channels with a shared feature strip | 2.655 / 2.656 ms |
+
+Each run uses eight warmups and sixteen timestamps. The strip experiment loads
+three 66-pixel rows once for interior tiles and reads overlapping K16 windows
+from shared memory for the nine taps. Edge tiles use the same bounds checks as
+the four-channel loader. The strip reproduces the complete output but saves
+less than 0.01 ms against its bracketed four-channel controls. The game test
+uses four-channel loads without the additional shared storage.
+
+### Matched game runs confirm the pass timing
+
+Both 90-second runs start from the same save and pipeline cache with the split
+reconstruction layout active. The four-channel bundle changes only the output
+convolution module. All 2,416 other modules, every flag and every reflection
+record stay byte-identical.
+
+| Interval ending at | Paired frame p50 / p95 | Four-channel frame p50 / p95 | Paired / four-channel pass |
+|---|---:|---:|---:|
+| Frame 600 | 63.20 / 65.95 ms | 62.96 / 66.02 ms | 2.83 / 2.70 ms |
+| Frame 900 | 62.40 / 64.85 ms | 62.22 / 65.15 ms | — |
+| Frame 1200 | 60.91 / 64.58 ms | 60.84 / 64.97 ms | 2.83 / 2.68 ms |
+
+The pass saves **0.13–0.15 ms**. Frame medians move by 0.07–0.24 ms and the
+95th percentile rises slightly. These runs do not establish a separate FPS
+gain. Both exit cleanly at timeout, with all fourteen compute dispatches
+active and zero skips. Replaying each fresh capture with the other layout
+reproduces every output byte and the complete backing pool. Both images also
+match the native model at all 16,404 sampled components per capture.
+
+Fifty-one focused tests, SPIR-V validation, lint and diff checks pass. The
+five-title Mac check still lacks the packaged game builds. The opt-in
+four-channel diagnostic and its findings remain uncommitted. Artifacts are
+under `bringup-20261118/output-quad/`, including the three JSON reports,
+command logs, both game captures, the diagnostic bundle and source snapshots.
+
+## Follow-up (2026-11-18): reconstruction sequence and SSA cleanup
+
+The 46 matrix calls occupy blocks of 44, one and one. Static operand identities
+show 22 reused A tiles and 12 reused B tiles in the main block. The existing
+two-tile cache already hits all 34 opportunities. Splitting A by row or B by K8
+does not reveal additional repeated operands. Ten calls consume the two rounded
+outputs of an earlier call.
+
+The sequence prototype stages several independent scratch writes before a
+single subgroup publication barrier and retains the original FMA and final
+half-pack order. A dependency check partitions straight-line instructions
+between setup and computation. Calls, side effects, block boundaries and
+scratch inputs dependent on earlier matrix math stop the partition. Dependent
+C inputs can stay on the computation side. Compact pairs use the spare
+eight vector slots per plane for the second B tile and keep the same A tile.
+
+| Reconstruction variant | Scratch barriers removed | Replay median |
+|---|---:|---:|
+| Split-row controls | 0 | 27.120–27.125 ms |
+| Two-call batches, double allocation | 32 of 80 | 26.813 ms |
+| Compact two-call batches, original allocation | 32 of 80 | 26.986 / 26.990 ms |
+| Three-call batches | 44 of 80 | 27.689 ms |
+| Up to four calls per batch | 54 of 80 | 27.076 ms |
+| Two-call batches plus vector FMA | 32 of 80 | 26.683 ms |
+| Split rows plus local SSA and redundancy cleanup | 0 | **25.829 / 25.830 ms** |
+
+All timed variants reproduce the complete 14,745,600-byte captured image and
+both source pools. Each run restores the inputs across eight warmups and
+sixteen timestamp samples. Doubling the scratch allocation without batching
+costs 27.668 ms. The smallest useful batches recover that cost and save about
+0.31 ms against split rows. Larger batches do not improve on the two-call
+result.
+
+The strongest variant applies local store and load elimination, SSA rewriting,
+dead-code elimination, and local and global redundancy elimination to the
+split-row shader. Its SPIR-V shrinks from 413,612 to 249,412 bytes, with load
+instructions falling from 2,922 to 429 and stores from 1,453 to 227. Static
+instruction counts do not measure the physical traffic. Redundancy elimination
+alone takes 25.917 ms, while local SSA preparation without redundancy
+elimination takes about 107.9 ms. The complete cleanup slows the two-call
+variant to 32.567 ms. The compiler's register use and scheduling are unmeasured.
+
+The game diagnostic uses the split-row cleanup, which saves **1.29 ms** in
+replay. All tested variants fall short of the 3 ms target. The tool retains
+the same reflected descriptors and `128×1×1` local size. The candidate bundle
+changes one shader module, with byte-identical reflection and flags.
+
+### Matched Android runs
+
+Both 90-second runs use the same save and cache from the four-channel
+output-convolution checkpoint. The normal allocator runs all fourteen
+dispatches with zero skips. Each run captures reconstruction at frame 350
+and exits cleanly at timeout.
+
+| Interval ending at | Baseline frame p50 / p95 | Cleanup frame p50 / p95 | Baseline / cleanup fps |
+|---|---:|---:|---:|
+| Frame 600 | 63.02 / 65.99 ms | 61.62 / 64.31 ms | 15.87 / 16.23 |
+| Frame 900 | 62.41 / 65.51 ms | 60.92 / 63.38 ms | 16.02 / 16.41 |
+| Frame 1200 | 61.36 / 64.91 ms | 59.83 / 63.57 ms | 16.30 / 16.71 |
+| Frame 1500 | 59.55 / 64.47 ms | 57.95 / 63.93 ms | 16.79 / 17.26 |
+
+At frame 1200, reconstruction drops from **27.14 to 25.84 ms** and total timed
+GPU work drops from **53.07 to 51.73 ms**. GPU p50 drops from 58.76 to 57.44 ms.
+In both directions, the alternate shader reproduces every fresh reconstruction
+image byte and both complete source pools. The captured runtime shaders
+validate and match the expected modules.
+
+The cleanup passes all twenty independent GPU fixtures. A modified six-call
+fixture with repeated A inputs and dependent C actually exercises scratch
+coalescing. Its final 128 words match the independent integer reference. The
+batching variants remain experiments. Three existing documentation test
+failures persist.
+
+The uncommitted diagnostic bundle and artifacts are under
+`bringup-20261118/reconstruction-batch/`. The reports, capture logs,
+synthetic fixtures and source snapshots record both the batching experiment
+and the selected SPIR-V cleanup.
+
+## Resume point for movie shader research (2026-11-18)
+
+Player-route profiling and movie shader research now have separate baselines.
+The movie baseline is the diagnostic bundle
+`bringup-20261118/reconstruction-batch/native-nine-split-rows-output-quad-ssa.dmsv`.
+Its matched frame-1200 interval is 59.83 ms p50, with 51.73 ms of timed GPU
+steps and 25.84 ms of reconstruction. The frame-1500 interval reaches
+17.26 fps. These measurements cover the title movie.
+
+| Experiment | Where to resume under the external game work folder |
+|---|---|
+| Split reconstruction rows and scratch layout alternatives | `bringup-20261118/reconstruction-layout/report.json` |
+| Four-channel output convolution and shared feature strip | `bringup-20261118/output-quad/report.json` |
+| Cross-call batching, vector FMA and cleanup subsets | `bringup-20261118/reconstruction-batch/summary.json` |
+| Residual upsampler and first-convolution packing | `bringup-20261118/upsample-packing/report.json`, `bringup-20261118/quad-packing/report.json` |
+
+The snapshot under `bringup-20261118/player-route/shader-checkpoint/` records
+the source commit, scoped working-tree patch, bundle digest and artifact paths.
+To resume, replay on the saved reconstruction captures and use the split-row
+cleanup as the control. Keep complete image and pool comparisons. A larger
+reconstruction redesign can revisit storage and scheduling across multiple
+pairs. The two `a8b4` convolutions are the next largest combined shader
+target. The native convolution and upsampling arithmetic still needs an
+original Ampere reference before production promotion.

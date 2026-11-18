@@ -79,7 +79,8 @@ def varied_matrix_reference(fractional=False,denormal=False):
     return result
 
 
-def build(out, xlate, lower_hmma=False, reference_hmma=False):
+def build(out, xlate, lower_hmma=False, reference_hmma=False, *, split_rows=False):
+    lower_hmma = lower_hmma or split_rows
     out.mkdir(parents=True, exist_ok=True)
     end = inst(0x000fea0003800000, 0x794d)
     matrix = b''.join(mov(r, 0x3c003c00 if r < 12 else 0x40004000 if r < 14 else 0) for r in range(8, 16))
@@ -142,7 +143,7 @@ def build(out, xlate, lower_hmma=False, reference_hmma=False):
             import sys
             sys.path.insert(0,str(ROOT/'nxnative/dm/android/tools'))
             import hmma_spv
-            binary, calls = hmma_spv.lower(spv.read_bytes())
+            binary, calls = hmma_spv.lower(spv.read_bytes(), split_rows=split_rows)
             assert calls == (6 if name.startswith('hmma-reuse') else 2 if name.startswith('hmma-alias') else 1)
             spv = out / (name + '.lowered.spv')
             spv.write_bytes(binary)
@@ -215,5 +216,7 @@ if __name__ == '__main__':
     parser.add_argument('--xlate', type=Path, default=TOOLS / 'dmsh_xlate_bin/dmsh_xlate')
     parser.add_argument('--hmma-lds', action='store_true', help='exercise the Android vector-gather lowering, tile reuse and aliased fragments')
     parser.add_argument('--hmma-reference', action='store_true', help='generate the additional matrix cases with the original scalar helper')
+    parser.add_argument('--split-rows', action='store_true', help='exercise the diagnostic split-row HMMA scratch layout')
     args = parser.parse_args()
-    print('validated fixtures:', build(args.out.resolve(), args.xlate.resolve(), args.hmma_lds, args.hmma_reference))
+    print('validated fixtures:', build(args.out.resolve(), args.xlate.resolve(), args.hmma_lds, args.hmma_reference,
+                                      split_rows=args.split_rows))

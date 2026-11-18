@@ -2,6 +2,9 @@
 #extension GL_KHR_cooperative_matrix : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 #extension GL_KHR_memory_scope_semantics : require
+#if defined(PAIRED_LOADS) && defined(QUAD_LOADS)
+#error Select paired or quad loads
+#endif
 // Diagnostic 3x3 residual image convolution: CI -> four RGBA subpixels.
 // FLOAT32_K16 keeps float32 FMA and the original direct K16 half packing.
 layout(local_size_x=64) in;
@@ -42,7 +45,23 @@ void main() {
         d=coopmat<float16_t,gl_ScopeSubgroup,64,16,gl_MatrixUseAccumulator>(0.0);
 #endif
         for(uint tap=0;tap<9;tap++)for(uint k0=0;k0<CI;k0+=16) {
-#ifdef PAIRED_LOADS
+#ifdef QUAD_LOADS
+            for(uint i=lane;i<64*4;i+=64) {
+                uint pixel=firstPixel+i/4;
+                int y=int(pixel/WIDTH)+int(tap/3)-1,x=int(pixel%WIDTH)+int(tap%3)-1;
+                vec4 value=vec4(0);
+                if(pixel<HEIGHT*WIDTH&&y>=0&&y<HEIGHT&&x>=0&&x<WIDTH) {
+                    uint word=(xoff+(uint(y)*WIDTH+uint(x))*CI+k0)/2+(i%4)*2;
+                    value=vec4(unpackHalf2x16(featureWords[word]),unpackHalf2x16(featureWords[word+1]));
+                }
+                for(uint j=0;j<4;j++)packedA[i*4+j]=float16_t(value[j]);
+            }
+            for(uint i=lane;i<16*4;i+=64) {
+                uint word=(woff+(tap*CI+k0)*16)/2+i*2;
+                vec4 value=vec4(unpackHalf2x16(weightWords[word]),unpackHalf2x16(weightWords[word+1]));
+                for(uint j=0;j<4;j++)packedB[i*4+j]=float16_t(value[j]);
+            }
+#elif defined(PAIRED_LOADS)
             for(uint i=lane;i<64*8;i+=64) {
                 uint pixel=firstPixel+i/8;
                 int y=int(pixel/WIDTH)+int(tap/3)-1,x=int(pixel%WIDTH)+int(tap%3)-1;

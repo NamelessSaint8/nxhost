@@ -278,21 +278,24 @@ def hmma_helper(m):
         return None
     return {'fid': fid, 'i32': i32, 'u32': u32, 'scratch': scratch, 'barrier': groups[0]}
 
-def hmma_lds(m, keep=None):
+def hmma_lds(m, keep=None, *, split_rows=False):
     """Lower the recognized f16 HMMA helper into vector shared-memory gathers.
 Keep at most two converted A/B tiles between calls, preserving FMA order and half rounding.
-Other functions and global-memory helpers are unchanged."""
+Other functions and global-memory helpers are unchanged. The diagnostic split
+layout uses the translator's 256-word scratch block per logical warp."""
     h = hmma_helper(m)
     if h is None:
         return 0
     if keep is None:
         keep = HMMA_KEEP
     fid, i32, u32, scratch = (h['fid'], h['i32'], h['u32'], h['scratch'])
+    n = m.consts[m.types[m.pointee(m.vars[scratch][0])[1]][3]][1][0]
+    if split_rows and (n < 256 or n % 256):
+        return 0
     glsl = ensure_glsl(m)
     f32 = m.add_type(OP_TYPE_FLOAT, 32)
     v2f = m.add_type(OP_TYPE_VECTOR, f32, 2)
     uv4 = m.add_type(OP_TYPE_VECTOR, u32, 4)
-    n = m.consts[m.types[m.pointee(m.vars[scratch][0])[1]][3]][1][0]
     arr4 = m.add_type(OP_TYPE_ARRAY, uv4, m.add_const(u32, n // 4))
     p_arr4 = m.add_type(OP_TYPE_POINTER, SC_WORKGROUP, arr4)
     p_uv4 = m.add_type(OP_TYPE_POINTER, SC_WORKGROUP, uv4)
@@ -302,6 +305,9 @@ Other functions and global-memory helpers are unchanged."""
     x[1] = p_arr4
     m._insert_decl(x)
     CI = {v: m.add_const(i32, v) for v in (1, 2, 3, 8, 32)}
+    if split_rows:
+        CI[5] = m.add_const(i32, 5)
+        CI[16] = m.add_const(i32, 16)
     CU = {v: m.add_const(u32, v) for v in (0, 1)}
     m.index()
     calls = 0
@@ -361,8 +367,15 @@ Other functions and global-memory helpers are unchanged."""
                 vi = integer(OP_SHR_LOGICAL, t, CI[1])
                 c0 = em(OP_BITCAST, u32, integer(OP_SHL_LOGICAL, integer(OP_BITWISE_AND, t, CI[1]), CI[1]))
                 c1 = em(OP_IADD, u32, c0, CU[1])
-                rowA = lambda r, base=b4: integer(OP_IADD, base, integer(OP_SHL_LOGICAL, r, CI[1]))
-                rowB = lambda c, base=b4: integer(OP_IADD, base, integer(OP_IADD, CI[32], integer(OP_SHL_LOGICAL, c, CI[1])))
+                # Each logical warp owns 64 vectors. Store its 24 rows in
+                # separate 32-vector planes, one plane for each half of a row.
+                if split_rows:
+                    rowA = lambda r, base=b4: integer(OP_IADD, base, r)
+                    rowB = lambda r, row=rowA: row(integer(OP_IADD, r, CI[16]))
+                    vi = integer(OP_SHL_LOGICAL, vi, CI[5])
+                else:
+                    rowA = lambda r, base=b4: integer(OP_IADD, base, integer(OP_SHL_LOGICAL, r, CI[1]))
+                    rowB = lambda c, base=b4: integer(OP_IADD, base, integer(OP_IADD, CI[32], integer(OP_SHL_LOGICAL, c, CI[1])))
 
                 def st(row, w0, w1, vector=vi, component0=c0, component1=c1, output=out):
                     v4 = integer(OP_IADD, row, vector)
@@ -379,7 +392,8 @@ Other functions and global-memory helpers are unchanged."""
                 def ld_row(r0):
                     w = []
                     for p in range(2):
-                        v4 = em(OP_LOAD, uv4, em(OP_ACCESS_CHAIN, p_uv4, scratch, integer(OP_IADD, r0, CI[1]) if p else r0))
+                        offset = CI[32 if split_rows else 1]
+                        v4 = em(OP_LOAD, uv4, em(OP_ACCESS_CHAIN, p_uv4, scratch, integer(OP_IADD, r0, offset) if p else r0))
                         w += [em(OP_COMPOSITE_EXTRACT, u32, v4, c) for c in range(4)]
                     return cvt([w[2 * (kw % 4) + kw // 4] for kw in range(8)])
                 if kA in need:
@@ -414,12 +428,12 @@ Other functions and global-memory helpers are unchanged."""
     m.index()
     return calls
 
-def lower(binary, keep=2):
+def lower(binary, keep=2, *, split_rows=False):
     """Return (SPIR-V, calls lowered); unsupported helper shapes stay byte-identical."""
     if keep not in (0, 1, 2):
         raise ValueError('HMMA cache limit must be 0, 1 or 2')
     module = Module(binary)
     if not module.entry or module.entry[1] != 5:
         return binary, 0
-    calls = hmma_lds(module, keep)
+    calls = hmma_lds(module, keep, split_rows=split_rows)
     return (module.data(), calls) if calls else (binary, 0)

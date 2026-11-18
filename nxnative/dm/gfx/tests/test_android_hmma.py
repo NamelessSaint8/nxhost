@@ -60,6 +60,24 @@ class Hmma(unittest.TestCase):
     def test_no_matrix_helper_is_unchanged(self):
         binary=(self.out/'lane-128.spv').read_bytes()
         self.assertEqual(hmma_spv.lower(binary),(binary,0))
+        self.assertEqual(hmma_spv.lower(binary, split_rows=True), (binary, 0))
+
+    def test_split_rows_preserves_scratch_extent_and_barriers(self):
+        original = (self.out/'hmma-reuse-128.spv').read_bytes()
+        baseline = hmma_spv.Module(hmma_spv.lower(original)[0])
+        binary, calls = hmma_spv.lower(original, split_rows=True)
+        self.assertEqual(calls, 6)
+        candidate = hmma_spv.Module(binary)
+        self.assertEqual(candidate.modes, baseline.modes)
+        array_lengths = lambda m: sorted(m.consts[m.types[m.pointee(ty)[1]][3]][1][0]
+                                         for ty, storage in m.vars.values() if storage == hmma_spv.SC_WORKGROUP)
+        self.assertEqual(array_lengths(candidate), array_lengths(baseline))
+        barriers = lambda m: [x for x in m.ins if x[0] & 65535 in
+                              (hmma_spv.OP_CONTROL_BARRIER, hmma_spv.OP_MEMORY_BARRIER)]
+        self.assertEqual(barriers(candidate), barriers(baseline))
+        path = self.out/'split-rows.spv'
+        path.write_bytes(binary)
+        subprocess.run(['spirv-val', '--target-env', 'vulkan1.2', str(path)], check=True, capture_output=True)
 
     def test_extended_opcode_literal_is_not_a_scratch_reference(self):
         m=hmma_spv.Module((self.out/'hmma-128.spv').read_bytes())

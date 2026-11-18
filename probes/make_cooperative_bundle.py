@@ -13,7 +13,7 @@ import struct
 import subprocess
 
 
-def replace(source, shader, destination, key):
+def replace(source, shader, destination, key, *, preserve_local_size=False):
     if source.resolve() == destination.resolve():
         raise ValueError('diagnostic destination must differ from source')
     subprocess.run(['spirv-val', '--target-env', 'vulkan1.2', str(shader)], check=True)
@@ -32,9 +32,10 @@ def replace(source, shader, destination, key):
             if stage != 5:
                 raise ValueError('selected shader is not compute')
             binary = shader.read_bytes()
-            header = list(struct.unpack_from('<5I', reflection))
-            header[2:] = [64, 1, 1]
-            reflection = struct.pack('<5I', *header)+reflection[20:]
+            if not preserve_local_size:
+                header = list(struct.unpack_from('<5I', reflection))
+                header[2:] = [64, 1, 1]
+                reflection = struct.pack('<5I', *header)+reflection[20:]
             changed += 1
         entries.append(struct.pack('<Q6I', k, stage, offset, len(binary), offset+len(binary), len(reflection), flags))
         blobs.extend((binary, reflection))
@@ -56,5 +57,7 @@ if __name__ == '__main__':
     p.add_argument('shader', type=Path)
     p.add_argument('destination', type=Path)
     p.add_argument('--key', required=True, type=lambda s: int(s, 16))
+    p.add_argument('--preserve-local-size', action='store_true')
     a = p.parse_args()
-    print(json.dumps(replace(a.source, a.shader, a.destination, a.key), indent=2))
+    print(json.dumps(replace(a.source, a.shader, a.destination, a.key,
+                             preserve_local_size=a.preserve_local_size), indent=2))
