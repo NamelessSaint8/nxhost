@@ -25,12 +25,12 @@ void vk_gmem_descriptor(int log, VkDescriptorBufferInfo *out) {
         for(unsigned i=1;i<DMSH_GMEM_MAP_ENTRIES;i++)table[i][0]=UINT64_MAX;
         pthread_rwlock_wrlock(&g_pool_mu);
         // An indirect address can reach any GPU-accessible pool, including one
-        // not bound directly yet. GPU_NO_ACCESS physical sparse backing is not
-        // a direct buffer and must never be advertised in this table.
+        // not bound directly yet. Physical backing is GPU-accessible here only
+        // when it has a full linear virtual mapping.
         unsigned count=1;uint64_t end=0;s->gmem_coherent=1;
         for(int i=0;i<g_npool;i++){
             vkpool_t *p=g_pool[i];
-            if((p->flags&0x38)==NVN_MEMORY_POOL_FLAGS_GPU_NO_ACCESS)continue;
+            if (!pool_has_gpu_access(p)) continue;
             pool_use_locked(p);
             if(p->lo<end)die("[RED] overlapping GPU pools need alias resolution before raw global-memory access");
             uint64_t lo=p->lo;

@@ -259,12 +259,57 @@ typedef struct pool_node { vkpool_t pool; struct pool_node *next; } pool_node;
 static vkpool_t **g_pool; static int g_npool, g_pool_capacity;
 static pool_node *g_pool_free;
 static pthread_rwlock_t g_pool_mu = PTHREAD_RWLOCK_INITIALIZER;
+typedef struct linear_alias { const void *owner; vkpool_t *backing; struct linear_alias *next; } linear_alias;
+static linear_alias *g_linear_aliases;
 static uint32_t g_pool_gen;   // bumped under the write lock when a pool is added or removed: vk_pool_of's per-thread cache holds while it is unchanged
 static void pool_publish(vkpool_t *p) {   // caller holds the write lock; index sorted by starting address
     int lo=0,hi=g_npool;
     while(lo<hi){int mid=lo+(hi-lo)/2;if(g_pool[mid]->lo<=p->lo)lo=mid+1;else hi=mid;}
     memmove(g_pool+lo+1,g_pool+lo,(size_t)(g_npool-lo)*sizeof *g_pool);g_pool[lo]=p;g_npool++;
     __atomic_fetch_add(&g_pool_gen,1,__ATOMIC_RELEASE);
+}
+static int pool_has_gpu_access(const vkpool_t *p) {
+    return (p->flags & 0x38) != NVN_MEMORY_POOL_FLAGS_GPU_NO_ACCESS ||
+           __atomic_load_n(&p->linear_gpu_aliases, __ATOMIC_ACQUIRE);
+}
+
+// A whole-pool NVN virtual mapping borrows the physical address. Keep one
+// Vulkan allocation for those bytes and track which virtual pools can use it.
+void vk_pool_linear_alias(const void *owner, const void *mem, uint64_t size) {
+    uint64_t base = (uintptr_t)mem;
+    pthread_rwlock_wrlock(&g_pool_mu);
+    for (const linear_alias *alias = g_linear_aliases; alias; alias = alias->next) {
+        if (alias->owner != owner) continue;
+        pthread_rwlock_unlock(&g_pool_mu);
+        return;
+    }
+    for (int i = 0; i < g_npool; i++) {
+        vkpool_t *p = g_pool[i];
+        if (p->lo != base || p->hi - base != size || (p->flags & 0x38) != NVN_MEMORY_POOL_FLAGS_GPU_NO_ACCESS) continue;
+        linear_alias *alias = malloc(sizeof *alias);
+        if (!alias) die("[RED] linear virtual pool alias allocation failed");
+        *alias = (linear_alias){owner, p, g_linear_aliases};
+        g_linear_aliases = alias;
+        __atomic_add_fetch(&p->linear_gpu_aliases, 1, __ATOMIC_RELEASE);
+        __atomic_fetch_add(&g_pool_gen, 1, __ATOMIC_RELEASE);
+        VKLOG("linear virtual pool %p: GPU access to %.2f MiB at %p", owner, size / 1048576.0, mem);
+        break;
+    }
+    pthread_rwlock_unlock(&g_pool_mu);
+}
+
+static void pool_drop_linear_aliases(const void *owner, const vkpool_t *backing) {
+    for (linear_alias **link = &g_linear_aliases; *link;) {
+        linear_alias *alias = *link;
+        if (alias->owner != owner && alias->backing != backing) {
+            link = &alias->next;
+            continue;
+        }
+        __atomic_sub_fetch(&alias->backing->linear_gpu_aliases, 1, __ATOMIC_RELEASE);
+        *link = alias->next;
+        free(alias);
+        __atomic_fetch_add(&g_pool_gen, 1, __ATOMIC_RELEASE);
+    }
 }
 static int recv_fds(int sock, int *fds, int max) {
     char data[4096], ctl[CMSG_SPACE(sizeof(int) * 16)]; struct iovec iov = {data, sizeof data};
@@ -373,7 +418,7 @@ static int pool_make_buffer(vkpool_t *p){
     return zc;
 }
 static void pool_materialize_locked(vkpool_t *p){
-    if(p->lazy){
+    if (p->lazy || (p->linear_gpu_aliases && !p->buf)) {
             // No command has ever referenced this pool's GPU buffer. Release
             // protection before replacing its CPU mapping, preserving dirty
             // generations for previously uploaded image copies.
@@ -435,6 +480,7 @@ void mtl_pool_del(const void *mem) {
         int i = 0; while (i < g_npool && g_pool[i]->base != (uint64_t)(uintptr_t)mem) i++;
         if (i == g_npool) { pthread_rwlock_unlock(&g_pool_mu); return; }
         pool_node *node = (pool_node *)g_pool[i]; vkpool_t p = node->pool;
+        pool_drop_linear_aliases(NULL, &node->pool);
         g_npool--;memmove(g_pool+i,g_pool+i+1,(size_t)(g_npool-i)*sizeof *g_pool);node->next = g_pool_free; g_pool_free = node;
         __atomic_fetch_add(&g_pool_gen, 1, __ATOMIC_RELEASE);
         pthread_rwlock_unlock(&g_pool_mu);
@@ -483,6 +529,7 @@ void vk_pool_memory_census(void){
     for(unsigned i=0;i<count;i++)VKLOG("pool census: flags %#x, registered %.2f MiB, direct GPU buffer %.2f MiB (never bound %.2f MiB), %llu ranges",groups[i].flags,groups[i].bytes/1048576.0,groups[i].gpu/1048576.0,groups[i].unused/1048576.0,(unsigned long long)groups[i].count);
 }
 static void pool_use_locked(vkpool_t *p){
+    if (!pool_has_gpu_access(p)) die("[RED] [vk] direct GPU buffer access to a GPU_NO_ACCESS pool");
     pool_materialize_locked(p);
     if(!p->buf)die("[RED] [vk] direct GPU buffer access to a GPU_NO_ACCESS pool");
     if(p->shadow && !__atomic_load_n(&p->gpu_used,__ATOMIC_ACQUIRE)){
@@ -500,7 +547,8 @@ static void pool_use_locked(vkpool_t *p){
     __atomic_store_n(&p->gpu_used,1,__ATOMIC_RELAXED);
 }
 VkBuffer vk_pool_buffer(vkpool_t *p){
-    if(__atomic_load_n(&p->lazy,__ATOMIC_ACQUIRE) || (p->shadow && !__atomic_load_n(&p->gpu_used,__ATOMIC_ACQUIRE))){
+    if (!pool_has_gpu_access(p)) die("[RED] [vk] direct GPU buffer access to a GPU_NO_ACCESS pool");
+    if(__atomic_load_n(&p->lazy,__ATOMIC_ACQUIRE) || !p->buf || (p->shadow && !__atomic_load_n(&p->gpu_used,__ATOMIC_ACQUIRE))){
         pthread_rwlock_wrlock(&g_pool_mu);pool_use_locked(p);pthread_rwlock_unlock(&g_pool_mu);
     }
     if(!p->buf)die("[RED] [vk] direct GPU buffer access to a GPU_NO_ACCESS pool");
@@ -516,7 +564,14 @@ int mtl_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off) {
     if (!p) return 0;
     if (buf) *buf = (void *)(uintptr_t)p->lo; if (off) *off = addr - p->lo; return 1;
 }
-void mtl_alias_drop_pool(const void *pool) { void vk_tex_drop_pool(const void *); vk_atlas_drop_pool(pool); vk_tex_drop_pool(pool); }
+void mtl_alias_drop_pool(const void *pool) {
+    void vk_tex_drop_pool(const void *);
+    pthread_rwlock_wrlock(&g_pool_mu);
+    pool_drop_linear_aliases(pool, NULL);
+    pthread_rwlock_unlock(&g_pool_mu);
+    vk_atlas_drop_pool(pool);
+    vk_tex_drop_pool(pool);
+}
 // The NVN flags of the pool at mem (hle_nvn.c, after mtl_pool_add): a copied pool the CPU maps uncached (CPU_UNCACHED, 0x2) is one the game writes and the GPU reads;
 // the game reads GPU results from cached memory, so such a pool is not copied back after each submission
 void vk_pool_set_flags(const void *mem, int flags) {

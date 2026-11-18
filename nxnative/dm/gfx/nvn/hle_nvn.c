@@ -251,6 +251,7 @@ static void replay_lock(void); static void replay_unlock(void);   // the replay'
 static void nvn_drain(void);
 __attribute__((weak)) void vk_pool_set_flags(const void *mem, int flags) { (void)mem; (void)flags; }
 __attribute__((weak)) void vk_pool_add_flags(const void *mem,uint64_t size,int flags){mtl_pool_add(mem,size);vk_pool_set_flags(mem,flags);}
+__attribute__((weak)) void vk_pool_linear_alias(const void *owner, const void *mem, uint64_t size) { (void)owner; (void)mem; (void)size; }
 __attribute__((weak)) void dm_perf_replay_thread(void) {}   // Android (perf_android.c): the replay thread's CPU placement   // Android's Vulkan host (gfx_vk_core.c): copied pools by their flags
 NVN(nvnMemoryPoolInitialize, NVNboolean, NVNmemoryPool *p, const NVNmemoryPoolBuilder *b) {
     const pool_builder_t *s = (const pool_builder_t *)b; pool_t *o = (pool_t *)p;
@@ -2488,6 +2489,13 @@ NVN(nvnMemoryPoolMapVirtual, NVNboolean, NVNmemoryPool *p, int n, const NVNmappi
         if (o->mem && o->mem != base) { LOG("[RED] MapVirtual: non-contiguous mapping (true sparse) not implemented: virtual pool %p already maps to %p, this request wants %p", (void *)o, (void *)o->mem, (void *)base); return 0; }
         if (!o->mem) LOG("[nvn] MapVirtual: the storage of virtual pool %p (%#llx bytes) points at physical pool %p + %#llx", (void *)o, (unsigned long long)o->size, (const void *)ph, (unsigned long long)(r[i].poff - r[i].voff));
         o->mem = base;
+        unsigned gpu_mode = o->flags & (NVN_MEMORY_POOL_FLAGS_GPU_CACHED | NVN_MEMORY_POOL_FLAGS_GPU_UNCACHED);
+        if (gpu_mode && (ph->flags & 0x38) == NVN_MEMORY_POOL_FLAGS_GPU_NO_ACCESS &&
+            !r[i].poff && !r[i].voff && r[i].size == o->size && o->size == ph->size) {
+            replay_lock();
+            vk_pool_linear_alias(o, base, o->size);
+            replay_unlock();
+        }
     }
     return 1;
 }

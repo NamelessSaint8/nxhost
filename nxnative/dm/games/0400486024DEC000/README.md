@@ -114,6 +114,8 @@ split and built in the background rather than inline in a probe.
 - [Repeated raw pointer accesses search every pool again](../../../docs/reference/shaders.md#repeated-raw-pointer-accesses-search-every-pool-again): a validated invocation-private cache recovers the upsampling regression and improves the other mixed-memory pass; guarded timing can predict the wrong performance direction.
 - [Native F16 cooperative matrices round products and additions separately](../../../docs/reference/shaders.md#native-f16-cooperative-matrices-round-products-and-additions-separately): an independent model explains the native convolution's fractional differences.
 - [Inactive multi-probe atomic logging slows a cooperative kernel](../../../docs/reference/shaders.md#inactive-multi-probe-atomic-logging-slows-a-cooperative-kernel): controlled replays reproduce the gap and a coherent-only diagnostic recovers the full-game dispatch cost.
+- [Offline play report sends need a completed async context](../../../docs/reference/services.md#offline-play-report-sends-need-a-completed-async-context): the first post-intro abort comes from a user-scoped telemetry report.
+- [Full linear virtual pools grant access to their physical backing](../../../docs/reference/rendering.md#full-linear-virtual-pools-grant-access-to-their-physical-backing): a storage buffer binding in the first 3D scene exposes the lost access.
 - Every RomFS `.zs` is a **dictionary** frame: the census's first run reported no BNSH under the whole dump because the reader had no
   `Pack/ZsDic.pack.zs` table. `shader_split` already supported such frames (Tears of the Kingdom); the census did not load the table.
 - `shader_map.tsv` names one shader source this dump has and Mario Kart World's does not: `Shader/ApplicationPackage.Nin_Ounce_NVN2.release.sarc.zs`
@@ -2517,3 +2519,129 @@ reconstruction redesign can revisit storage and scheduling across multiple
 pairs. The two `a8b4` convolutions are the next largest combined shader
 target. The native convolution and upsampling arithmetic still needs an
 original Ampere reference before production promotion.
+
+## Follow-up (2026-11-18): handheld movie route and player profiling
+
+The Android profile sets `docked=0`. The front end maps it to
+`DM_OPMODE=0`, which the host reads on its first mode query. The same
+Android host binary runs the matched headless controls with explicit modes
+0 and 1. Both use private copies of the same save and pipeline cache, the
+full diagnostic shader bundle, and a 68-second timeout. They do not measure
+APK presentation overhead.
+
+| Measurement | Handheld | Docked |
+|---|---:|---:|
+| Observed render target | 1920×1080 | 2048×1152 |
+| Reconstruction storage image | 2560×1440 | 2560×1440 |
+| Reconstruction grid | 80×180×1 | 80×180×1 |
+| Frame-600 p50 / p95 | 61.33 / 64.44 ms | 61.42 / 63.88 ms |
+| Frame-900 p50 / p95 | 60.81 / 63.44 ms | 59.91 / 63.36 ms |
+| Warm timed steps | 51.74 ms | 51.76 ms |
+| Warm reconstruction | 25.87 ms | 25.87 ms |
+
+The frame-350 reconstruction captures show identical image dimensions in both
+modes. The smaller handheld target is also visible in the frame-900 screenshots.
+Both runs report fourteen compute passes with zero skips and exit cleanly. The
+handheld switch does not reduce the measured movie network cost.
+
+The full-frame and GPU p50 values are medians. The pass report sums averages
+per step position, while the GPU column sums timestamp spans per frame before
+computing its median. Their difference points to work outside the pass brackets
+but does not isolate its cost. A follow-up should compare pass and submission
+spans on the same steady frames, then attribute the uncovered intervals to
+copies, barriers or other operations before optimizing them.
+
+### New Game reaches the post-intro title card
+
+The separate handheld run uses a private save and
+`DM_KEYS=f1850:A~f9`. The visible title menu selects New Game in frame
+1700. The narrated tapestry appears by frame 2200, Link asleep appears at
+6500, and the castle sequence appears at 8500. A normal Plus press at about
+frame 3072 does not skip the opening. Frame 10915 shows the title card over
+Link's doorway. A normal A press at about frame 11662 is followed by continued
+movie dispatches. Movement and a gameplay save remain unverified.
+
+The run exits cleanly at its 780-second timeout after the frame-12600
+report. Its private save still has only `account.sav`. The 600-frame
+interval to frame 12600 contains 8,400 compute dispatches and zero compute
+skips. It measures the intro's movie network, with frame p50 63.67 ms and
+GPU p50 59.94 ms at frame 12600. In the preceding 600-frame report, summed
+submission spans average 58.49 ms versus 51.89 ms of timed steps. The
+approximately 6.60 ms difference is a starting point for measuring uncovered
+GPU intervals, subject to the completion thread's reporting boundaries.
+
+The late title card requests two mapped layout shaders missing from the
+selected diagnostic bundle. `bd15363ecf2cc38f` is the vertex shader and
+`71c52029888cc200` the fragment shader. The report at frame 11400
+records 1,629 skipped draws for missing programs. Both modules already exist
+in the earlier layout-coverage build. They independently validate and are
+added to a separate `player-route-ui.dmsv` bundle, leaving all 2,417
+existing entries byte-identical.
+
+### The complete intro reaches offline telemetry
+
+The handheld retest uses the augmented bundle and a 1,200-second timeout
+with no compute skips. The missing-program draw counter stays at zero through
+frame 11400. The title card fades while the decoder continues delivering
+pictures through frame 12900. The AV1 decoder reports end-of-stream after
+9,254 pictures. The earlier run's 780-second timeout occurred before that
+transition.
+
+After end-of-stream the SDK requests `prepo:u` and aborts with result
+`0xe15` at `sdk+0x5ab400`. The stack reaches
+`PlayReportImpl::Send(Uid const&)` through the game call at
+`main+0x379164c`. The caller waits on the returned context before
+continuing. See [offline play report sends](../../../docs/reference/services.md#offline-play-report-sends-need-a-completed-async-context)
+for the host fix.
+
+The logs, frame captures, mode comparison, bundles and replay commands are
+under `bringup-20261118/player-route/`. The full intro retest is in
+`gameplay-handheld-ui/`. Its private save contains only `account.sav`.
+
+### First 3D scene exposes buffer aliasing and shader coverage
+
+The diagnostic replay in `gameplay-prepo-fast/` skips the known movie
+compute keys to reach the same end-of-stream sooner. With the offline
+telemetry hook the game passes that transition and starts submitting a
+3D scene at about frame 15316. The first scene aborts in Vulkan descriptor
+binding. A second replay in `gameplay-buffer-trace-fast/` identifies
+compute shader `f8965bffbdf51d78`, descriptor binding 5, storage slot 8
+and a 583,200-byte range inside the 305 MiB physical pool (flags `0x18c`).
+The game maps that whole range through a GPU-accessible virtual pool.
+See [full linear virtual pools](../../../docs/reference/rendering.md#full-linear-virtual-pools-grant-access-to-their-physical-backing)
+for the host fix.
+
+The first replay logs 256 missing programs, the capture logger's limit,
+and saves 184 shader records. The tracked map covers 254 of those keys.
+The translator also recognizes one additional runtime capture. Of 253
+attempted translations, 206 modules are produced and validate with
+`spirv-val --target-env vulkan1.2`. The distinct
+`player-route-gameplay.dmsv` bundle adds them and preserves all 2,419
+prior entries byte-for-byte.
+
+The remaining keys expose three translation issues. Forty-three modules
+overflow the 16-bit binding or count fields with their bindless descriptor
+layout. For example, `0234f634ed411a85` declares two 1,048,576-entry
+texture arrays and places a uniform buffer at binding 2,101,272. Four
+shaders stop on Ampere opcode `0x243`, and two mesh shaders declare
+non-triangle output. The replay also logs seven mesh programs that fail
+the loader's metadata or device-limit check and calls the unimplemented
+`nvnCommandBufferDrawMeshTasksIndirect`. Coverage reports in
+`bringup-20261118/player-route/` retain the keys and the compiler output.
+
+The retest in `gameplay-linear-alias-fast/` uses the alias fix and
+the coverage bundle. The host registers the 305 MiB mapping without
+allocating a GPU buffer at boot. At the scene transition it creates
+one zero-copy buffer, reaches the shader variant for
+`f8965bffbdf51d78` and proceeds to later descriptors. It then aborts
+on a Vulkan storage view of an RGB9E5 image (Vulkan format 123, NVN
+texture flags `0x8`). The crash occurs before the first scene is
+presented or a gameplay save is written.
+
+The tablet reports storage support for `R32_UINT` and none for
+RGB9E5. The standalone device proof in `oot-rgb9e5-storage.log` writes
+64 packed words through a compatible `R32_UINT` storage view of an
+RGB9E5 image, both with and without a format list, and reads every word
+back unchanged. The next game trace needs the storage view format and
+the shader's image operand type. That determines whether the binding
+already expects packed integers or needs explicit conversion.

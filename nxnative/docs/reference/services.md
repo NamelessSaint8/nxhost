@@ -621,6 +621,13 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Fix:** hooked (`hle_net.c`, `hle_offline.c`): the `nifm` IP queries with SDK 10's `socket::InAddr` / `in_addr` mangling; `prepo::AddSessionId` / `AddInternetConnectionStatus`; `ldn::GetNetworkConfig`; SDK 11's socket overloads with plain `sockaddr` / `int` arguments (`Connect`, `Accept`, `GetSockName`, `Get` / `SetSockOpt`, `Fcntl`, `Recv`, `Send`).
 - **Found on:** [Super Mario 3D World + Bowser's Fury](../../dm/games/010028600EBDA000/README.md) (SDK 10: `nifm`, `prepo`); [Big Brain Academy: Brain vs. Brain](../../dm/games/0100620012D6E000/README.md) (SDK 11.4.3: LDN, sockets).
 
+### Offline play report sends need a completed async context
+
+- **Symptom:** the SDK aborts after trying to connect to `prepo:u` from `PlayReport::Send(Uid const&)`.
+- **Cause:** the synchronous telemetry save hooks do not cover `Send`. The caller waits on the completion event of the returned `AsyncContext`.
+- **Fix:** the offline hook in `hle_offline.c` forwards the AArch64 indirect result pointer in `x8` to the SDK's default `AsyncContext` constructor. Its local context reports success, supplies a signaled completion event and can be destroyed without contacting the service.
+- **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#the-complete-intro-reaches-offline-telemetry), at the end of the New Game intro.
+
 ### Network requests stay on hold before they settle
 
 - **Symptom:** the boot sits at a black loading screen for good, CPU nearly idle, every thread waiting, about 1 boot in 6 (3 in 4 with four Mac hosts at once); the title movie is never opened, and the save files are never probed.

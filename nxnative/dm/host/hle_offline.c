@@ -8,6 +8,21 @@ static _Alignas(16) uint8_t g_ev_ldn[0x100];
 // ---------- prepo: telemetry reports. Saving / submitting all report success; nothing is sent ----------
 HLE_FORCE("_ZN2nn5prepo10PlayReport4SaveERKNS_7account3UidE", "telemetry report save (user); nothing is sent, reports success", Result, h_prepo_SaveU, void *self, const void *uid) { (void)self; (void)uid; return RES_OK; }
 HLE_FORCE("_ZN2nn5prepo10PlayReport4SaveEv", "telemetry report save; nothing is sent, reports success", Result, h_prepo_Save, void *self) { (void)self; return RES_OK; }
+
+static void __attribute__((used)) h_prepo_complete_send(void *context) {
+    void (*init)(void *) = guest_sym("_ZN2nn5prepo12AsyncContextC1Ev");
+    if (!init) die("prepo: missing nn::prepo::AsyncContext default constructor");
+    init(context);
+}
+
+// Send returns a nontrivial C++ object through x8. The SDK's default context has a
+// successful result and supplies an already signaled completion event without IPC.
+static void h_prepo_SendU(void) __attribute__((naked));
+HLE_FORCE("_ZN2nn5prepo10PlayReport4SendERKNS_7account3UidE", "offline telemetry send (user): completes locally with success", void, h_prepo_SendU, void) {
+    __asm__("mov x0, x8\n"
+            "b " DM_ASM_SYM("h_prepo_complete_send"));
+}
+
 HLE_FORCE("_ZN2nn5prepo10InitializeEv", "telemetry init: the original connects to the prepo service (through sm), the host has no service process; no-op (Engage calls it explicitly)", Result, h_prepo_Init, void) { return RES_OK; }
 // Add the session ID / connection status to a report: on hardware these first connect to the prepo service for the session (Super Mario 3D World + Bowser's Fury calls them entering the save select); the host adds nothing and reports success
 HLE_FORCE("_ZN2nn5prepo12AddSessionIdEPNS0_10PlayReportEPKc", "telemetry session ID: no service connection, nothing added, reports success", Result, h_prepo_AddSess, void *rep, const char *key) { (void)rep; (void)key; return RES_OK; }

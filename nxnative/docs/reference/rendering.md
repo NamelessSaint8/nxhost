@@ -190,6 +190,14 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Check:** independent CPU reference colours versus GPU readback at interiors, horizontal/vertical/corner seams, fractional LOD, array layers, the mip tail and clamped edges, before and after a page remap. Dense-image requirements are queried without allocating the large images. Synthetic constant-colour tiles exercise addressing/filtering; the tiny physical cache is not a measurement of the game's working set. Streaming, eviction, in-flight version lifetimes, other sampler modes/instructions and production shader integration remain open.
 - **Found on:** [Mario Kart World Android storage work](../../dm/games/0400C3F00006E000/README.md#android-replay-and-virtual-atlas-prototype-2026-11-09); 22 checks pass on Adreno 840.
 
+### Full linear virtual pools grant access to their physical backing
+
+- **Symptom:** Android aborts with `direct GPU buffer access to a GPU_NO_ACCESS pool` while binding a buffer from a fully mapped NVN virtual pool.
+- **Cause:** the contiguous mapping uses the physical pool's host address for the virtual pool. Vulkan's lookup finds that address but sees only the physical pool's CPU-only flags.
+- **Fix:** the full linear mapping registers its virtual pool as a GPU user of the backing range. Direct bindings and the raw address table share the backing buffer, created when GPU access is first needed. Finalizing the virtual or physical pool removes the registration.
+- **Check:** the Adreno 840 fixture passes 12 checks with zero-copy memory and 12 with copied memory. GPU writes reach the physical bytes. Two owners share one allocation, duplicate mappings add no owner, and GPU access is rejected before the first mapping and after the last owner closes.
+- **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#first-3d-scene-exposes-buffer-aliasing-and-shader-coverage), at the first 3D scene after the New Game intro.
+
 ### Vulkan compressed atlas mappings preserve image versions
 
 - **Symptom:** compressed sparse atlases would allocate their entire logical size on Android; replacing mappings or recycling compressed cells can also change textures used by an earlier encoded draw.
@@ -1505,4 +1513,5 @@ Digimon Story Cyber Sleuth: Complete Edition (Media.Vision's MVGL engine, SDK 6.
 - **Cause:** creation granted storage usage only when the guest texture carried the `IMAGE` hint. NVN2 programs also bind ordinary colour textures as storage images. A view can restrict its parent's usages, but cannot add a missing one; `EXTENDED_USAGE` broadens compatible-format support, not the image's usage flags. See [Vulkan image view usage](https://docs.vulkan.org/refpages/latest/refpages/source/VkImageViewUsageCreateInfo.html).
 - **Fix:** uncompressed, single-sample colour images include storage usage when their format or a compatible sRGB/UNORM twin supports it. Retain `EXTENDED_USAGE` when storage is supported only by the twin, including with a restricted format list. Depth, compressed and multisample images do not gain this permission through this path. Reject a storage view whose image still lacks storage usage rather than submitting an invalid binding.
 - **Check:** `probes/vk_storage_usage.c` uses the renderer's actual usage helper. Three GPU cases write and read back UNORM storage texels through UNORM and sRGB images, including a restricted format list; all 192 pixels match. The game subsequently binds its ordinary conversion and reconstruction outputs with usage `0x1f`. Remaining image corruption persists, so this validity fix is not claimed as its complete cause.
+- **Open:** native RGB9E5 storage is unavailable on the tested Adreno 840. A synthetic `R32_UINT` storage view on that packed format preserves every word written by compute with or without an explicit compatible-format list. The game path still needs its intended storage view or pack/unpack semantics established before using the compatible view.
 - **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#follow-up-2026-11-15-compute-inputs-and-optimizer-liveness), Adreno840 compute image writes.
