@@ -63,6 +63,19 @@ float inputHalf(uint i) {
 #endif
 }
 float weightHalf(uint i) { return unpackHalf2x16(ReadWord(weightAddress+uint64_t(i/2)*4).value)[i%2]; }
+#ifdef PAIRED_LOADS
+vec2 inputPair(uint i) {
+#ifdef TEXTURE_INPUT
+    uint pixel=i/16,channel=i%16;
+    ivec2 p=ivec2((pixel%WIDTH)*2+(channel/4)%2,(pixel/WIDTH)*2+channel/8);
+    vec4 value=texelFetch(sourceTexture,p,0);
+    return vec2(value[channel%4],value[channel%4+1]);
+#else
+    return unpackHalf2x16(ReadWord(sourceAddress+uint64_t(i/2)*4).value);
+#endif
+}
+vec2 weightPair(uint i) { return unpackHalf2x16(ReadWord(weightAddress+uint64_t(i/2)*4).value); }
+#endif
 vec2 biasPair(uint channel) { return unpackHalf2x16(ReadWord(biasAddress+uint64_t(channel)*2).value); }
 void outputPair(uint index,uint value) {
 #ifndef OMIT_WRITE_LOG
@@ -107,6 +120,10 @@ layout(set=0,binding=4,std430) readonly buffer Addresses { uvec4 ranges[]; };
 uint64_t address(uint binding) { return pair(ranges[binding].x,ranges[binding].y); }
 float inputHalf(uint i) { return unpackHalf2x16(ReadWord(address(0)+uint64_t(i/2)*4).value)[i%2]; }
 float weightHalf(uint i) { return unpackHalf2x16(ReadWord(address(1)+uint64_t(i/2)*4).value)[i%2]; }
+#ifdef PAIRED_LOADS
+vec2 inputPair(uint i) { return unpackHalf2x16(ReadWord(address(0)+uint64_t(i/2)*4).value); }
+vec2 weightPair(uint i) { return unpackHalf2x16(ReadWord(address(1)+uint64_t(i/2)*4).value); }
+#endif
 vec2 biasPair(uint channel) { return unpackHalf2x16(ReadWord(address(2)+uint64_t(channel)*2).value); }
 void outputPair(uint index,uint value) { Word(address(3)+uint64_t(16+index)*4).value=value; }
 #else
@@ -116,6 +133,10 @@ layout(set=0,binding=2,std430) readonly buffer Bias { uint bias[]; };
 layout(set=0,binding=3,std430) buffer Output { uint result[]; };
 float inputHalf(uint i) { return unpackHalf2x16(source[i/2])[i%2]; }
 float weightHalf(uint i) { return unpackHalf2x16(weights[i/2])[i%2]; }
+#ifdef PAIRED_LOADS
+vec2 inputPair(uint i) { return unpackHalf2x16(source[i/2]); }
+vec2 weightPair(uint i) { return unpackHalf2x16(weights[i/2]); }
+#endif
 vec2 biasPair(uint channel) { return unpackHalf2x16(bias[channel/2]); }
 void outputPair(uint index,uint value) { result[16+index]=value; }
 #endif
@@ -155,6 +176,22 @@ void main() {
     d=coopmat<float16_t,gl_ScopeSubgroup,64,TILE_N,gl_MatrixUseAccumulator>(0.0);
 #endif
     for(uint tap=0;tap<9;tap++) for(uint k0=0;k0<CI;k0+=16) {
+#ifdef PAIRED_LOADS
+        // All indices are even: whole K16 inputs and whole native N tiles.
+        for(uint i=lane;i<64*8;i+=64) {
+            uint pixel=firstPixel+i/8;
+            int y=int(pixel/WIDTH)+int(tap/3)-1;
+            int x=int(pixel%WIDTH)+int(tap%3)-1;
+            vec2 value=vec2(0);
+            if(pixel<HEIGHT*WIDTH && y>=0 && y<HEIGHT && x>=0 && x<WIDTH)
+                value=inputPair((uint(y)*WIDTH+uint(x))*CI+k0+(i%8)*2);
+            packedA[i*2]=float16_t(value.x);packedA[i*2+1]=float16_t(value.y);
+        }
+        for(uint i=lane;i<16*(TILE_N/2);i+=64) {
+            vec2 value=weightPair((tap*CI+k0+i/(TILE_N/2))*CO+firstChannel+(i%(TILE_N/2))*2);
+            packedB[i*2]=float16_t(value.x);packedB[i*2+1]=float16_t(value.y);
+        }
+#else
         for(uint i=lane;i<64*16;i+=64) {
             uint pixel=firstPixel+i/16;
             int y=int(pixel/WIDTH)+int(tap/3)-1;
@@ -166,6 +203,7 @@ void main() {
         }
         for(uint i=lane;i<16*TILE_N;i+=64)
             packedB[i]=float16_t(weightHalf((tap*CI+k0+i/TILE_N)*CO+firstChannel+i%TILE_N));
+#endif
         barrier();
 #ifdef FLOAT32_K16
         for(uint col=0;col<TILE_N/4;col++) {

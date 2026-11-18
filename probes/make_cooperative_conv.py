@@ -37,7 +37,7 @@ def tensors(capture, height, width, ci, co):
     return result
 
 
-def build(capture, out, shape, co, tile_n=16):
+def build(capture, out, shape, co, tile_n=16, paired=False):
     h, w, ci = shape
     if min(h, w, ci, co) <= 0 or ci % 16 or co % 16:
         raise ValueError('positive H/W and whole K16/N16 channels required')
@@ -54,16 +54,17 @@ def build(capture, out, shape, co, tile_n=16):
         manifest.append(f'buffer {binding} 7 {len(data)}')
     (out/'layer.tsv').write_text('\n'.join(manifest)+'\n')
     source = Path(__file__).parent/'shaders/cooperative-conv.comp'
+    defines = ['-DPAIRED_LOADS=1'] if paired else []
     subprocess.run(['glslangValidator', '-V', '--target-env', 'vulkan1.2',
                     f'-DHEIGHT={h}', f'-DWIDTH={w}', f'-DCI={ci}', f'-DCO={co}', f'-DTILE_N={tile_n}',
-                    str(source), '-o', str(out/'native.spv')], check=True)
+                    *defines, str(source), '-o', str(out/'native.spv')], check=True)
     subprocess.run(['spirv-val', '--target-env', 'vulkan1.2', str(out/'native.spv')], check=True)
     subprocess.run(['glslangValidator', '-V', '--target-env', 'vulkan1.2',
                     f'-DHEIGHT={h}', f'-DWIDTH={w}', f'-DCI={ci}', f'-DCO={co}', f'-DTILE_N={tile_n}', '-DRAW_LAYOUT=1',
-                    str(source), '-o', str(out/'native.raw.spv')], check=True)
+                    *defines, str(source), '-o', str(out/'native.raw.spv')], check=True)
     subprocess.run(['spirv-val', '--target-env', 'vulkan1.2', str(out/'native.raw.spv')], check=True)
     (out/'experiment.json').write_text(json.dumps(dict(capture=str(capture), shape=shape,
-        channels=co, tile_n=tile_n, output_bytes=len(values[3]), kernel=3, stride=1), indent=2)+'\n')
+        channels=co, tile_n=tile_n, paired_loads=paired, output_bytes=len(values[3]), kernel=3, stride=1), indent=2)+'\n')
 
 
 if __name__ == '__main__':
@@ -73,5 +74,6 @@ if __name__ == '__main__':
     p.add_argument('--shape', nargs=3, type=int, required=True)
     p.add_argument('--channels', type=int, required=True)
     p.add_argument('--tile-n', type=int, choices=(16, 32, 64), default=16)
+    p.add_argument('--paired-loads', action='store_true')
     a = p.parse_args()
-    build(a.capture, a.out, a.shape, a.channels, a.tile_n)
+    build(a.capture, a.out, a.shape, a.channels, a.tile_n, a.paired_loads)

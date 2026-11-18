@@ -1837,3 +1837,97 @@ uncommitted after the requested checkpoint. Reconstruction still costs about
 29 ms. Applying the verified paired source-word packing to the other native
 convolution kernels is the next structural experiment; its benefit there is
 unmeasured.
+
+## Follow-up (2026-11-18): paired convolution packing reaches 13.21 fps
+
+Checkpoint `7a91627f` commits the output-image convolution experiment. The next
+diagnostic applies its paired source-word packing to four existing native
+convolution keys: `ba079f68ae288dba`, `a8b4fb48fee0ccf8`, `e6be82d835fbe4d3` and
+`0a56002cdc7e1fce`, covering seven dispatches. Each load unpacks both halves
+while filling shared matrices. The first convolution also reads two adjacent
+channels from one RGBA fetch. Accumulation, halo padding, bias/ReLU, output
+packing and copied-pool logging keep their preceding behavior.
+
+### Complete outputs stay identical
+
+Twelve GPU fixtures cover integer and fractional tensors, N16/N32/N64 tiles,
+64 output channels and partial final pixel tiles. Scalar and paired packing
+both match an independent dense native-half oracle byte for byte, including
+output canaries; every input stays unchanged. A thirteenth fixture checks the
+fractional RGBA8 texture unshuffle against its complete dense expected pool.
+
+A fresh full-frame capture from `native-six.dmsv` supplies all seven real
+dispatches. Alternating baseline/paired/paired/baseline measurements use eight
+warmups and sixteen timestamp samples each. The table averages each variant's
+two medians:
+
+| Captured dispatch | Baseline | Paired loads | Saving |
+|---|---:|---:|---:|
+| First convolution, sequence 1 | 6.495 ms | 4.745 ms | 1.750 ms |
+| `a8b4`, sequence 2 | 5.190 ms | 3.262 ms | 1.928 ms |
+| `e6be`, sequence 4 | 3.726 ms | 2.354 ms | 1.372 ms |
+| `0a56`, sequence 6 | 3.733 ms | 2.289 ms | 1.444 ms |
+| `0a56`, sequence 7 | 3.731 ms | 2.288 ms | 1.443 ms |
+| `e6be`, sequence 9 | 3.728 ms | 2.355 ms | 1.373 ms |
+| `a8b4`, sequence 11 | 5.194 ms | 3.268 ms | 1.927 ms |
+
+The combined replay saving is **11.236 ms**. For every dispatch, all four
+complete output pools are byte-identical and reproduce the captured pool after
+the original module. Every byte outside the output tensor stays unchanged.
+Together, 984,240 sampled output values match the independent native arithmetic
+model exactly. Pairing loads adds no numerical difference to the preceding
+native diagnostic; original Ampere equivalence remains open for that diagnostic.
+
+### Full-game gain
+
+| Full-game measurement | Previous native diagnostic | Paired convolution diagnostic |
+|---|---:|---:|
+| Frame-600 p50 / p95 | 87.94 / 90.66 ms | 75.69 / 79.10 ms |
+| GPU p50 / p95 | 85.13 / 87.76 ms | 73.04 / 75.77 ms |
+| Approximate frame rate | 11.37 fps | 13.21 fps |
+| First convolution | 6.59 ms | 4.81 ms |
+| Two `a8b4` dispatches | 5.31 / 5.26 ms | 3.35 / 3.38 ms |
+| Two `e6be` dispatches | 3.77 / 3.76 ms | 2.39 / 2.41 ms |
+| Two `0a56` dispatches | 3.76 / 3.75 ms | 2.33 / 2.34 ms |
+| Total timed steps | 79.02 ms | 67.97 ms |
+
+The comparable interval is **13.9% shorter**, or **16.2% more fps**. A fresh
+unchanged-bundle baseline with the same full-frame capture measures 87.26/90.28 ms
+at frame 600; the paired run improves fps by 15.3% against that control. Frame-900
+p50/p95 is 74.73/78.47 ms, frame 1200 is 73.77/77.88 ms, and frame 2400 is
+75.15/78.73 ms. Full-frame capture contributes a 1.48-second outlier in the
+frame-600 interval; later intervals contain no capture work. The normal-allocator
+run keeps all fourteen compute dispatches active, skips none and logs no red
+errors. It reaches frame 2400 and exits gracefully through the configured
+180-second TERM timeout.
+
+All seven fresh in-game outputs again match the native model exactly at 984,240
+sampled values. Every feature-pool byte outside each destination stays unchanged.
+Each captured module validates and is byte-identical to the exact runtime
+coherent-log transform of the selected tracked module. The bundle changes only
+the four named compute modules; all 2,413 other modules, reflection records and
+flags remain identical. The saved moonlit frame shows no visible corruption.
+
+### Validation and next costs
+
+Thirty-seven focused tests pass. The new checks cover paired direct/raw modules
+at all supported tile widths, preserved replay buffers, all four guarded physical
+accesses, texture unshuffle, address-table interfaces and float32 compilation.
+Generated SPIR-V independently validates; focused lint and diff checks pass.
+The five-title Mac regression still lacks packaged builds for OOT, Mario Kart
+World, Bananza, Raiders and Fortune's Weave. The same three unrelated documentation
+failures remain.
+
+One unchanged-bundle baseline attempt crashed before the capture frame at
+`sdk+0x249874`, reading address `0x20`. Its log is preserved; the cause remains
+open. Repeating the baseline with the same host and bundle completed normally.
+
+Artifacts are external under `bringup-20261117/paired-conv/`: `report.json`, `commands.json`,
+`proof-report.json`, `real-report.json`, `next-kernels.json`, `capture/`, `proof/`,
+`real/`, `native-six-paired.dmsv`, `game-paired/`, `frame350.png`, `regression/`
+and source snapshots. Chain `cf82d6110b10`, the host and production translator
+are unchanged. This follow-up
+remains uncommitted after the requested checkpoint. Reconstruction still costs
+about 29 ms. The next unconverted passes are `e2eebd7ba18fe35f` at 5.72 ms and
+`d15370a382630d4e` at 4.55 ms; their captures fit the existing stride-2 convolution
+and residual upsampling references, with numerical equivalence still to establish.

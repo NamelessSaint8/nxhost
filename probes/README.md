@@ -901,6 +901,18 @@ tile widths and check padding/canaries and the independent native-half reference
 This option preserves the preceding diagnostic native arithmetic; it does not
 establish guest numerical equivalence.
 
+`--paired-loads` selects `PAIRED_LOADS` in both direct and raw convolution
+modules. Each lane unpacks both halves of a source or weight word when filling
+shared matrices. The texture-input variant fetches one RGBA texel for each pair
+of adjacent channels, preserving the existing row-major unshuffle and half
+conversion. Whole K16 inputs and supported N tiles keep pair indices even.
+The option also compiles with address-table and float32 arithmetic experiments;
+it changes packing work while keeping accumulation, bias/ReLU, launch partitioning
+and copied-pool logging. Compare complete outputs at each tile width against a
+dense oracle and the preceding module, including input regions, padding and
+canaries. Benchmark coherent raw modules with the exact runtime log transform,
+then measure the selected tracked modules in the full game.
+
 `make_cooperative_conv_proof.py OUT --channels 64` generates integer and fractional
 fixtures covering all 64 output channels. The default remains 32. Rebuild each
 fixture with `make_cooperative_conv.py OUT/integer/fixture DEST --shape 9 13 32

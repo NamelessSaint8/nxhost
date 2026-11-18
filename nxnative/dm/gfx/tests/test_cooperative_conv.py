@@ -51,6 +51,38 @@ class BundleIsolation(unittest.TestCase):
 @unittest.skipUnless(importlib.util.find_spec('numpy') and shutil.which('glslangValidator')
                      and shutil.which('spirv-val'), 'requires numpy and SPIR-V tools')
 class NativeFixtures(unittest.TestCase):
+    def test_paired_loads_preserve_replay_contract_and_raw_guards(self):
+        import json
+        import subprocess
+        from make_cooperative_conv import build
+        from make_cooperative_conv_proof import fixture
+        from raw_memory_guard import guard
+        with tempfile.TemporaryDirectory() as folder:
+            p = Path(folder)
+            fixture(p, fractional=True, channels=64)
+            for n in (16, 32, 64):
+                out = p/f'n{n}'
+                build(p/'fixture', out, (9, 13, 32), 64, n, True)
+                for b in range(4):
+                    self.assertEqual((out/f'layer.b{b}.before.bin').read_bytes(),
+                                     (p/'experiment'/f'layer.b{b}.before.bin').read_bytes())
+                self.assertTrue(json.loads((out/'experiment.json').read_text())['paired_loads'])
+                binary, accesses = guard((out/'native.raw.spv').read_bytes())
+                self.assertEqual(accesses, 4)
+                target = out/'guarded.spv'
+                target.write_bytes(binary)
+                subprocess.run(['spirv-val', '--target-env', 'vulkan1.2', str(target)], check=True)
+            # Pair indexing must also compile with texture unshuffle, physical
+            # address tables and the independent float32 arithmetic path.
+            for defines in (['-DRAW_LAYOUT=1', '-DTEXTURE_INPUT=1'],
+                            ['-DADDRESS_LAYOUT=1'], ['-DFLOAT32_K16=1']):
+                target = p/'interface.spv'
+                subprocess.run(['glslangValidator', '-V', '--target-env', 'vulkan1.2',
+                                '-DHEIGHT=9', '-DWIDTH=13', '-DCI=16', '-DCO=16', '-DPAIRED_LOADS=1',
+                                *defines, str(ROOT/'probes/shaders/cooperative-conv.comp'),
+                                '-o', str(target)], check=True, capture_output=True)
+                subprocess.run(['spirv-val', '--target-env', 'vulkan1.2', str(target)], check=True)
+
     def test_n64_fixture_preserves_all_channels_and_rejects_unsupported_count(self):
         import numpy as np
         from make_cooperative_conv import build, tensors
