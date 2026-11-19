@@ -5,10 +5,10 @@ current_phase: 12
 current_phase_name: One command that verifies a change
 status: planning
 stopped_at: Completed 11-03-PLAN.md
-last_updated: "2026-11-11T16:45:06.646Z"
+last_updated: "2026-11-18T22:29:16.956Z"
 last_activity: 2026-11-11
 last_activity_desc: Phase 13 closed in the roadmap; Phases 1, 2, 11 and 13 complete of 14
-state_head: 0dca94f1fc92385dee45ae3f4fea0f16cfc5721e
+state_head: 6bc4ebfbc600d9c97d9afc6f2682c314a98814b4
 progress:
   total_phases: 14
   completed_phases: 4
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-10-31)
 Phase: 12 — One command that verifies a change
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-11-11 - Completed quick task 261111-fxs: Cut Android Vulkan descriptor-collection CPU for atlas shaders (code left uncommitted in the working tree)
+Last activity: 2026-11-18 - Completed quick task 261118-nit: Align Android buffer-texture copies to the format block size
 
 Progress: [██████████] 100% (every plan written so far is complete: 42 of 42; phases 1, 2, 11 and 13 of 14 closed)
 
@@ -239,6 +239,7 @@ None yet.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 261111-fxs | Cut Android Vulkan descriptor-collection CPU for atlas shaders (atlas set memo + per-submission env/format caches); code uncommitted | 2026-11-11 | 0dca94f1 | [261111-fxs-cut-android-vulkan-descriptor-collection](./quick/261111-fxs-cut-android-vulkan-descriptor-collection/) |
+| 261118-nit | Align Android buffer-texture copies to the format block size, fixing Persona 4 Golden's rainbow textures (verified on the Y700) | 2026-11-18 | this row's commit | [261118-nit-align-android-buffer-texture-copies-to-t](./quick/261118-nit-align-android-buffer-texture-copies-to-t/) |
 
 ## Deferred Items
 

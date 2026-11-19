@@ -1939,6 +1939,10 @@ static VkImageSubresourceLayers sub_of(vkimg_t *im, const view_t *v, int has_v, 
     int layered = im->layers > 1;
     return (VkImageSubresourceLayers){im->aspect & VK_IMAGE_ASPECT_COLOR_BIT ? VK_IMAGE_ASPECT_COLOR_BIT : (im->aspect & VK_IMAGE_ASPECT_DEPTH_BIT ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_STENCIL_BIT), lv, ly + (layered ? (uint32_t)z : 0), 1};
 }
+static VkDeviceSize copy_span(uint32_t w, uint32_t h, uint32_t depth, uint32_t rowlen, uint32_t imgh, uint32_t bw, uint32_t bh, uint32_t bpb) {
+    VkDeviceSize row = (VkDeviceSize)(((rowlen ? rowlen : w) + bw - 1) / bw) * bpb, rows = (h + bh - 1) / bh, slice = (VkDeviceSize)(((imgh ? imgh : h) + bh - 1) / bh) * row;
+    return (VkDeviceSize)(depth - 1) * slice + (rows - 1) * row + (VkDeviceSize)((w + bw - 1) / bw) * bpb;
+}
 static void copy_b2t(const p_copy_b2t *c, int to_texture) {
     vk_end_pass_land();
     vkimg_t *im = vk_tex(c->tex); const vkfmt_t *f = vk_fmt(c->tex->d.format);
@@ -1965,6 +1969,17 @@ static void copy_b2t(const p_copy_b2t *c, int to_texture) {
     VkBufferImageCopy r = {o, rowlen, imgh, sub_of(im, &c->view, c->has_view, c->r.zoffset), {c->r.xoffset, c->r.yoffset, layered ? 0 : c->r.zoffset},
                            {(uint32_t)c->r.width, (uint32_t)(c->r.height ? c->r.height : 1), layered ? 1 : (uint32_t)depth}};
     if (layered) r.imageSubresource.layerCount = (uint32_t)depth;
+    // Vulkan wants bufferOffset on a texel block (4 for depth/stencil), NVN does not: Persona 4 Golden had 315 of 658 BC7 copies 8 bytes off, and the image read back shifted by those 8.
+    // Staged with GPU copies, so a GPU write to the buffer earlier in this submission still counts
+    VkDeviceSize need = f->depth || f->stencil ? 4 : f->bpb, span = 0, go = 0; VkBuffer gb = b; int staged = need && o % need;
+    if (staged) {
+        uint32_t tb = f->depth || f->stencil ? (r.imageSubresource.aspectMask == VK_IMAGE_ASPECT_STENCIL_BIT ? 1 : f->vk == VK_FORMAT_D16_UNORM ? 2 : 4) : f->bpb;   // what Vulkan lays out for this aspect, not NVN's size
+        span = copy_span(r.imageExtent.width, r.imageExtent.height, (uint32_t)depth, rowlen, imgh, bw, bh, tb);
+        if (!vk_buf_at(c->src, span, &gb, &go)) { VKRED_ONCE(77, "buffer ↔ texture copy at an unaligned offset runs past its memory pool, skipped (buffer %#llx, %llu bytes)", (unsigned long long)c->src, (unsigned long long)span); return; }
+        VkDeviceSize so; vk_scratch(span + need, 16, &b, &so); so += (need - so % need) % need; r.bufferOffset = so;
+        // Seeded in both directions: an image to buffer copy leaves the row and slice gaps alone, so the copy back returns the guest's own bytes there
+        VkBufferCopy in = {go, so, span}; vkCmdCopyBuffer(cb, gb, b, 1, &in); vk_img_barrier_all(cb);
+    }
     if (g_watch_off >= 0) { char w[96]; snprintf(w, sizeof w, "buffer copy %s (buffer %#llx, %dx%d)", to_texture ? "destination" : "source", (unsigned long long)c->src, c->r.width, c->r.height); vk_watch(im, w); }
     if (to_texture) { vkCmdCopyBufferToImage(cb, b, im->img, VK_IMAGE_LAYOUT_GENERAL, 1, &r); vk_tex_mark_gpu_write(im); vk_texraw_dump(im, c->tex->serial);
         // DM_VK_TEXPAINT=all (or a serial): right after its copy, a compressed image is cleared to magenta, so the player can say which surfaces draw *this* image.
@@ -1973,11 +1988,12 @@ static void copy_b2t(const p_copy_b2t *c, int to_texture) {
             VkClearColorValue mag = {{1.0f, 0.0f, 1.0f, 1.0f}};
             VkImageSubresourceRange rg = {VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
             vkCmdClearColorImage(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, &mag, 1, &rg); } }
-        char d[160]; snprintf(d, sizeof d, "level %u %ux%u at %d,%d buffer %#llx row %lld image %lld rowlen %u imgh %u spat %d",
+        char d[160]; snprintf(d, sizeof d, "level %u %ux%u at %d,%d buffer %#llx row %lld image %lld rowlen %u imgh %u spat %d staged %d",
                               r.imageSubresource.mipLevel, r.imageExtent.width, r.imageExtent.height, r.imageOffset.x, r.imageOffset.y,
-                              (unsigned long long)c->src, (long long)S.row_stride, (long long)S.image_stride, rowlen, imgh, f->bc != 0);
+                              (unsigned long long)c->src, (long long)S.row_stride, (long long)S.image_stride, rowlen, imgh, f->bc != 0, staged);
         vk_tex_wrote(im, c->tex, 3, d); }
     else { vkCmdCopyImageToBuffer(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, b, 1, &r);
+        if (staged) { vk_img_barrier_all(cb); VkBufferCopy back = {r.bufferOffset, go, span}; vkCmdCopyBuffer(cb, b, gb, 1, &back); }
         void vk_gpu_wrote(uint64_t a, uint64_t n); vkpool_t *p = vk_pool_of(c->src, 1); vk_gpu_wrote(c->src, p ? p->hi - c->src : 1); }   // (to the pool's end: the copy's extent in memory is not worked out here)
     vk_img_barrier_all(cb);
 }

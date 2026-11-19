@@ -5,6 +5,9 @@
 # On the Y700 (2026-11-03): boots, the opening movie plays with sound, and the title screen and its menu draw at 58-60 fps
 # (frame time p50 17.09 ms, GPU p50 2.05 ms) over 4,500 frames with no red log line. A new game, a save, the pause menu,
 # the on-screen gamepad and text entry are not tested yet.
+# On the Y700 (2026-11-18): two saves load and the rooms, street and classroom draw without the rainbow textures (BC7 copies
+# at offsets 8 bytes off a block, now staged in the core) at frame time p50 16.65 ms with no red log line. Audio still runs
+# short in the foreground (about 153 of 200 blocks a second). Saving, the pause menu and battles are not tested yet.
 status	boots
 tested	v65536 Lenovo Legion Y700 TB323FU (Snapdragon 8 Elite Gen 5, Adreno 840, Android 16)
 package	org.nx2a.p4g
