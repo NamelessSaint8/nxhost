@@ -167,7 +167,15 @@ void vk_watch(const vkimg_t *im, const char *what) {
     g_watch_n--; VKLOG("watch: present %llu pass %d (%ux%u): %s %ux%u fmt %d pool %#llx+%#llx (image %p, nvn flags %#x, %d overlapping)", (unsigned long long)g_tex_frame, g_sub_pass - 1, S.pass_w, S.pass_h, what, im->w, im->h, im->fmt,
                        (unsigned long long)im->pool, (unsigned long long)im->off, (const void *)im, im->flags, im->novl);
 }
+static int g_mesh_trace_writers;
+static uint64_t g_mesh_trace_raw_key;
+static uint64_t g_mesh_trace_binding_key, g_mesh_trace_binding_start;
 static void x_read(void) { const char *c = getenv("DM_VK_CB_DRAWS"); g_x_cbdraws = c ? atoi(c) : 128; g_sub_pass = 0;
+    { const char *m = getenv("DM_VK_TRACE_MESH_WRITERS"); g_mesh_trace_writers = m && atoi(m);
+      const char *r = getenv("DM_VK_TRACE_MESH_RAW"); g_mesh_trace_raw_key = r ? strtoull(r, NULL, 16) : 0; }
+    { const char *b = getenv("DM_VK_TRACE_MESH_BINDINGS"), *start = b ? strchr(b, '#') : NULL;
+      g_mesh_trace_binding_key = b ? strtoull(b, NULL, 16) : 0;
+      g_mesh_trace_binding_start = start ? strtoull(start + 1, NULL, 10) : 0; }
     { const char *w = getenv("DM_VK_TRACE_CS"); static char last[64];
       if (!w || !*w || !strcmp(w, "0")) g_cstrace_key = 0;
       else if (strcmp(w, last)) { g_cstrace_key = strtoull(w, NULL, 16); const char *h = strchr(w, '#'); g_cstrace_n = h ? atoi(h + 1) : 1; }
@@ -1204,6 +1212,7 @@ static int set_memo_offsets(int st, const vkshader_t *s, const set_memo_t *m, co
     return changed != 0;
 }
 // dofs (at least s->ndyn entries): the dynamic offsets of the set's dynamic uniform buffers, in binding order as vkCmdBindDescriptorSets takes them
+#include "gfx_vk_mesh_trace.inc"
 static VkDescriptorSet stage_set(int st, vkshader_t *s, uint32_t *dofs) {
     vk_sparse_cpu_poll();
     int memo = st < 3 && !g_x_nosetmemo && !g_tracing && !g_var_now && !g_x_nosetc && !g_x_nodrvc && !g_ubolog_key && g_td_off < 0 && set_memo_ok(s), verify = 0;
@@ -1256,6 +1265,8 @@ static VkDescriptorSet stage_set(int st, vkshader_t *s, uint32_t *dofs) {
                 // bound from the 256-byte boundary below it, the boundary the translator offsets every access from (shader_vk.py SB_ALIGN; a multiple of any device's minimum alignment)
                 const VkDeviceSize al = SB_ALIGN; if (V.props.limits.minStorageBufferOffsetAlignment > al) VKRED_ONCE(41, "storage buffer alignment %llu above %llu", (unsigned long long)V.props.limits.minStorageBufferOffsetAlignment, (unsigned long long)al);
                 bi[nw] = (VkDescriptorBufferInfo){buf, off - off % al, n + off % al};
+                if (st == 5 && (g_mesh_trace_writers || g_mesh_trace_binding_key) && b->kind != RK_UBO_PTR)
+                    mesh_trace_binding(s, b, a, n, buf, off);
                 if (st == 5 && b->kind != RK_UBO_PTR) { void vk_gpu_wrote(uint64_t a, uint64_t n); vk_gpu_wrote(a, n); }   // a dispatch's storage buffers: taken as written
             } else bi[nw] = (VkDescriptorBufferInfo){vk_zero_buffer(), 0, 65536};
             break; }
@@ -1708,6 +1719,59 @@ static void draw_mesh(const p_draw_mesh *d) {
         VkShaderStageFlags flags = VK_SHADER_STAGE_MESH_BIT_EXT | (V.has_task ? VK_SHADER_STAGE_TASK_BIT_EXT : 0);
         vkCmdPushConstants(vk_cmd(), g_draw_layout, flags, 0, sizeof *d, d);
         vkCmdDrawMeshTasksEXT(vk_cmd(), d->count, 1, 1);
+        static int trace_read, traced;
+        static uint64_t trace_key;
+        if (!trace_read) {
+            const char *key = getenv("DM_VK_TRACE_MESH");
+            if (key) trace_key = strtoull(key, NULL, 16);
+            trace_read = 1;
+        }
+        if (!traced && trace_key == mesh->key) {
+            traced = 1;
+            VKLOG("mesh draw issued: present %llu, mesh %016llx fragment %016llx, first %u groups %u",
+                (unsigned long long)g_tex_frame, (unsigned long long)mesh->key,
+                (unsigned long long)(S.sh[1] ? S.sh[1]->key : 0), d->first, d->count);
+        }
+    }
+}
+static void trace_mesh_indirect(const p_trace_mesh_indirect *d) {
+    static unsigned samples;
+    if (samples >= 8) return;
+    const char *filter = getenv("DM_VK_TRACE_MESH_INDIRECT");
+    if (!filter || !*filter || !strcmp(filter, "0")) return;
+    const char *start = strchr(filter, '#');
+    if (start && g_tex_frame < strtoull(start + 1, NULL, 10)) return;
+    const vkshader_t *mesh = S.sh[7], *pixel = S.sh[1];
+    int all = !strcmp(filter, "all");
+    if (!all && (!mesh || mesh->key != strtoull(filter, NULL, 16))) return;
+    VkBuffer source, staging;
+    VkDeviceSize from, to;
+    if ((d->args & 3) || !vk_buf_at(d->args, 16, &source, &from)) {
+        VKLOG("indirect mesh trace: address %#llx has no aligned Vulkan backing", (unsigned long long)d->args);
+        samples++;
+        return;
+    }
+    mesh_trace_find_writers(d->args, 16);
+    vk_end_pass_land();
+    const uint32_t *words = vk_scratch(16, 4, &staging, &to);
+    VkCommandBuffer cb = vk_cmd();
+    vk_img_barrier_all(cb);
+    VkBufferCopy copy = {from, to, 16};
+    vkCmdCopyBuffer(cb, source, staging, 1, &copy);
+    vk_img_barrier_all(cb);
+    vk_cmd_sync_host();
+    VKLOG("indirect mesh trace: present %llu mesh %016llx fragment %016llx address %#llx words %08x %08x %08x %08x",
+        (unsigned long long)g_tex_frame, (unsigned long long)(mesh ? mesh->key : 0),
+        (unsigned long long)(pixel ? pixel->key : 0), (unsigned long long)d->args,
+        words[0], words[1], words[2], words[3]);
+    samples++;
+    // The observed one-dimensional records have a group count in word 0
+    // and zeroes in both middle words. This opt-in replay uses the same
+    // first-group-zero path as direct draws. Other records remain diagnostic.
+    const char *replay = getenv("DM_VK_REPLAY_MESH_INDIRECT");
+    if (!all && replay && atoi(replay) && words[0] && !words[1] && !words[2]) {
+        p_draw_mesh draw = {.first = 0, .count = words[0]};
+        draw_mesh(&draw);
     }
 }
 static void draw(const p_draw *d,unsigned max_draws,unsigned stride);
@@ -1846,7 +1910,15 @@ int vk_compute_probe_tool(void) {
 }
 static void dispatch(const p_dispatch *d) {
     vkshader_t *cs = S.sh[5];
-    if (!cs) { VKRED_ONCE(60, "dispatch with no compute shader in the bundle: skipped"); return; }
+    if (!cs) {
+        if (g_mesh_trace_writers) {
+            uint8_t key[8];
+            uint64_t first = S.prog && prog_key(S.prog, 0, key) ? key64(key) : 0;
+            for (unsigned i = 0; i < 16; i++)
+                mesh_trace_record("missing compute program, NVN slot", first, i, 0, S.ssbo[5][i].addr, S.ssbo[5][i].size);
+        }
+        VKRED_ONCE(60, "dispatch with no compute shader in the bundle: skipped"); return;
+    }
     if(d->ind){VkBuffer b;VkDeviceSize o;if(!vk_buf_at(d->ind,12,&b,&o) || o%4)die("[RED] [vk] indirect dispatch arguments outside a valid aligned buffer");}
     else if(d->x<0 || d->y<0 || d->z<0 || (uint32_t)d->x>V.props.limits.maxComputeWorkGroupCount[0] || (uint32_t)d->y>V.props.limits.maxComputeWorkGroupCount[1] || (uint32_t)d->z>V.props.limits.maxComputeWorkGroupCount[2])die("[RED] [vk] dispatch group count exceeds device limits");
     g_vkst.dispatches++;
@@ -1862,6 +1934,8 @@ static void dispatch(const p_dispatch *d) {
                 match = n == 16 && !strncmp(f, k, 16); f = c ? c + 1 : NULL; } }
         if (match) {
             g_vkst.skip_cs++;
+            if (g_mesh_trace_writers) for (unsigned i = 0; i < 16; i++)
+                mesh_trace_record("skipped compute program, NVN slot", cs->key, i, 0, S.ssbo[5][i].addr, S.ssbo[5][i].size);
             static _Atomic int shown;
             if (atomic_fetch_add(&shown, 1) < 12) VKLOG("dispatch %016llx %dx%dx%d%s skipped (DM_VK_CSKIP)", (unsigned long long)cs->key, d->x, d->y, d->z, d->ind ? " (indirect)" : "");
             return;
@@ -1891,6 +1965,8 @@ static void dispatch(const p_dispatch *d) {
             if (file) { fwrite(S.push[1], 1, DMSH_PUSH_SIZE, file); fclose(file); VKLOG("compute push constants: %s", path); }
         }
     }
+    g_mesh_dispatch_watch = 0;
+    g_mesh_bind_count = 0;
     uint32_t dofs[96]; VkDescriptorSet set = stage_set(5, cs, dofs);
     g_tracing = was_tracing;
     if(capture){
@@ -1921,6 +1997,13 @@ static void dispatch(const p_dispatch *d) {
         cscap_write("spv",actual->spv,(size_t)actual->nspv*4);
     }
     vk_img_barrier_all(cb);
+    const uint32_t *mesh_before[MESH_TRACE_RECORDS] = {0};
+    const uint32_t *mesh_groups = NULL;
+    if (g_mesh_trace_writers && g_mesh_trace_raw_key == cs->key) mesh_trace_raw_bindings();
+    if (g_mesh_dispatch_watch) {
+        mesh_trace_copy(cb, mesh_before);
+        mesh_groups = mesh_trace_group_copy(cb, d->ind);
+    }
     vk_compute_ts(0,cs->key,g_dispatch[0],g_dispatch[1],g_dispatch[2]);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, (uint32_t)cs->ndyn, dofs);
@@ -1928,6 +2011,7 @@ static void dispatch(const p_dispatch *d) {
     else vkCmdDispatch(cb, (uint32_t)d->x, (uint32_t)d->y, (uint32_t)d->z);
     vk_img_barrier_all(cb);
     vk_compute_ts(1,cs->key,g_dispatch[0],g_dispatch[1],g_dispatch[2]);
+    if (g_mesh_dispatch_watch) mesh_trace_dispatch_end(cb, cs, mesh_before, mesh_groups);
     if(capture)cscap_copy(1);
     if (crumbs_on()) { crumb_t *c = crumb_cur(); if (c->n < 8) { c->k[c->n][0] = 0; c->k[c->n][1] = 0; c->k[c->n][2] = cs->key; c->n++; } crumb_mark(1); }
     if (g_x_tracepass == -2) VKLOG("--- dispatch %016llx %dx%dx%d%s after pass %d", (unsigned long long)cs->key, d->x, d->y, d->z, d->ind ? " (indirect)" : "", g_sub_pass - 1);   // (DM_VK_TRACE_PASS=-2 lists the dispatches too)
@@ -2246,9 +2330,9 @@ static void exec_ops(const uint8_t *p) {
         case OP_REPORT_COUNTER: { uint64_t t, ad; memcpy(&t, a, 8); memcpy(&ad, a + 8, 8); if (DM_GAME_RENDER_COND) rc_note(ad, t == 0 || t == 0x10 ? 1 : 2); mtl_sub_counter(ad, (uint32_t)t); break; }
         case OP_RESET_COUNTER: break;
         case OP_FENCE_SYNC: { sync_t *s; memcpy(&s, a, 8); s->fence = mtl_last_fence() + 1; s->fenced = 1; break; }
-        case OP_COPY_B2B: { uint64_t s_, d, n; memcpy(&s_, a, 8); memcpy(&d, a + 8, 8); memcpy(&n, a + 16, 8); mtl_sub_copy(s_, d, n); break; }
-        case OP_CLEAR_BUF: { const p_clear_buf *c = (const p_clear_buf *)a; mtl_sub_fill(c->addr, c->size, c->value); break; }
-        case OP_UPDATE_UB: { uint64_t d, n; memcpy(&d, a, 8); memcpy(&n, a + 8, 8); vk_sub_update(d, a + 16, n); break; }
+        case OP_COPY_B2B: { uint64_t s_, d, n; memcpy(&s_, a, 8); memcpy(&d, a + 8, 8); memcpy(&n, a + 16, 8); mesh_trace_record("buffer copy", 0, 0, 1, d, n); mtl_sub_copy(s_, d, n); break; }
+        case OP_CLEAR_BUF: { const p_clear_buf *c = (const p_clear_buf *)a; mesh_trace_record("buffer clear", 0, 0, 1, c->addr, c->size & ~3ull); mtl_sub_fill(c->addr, c->size, c->value); break; }
+        case OP_UPDATE_UB: { uint64_t d, n; memcpy(&d, a, 8); memcpy(&n, a + 8, 8); mesh_trace_record("inline update", 0, 0, 1, d, n); vk_sub_update(d, a + 16, n); break; }
         case OP_PUSH_CONST: {
             if(h.size<8+sizeof(p_push_const))die("[RED] [vk] truncated push constant record");const p_push_const *b=(const p_push_const*)a;
             if(b->compute>1 || b->offset>DMSH_PUSH_SIZE || b->size>DMSH_PUSH_SIZE-b->offset || b->size>h.size-8-sizeof*b)die("[RED] [vk] invalid push constant record");
@@ -2288,6 +2372,7 @@ static void exec_ops(const uint8_t *p) {
         case OP_DRAW: { if (g_rc_skip) break; p_draw t;uint32_t count,stride;size_t bytes=indirect_span(p,0,&count,&stride);draw(draw_rec(a,h.size,&t),count,stride);p+=bytes-h.size;break; }
         case OP_DRAW_IDX: { if (g_rc_skip) break; p_draw_idx t;uint32_t count,stride;size_t bytes=indirect_span(p,1,&count,&stride);draw_idx(draw_idx_rec(a,h.size,&t),count,stride);p+=bytes-h.size;break; }
         case OP_DRAW_MESH: if (!g_rc_skip) draw_mesh((const p_draw_mesh *)a); break;
+        case OP_TRACE_MESH_INDIRECT: if (!g_rc_skip) trace_mesh_indirect((const p_trace_mesh_indirect *)a); break;
         case OP_DRAW_TEX: draw_tex((const p_draw_tex *)a); break;
         case OP_DISPATCH: dispatch((const p_dispatch *)a); break;
         case OP_BARRIER:   // the pass ends at every barrier: kept across XC3's fragment- and primitive-order barriers (0x1 0x2 0x4) its characters drew torn in some frames

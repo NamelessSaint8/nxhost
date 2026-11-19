@@ -8,6 +8,26 @@ texels, sampler parameters, and storage results. Copies immediately bracket the
 dispatch, preserve packed bits, and synchronize readback. Capture perturbs
 scheduling and is a diagnostic mode.
 
+`DM_VK_TRACE_MESH=<shader key>` logs the first direct Vulkan mesh
+draw issued for the key. `DM_VK_TRACE_MESH_INDIRECT=<shader key>` reads
+the first eight matching 16-byte NVN indirect argument records at
+replay time. Append `#<minimum present>` to start watching a key later
+in the run, or use `all` to include any bound mesh stage. The readback
+waits for Vulkan producers, so use it outside benchmark windows.
+With an exact mesh key and `DM_VK_REPLAY_MESH_INDIRECT=1`, sampled
+records with a positive first word and zero second and third words go
+through the direct Vulkan path with that count and first group zero.
+Add `DM_VK_TRACE_MESH_WRITERS=1` to log overlapping compute bindings,
+buffer copies, clears, and updates from recent replay commands. The trace
+follows up to eight draw and dispatch argument records and samples them
+before and after matching compute dispatches, including their GPU-supplied
+group counts. Set `DM_VK_TRACE_MESH_RAW=<shader key>` to sample watched
+addresses around a selected dispatch that accesses raw GPU memory.
+Use `DM_VK_TRACE_MESH_BINDINGS=<compute key>[#<minimum present>]` to sample
+the first 16 bytes of every resolved storage binding of a selected compute
+pass before and after execution. The log includes the real indirect group
+counts.
+
 Version 1 accepts direct dispatches with buffers and single-level, single-layer
 uncompressed 2D colour images. Unsupported descriptors, shapes and module
 variants fail explicitly. Extract the translated SPIR-V from the same DMSV;
@@ -324,6 +344,10 @@ loading a game. Ten GPU readbacks cover padded vertex inputs, direct and task me
 separate task/mesh bindings with negative controls, per-primitive fragment inputs,
 a conventional vertex draw afterward and oversized-launch rejection. The per-primitive
 fragment starts as SPIR-V 1.0 to exercise the runtime's mesh-qualification upgrade.
+`vknvn2_replay bundle.dmsv --mesh-indirect-record` checks GPU-written
+records with the opt-in readback replay. The live case draws green.
+Zero counts, nonzero middle words, and readback alone preserve the blue
+clear color.
 An optional `vknvn2_replay bundle.dmsv --load-only` checks bundle/runtime metadata
 and creates shader modules and descriptor layouts without dispatch.
 Keep game-derived bundles external and explicitly identify load-only results.

@@ -39,7 +39,7 @@ CAP_SIZE(p_clear_buf, 24); CAP_OFF(p_clear_buf, addr, 0); CAP_OFF(p_clear_buf, s
 CAP_SIZE(p_tf_bind, 24); CAP_OFF(p_tf_bind, addr, 8); CAP_OFF(p_tf_bind, size, 16);
 CAP_SIZE(p_tf_state, 16); CAP_OFF(p_tf_state, ctl, 8);
 CAP_SIZE(p_render_cond, 16); CAP_OFF(p_render_cond, mode, 0); CAP_OFF(p_render_cond, addr, 8);
-_Static_assert(OP_COUNT_ == 56, "nvn_capture.c: a record op was added or removed: give it a case in cap_rec_fields");
+_Static_assert(OP_COUNT_ == 57, "nvn_capture.c: a record op was added or removed: give it a case in cap_rec_fields");
 
 const char *cap_layout(void) {
     // sizes and pointer offsets as the walk knows them (the asserts above hold them to nvn_obj.h); bump this text with any change to the walk
@@ -100,6 +100,7 @@ int cap_rec_fields(uint32_t op, uint8_t *payload, uint32_t size, const cap_ops *
         case OP_DRAW: if (HAS(24)) ok &= ops->addr(ctx, F(24), 16, 0); if (HAS(32)) ok &= ops->addr(ctx, F(32), 4, 0); return ok;
         case OP_DRAW_IDX: if (!HAS(24)) return 0; ok &= ops->addr(ctx, F(24), 0, 0); if (HAS(32)) ok &= ops->addr(ctx, F(32), 20, 0); if (HAS(40)) ok &= ops->addr(ctx, F(40), 4, 0); return ok;
         case OP_DISPATCH: return !HAS(24) || ops->addr(ctx, F(24), 12, 0);   // caller (+8) is a code address, kept as it is
+        case OP_TRACE_MESH_INDIRECT: return HAS(0) && ops->addr(ctx, F(0), 16, 0);
         case OP_SET_TEX_POOL: case OP_SET_SAMP_POOL: return HAS(0) && ops->obj(ctx, CAP_K_DPOOL, F(0), payload, (uint32_t)plen);
         case OP_COPY_B2T: case OP_COPY_T2B: {   // src: the buffer address (the destination for T2B)
             if (!HAS(8)) return 0;

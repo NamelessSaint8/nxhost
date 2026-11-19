@@ -116,6 +116,7 @@ split and built in the background rather than inline in a probe.
 - [Inactive multi-probe atomic logging slows a cooperative kernel](../../../docs/reference/shaders.md#inactive-multi-probe-atomic-logging-slows-a-cooperative-kernel): controlled replays reproduce the gap and a coherent-only diagnostic recovers the full-game dispatch cost.
 - [Offline play report sends need a completed async context](../../../docs/reference/services.md#offline-play-report-sends-need-a-completed-async-context): the first post-intro abort comes from a user-scoped telemetry report.
 - [Full linear virtual pools grant access to their physical backing](../../../docs/reference/rendering.md#full-linear-virtual-pools-grant-access-to-their-physical-backing): a storage buffer binding in the first 3D scene exposes the lost access.
+- [Trace GPU-written mesh and compute arguments](../../../docs/reference/rendering.md#trace-gpu-written-mesh-and-compute-arguments).
 - Every RomFS `.zs` is a **dictionary** frame: the census's first run reported no BNSH under the whole dump because the reader had no
   `Pack/ZsDic.pack.zs` table. `shader_split` already supported such frames (Tears of the Kingdom); the census did not load the table.
 - `shader_map.tsv` names one shader source this dump has and Mario Kart World's does not: `Shader/ApplicationPackage.Nin_Ounce_NVN2.release.sarc.zs`
@@ -2645,3 +2646,119 @@ RGB9E5 image, both with and without a format list, and reads every word
 back unchanged. The next game trace needs the storage view format and
 the shader's image operand type. That determines whether the binding
 already expects packed integers or needs explicit conversion.
+
+### Packed foliage mesh and indirect argument trace
+
+The diagnostic bundle in `bringup-20261118/player-route/mesh-pair-proof/`
+changes only mesh `3fa631a86435d3e8` and fragment `1019c4564aa0d265`.
+This foliage pair reads 17 scalar components across seven locations.
+The variant packs them into four smooth locations and one flat
+location. The fragment keeps its operations and resource bindings, and
+the mesh wrapper still reads the same original stage-buffer words.
+Both modules pass SPIR-V validation. The Vulkan loader accepts the
+new 27 KiB allocation, down from 35 KiB within the same 32 KiB budget.
+
+The saved-game replay reaches the same room and exits cleanly. Its
+first eight indirect calls with the packed pair bound, at presents
+3531–3538, address two alternating buffers. Each 16-byte record reads
+as four zero words on the GPU after the preceding commands. The
+saved-game route does not establish a nonempty draw for this material.
+The new trace records the selected pair and arguments at replay time.
+
+An isolated pipeline using both game stages initially aborts during
+Adreno compilation with a Scudo mapping failure. An SSA cleanup reduces
+the mesh module from 309,272 to 170,380 bytes, but the ordinary allocator
+still returns `std::bad_alloc`. With the existing process-local
+mimalloc and the smaller module, Vulkan creates the exact paired
+pipeline successfully. The standalone suite passes all 19 checks.
+Its draw checks use synthetic geometry, and the real game pipeline is
+compiled only. The shader sources, captures, and compiler outcomes
+are archived under `mesh-pair-proof/`. Replaying a nonempty indirect
+record for the material remains open.
+
+### Foliage indirect buffer producers
+
+The saved-game trace for mesh `3fa631a86435d3e8` identifies compute
+`60dd0e6eac91f712` as the draw-argument producer. Its translated atomics
+update the instance counter at byte 12 and the mesh group count at
+byte 0 in binding 9. GPU readbacks across twelve dispatches show
+`(0, 1, 1)` group counts and all-zero draw records before and after
+the dispatch. The zero X count leaves this dispatch with no work.
+
+Binding 6 of the earlier foliage compute `f85fe64924e7e6f5` covers the
+dispatch arguments for `60dd0e6eac91f712`. Its translated atomics
+update the count at byte 12 and use the accumulated count to compute
+the X group count at byte 0. The next replay observes `(0, 1, 1)`
+on the GPU before both indirect dispatches. The first dispatch's
+input is part of its own binding 2. No earlier resolved binding in
+that trace covers the record. The first two GPU traces are archived as
+`gameplay-mesh-chains/log.txt` and `gameplay-mesh-upstream/log.txt`
+under `bringup-20261118/player-route/`.
+
+The first direct pass, `5a2e37058f21c8a5`, runs 169 workgroups.
+Its shader uses a raw output pointer table. At byte `0x150` of
+binding 1, the pointer alternates with the exact argument address
+consumed by `f85fe64924e7e6f5`. Both records stay at `(0, 1, 1)`
+across the direct dispatch in `gameplay-mesh-raw/log.txt`.
+The separate capture at present 3520, in
+`gameplay-mesh-candidate/captures/`, confirms the target pointer
+has Vulkan backing. It assigns logical warps 614–651 to this output
+category and finds identical bytes before and after dispatch in every
+resolved storage binding.
+
+The remaining question is whether the room's culling produces zero
+accepted candidates or translation loses a live candidate or write.
+A capture of the same pass in a view with visible foliage is the
+comparison. The traces synchronize GPU work and supply no frame-time
+measurement.
+
+### Moving Link activates both indirect foliage passes
+
+Holding the left stick down for two seconds from the initial Link's
+house view produces a second repeatable view. The screenshot is
+still very dark. In the GPU trace at presents 4889–4891, direct
+compute `5a2e37058f21c8a5` produces 12 X groups for
+`f85fe64924e7e6f5`, which in turn changes the next X count from
+zero to four. Compute `60dd0e6eac91f712` receives those four
+groups and leaves the selected mesh's four words at zero. This
+establishes that the first two producers can write live counts in
+the saved-game route. The run and recorded controls are under
+`bringup-20261118/player-route/gameplay-mesh-outdoor-nav/`.
+
+The scripted repeat starts the same move at present 3957. Across
+12 samples starting at present 4500, binding 6 contains
+`(4, 1, 1, 218)` at dispatch entry. Binding 9 remains zero.
+The companion output in binding 10 changes from zero to
+`(14, 0, 0, 218)`. The translated group-count calculation divides
+the candidate count by 16 and rounds up. The selected draw's zero
+record is consistent with the shader assigning all candidates to
+the companion output.
+
+A trace of eight mesh calls at present 5098 finds three nonempty
+records. The first words are 290, 156 and 1 for mesh keys
+`65a079a285d693a0`, `d98076e4148db34f` and `839241636fce850a`,
+respectively. The middle words are zero for each call. These are
+game-authored records read back on the GPU in
+`gameplay-mesh-moved-bindings/log.txt`.
+
+### Live replay of nonempty mesh records
+
+The opt-in readback replay of `839241636fce850a` with fragment
+`37c8ff9d85f7eb20` reads `(1, 0, 0, 10)` at present 4500.
+Graphics pipeline creation succeeds in 81.25 ms and Vulkan records
+one mesh group at first group zero. The next GPU wait returns
+`VK_ERROR_DEVICE_LOST`. The process exits at 139 after the host's
+fatal handler, and the tablet remains accessible. The failing run
+is archived in `gameplay-mesh-indirect-live/`.
+
+The alternate pair `d98076e4148db34f` and `31939e82a58a9fbc`
+uses the same path for eight nonempty records at presents 4500–4507.
+Their counts are 157–158 groups. The GPU completes the draw submissions
+and the game continues presenting beyond 4508. The run is archived as
+`gameplay-mesh-indirect-alt/`.
+
+The isolated GPU fixture passes all four pixel checks using the same
+readback and draw path. Both real pairs pass SPIR-V validation for
+Vulkan 1.2. Visual correctness in the game and the cause of device
+loss for the first pair remain open. The opt-in replay synchronizes
+every sampled draw and supplies no performance measurement.

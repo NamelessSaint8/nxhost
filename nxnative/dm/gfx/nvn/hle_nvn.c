@@ -55,13 +55,26 @@ void *nvn_big_real[NVN_NFUNC];            // the real implementation of function
 void *nvn_real[NVN_NFUNC];               // DM_NVN_PROF: the real implementation called by the timing wrapper
 _Atomic uint64_t nvn_prof_ticks[NVN_NFUNC]; // DM_NVN_PROF: cumulative time of each function (cntvct counts)
 static uint8_t g_unimpl_seen[NVN_NFUNC];
+#ifdef DM_ANDROID
+static void trace_mesh_indirect(NVNcommandBuffer *c, uint64_t args);
+#endif
 
-uint64_t nvn_unimpl_c(nvn_slot_t *slot, uint64_t x0, uint64_t x1, uint64_t x2) {
+uint64_t nvn_unimpl_c(nvn_slot_t *slot, uint64_t x0, uint64_t x1, uint64_t x2, const void *caller) {
     unsigned i = (unsigned)(slot - nvn_slot);
     if (!g_unimpl_seen[i]) {   // a flag, not a count (nvn_slot counts the calls): one byte counted up wrapped at 256, and a function called every few frames printed its "once" line again and again (Super Mario RPG: 15 times in six minutes)
         g_unimpl_seen[i] = 1;
         LOG("[RED] NVN unimplemented function called: %s (x0=%#llx x1=%#llx x2=%#llx)", nvn_names[i], x0, x1, x2);
+        module_t *m = module_of(caller);
+        if (m) LOG("[nvn] %s called from %s+%#llx", nvn_names[i], m->name,
+            (unsigned long long)((uintptr_t)caller - (uintptr_t)m->base));
     }
+#ifdef DM_ANDROID
+    if (!strcmp(nvn_names[i], "nvnCommandBufferDrawMeshTasksIndirect")) {
+        const char *mesh_trace = getenv("DM_VK_TRACE_MESH_INDIRECT");
+        if (mesh_trace && *mesh_trace && strcmp(mesh_trace, "0"))
+            trace_mesh_indirect((NVNcommandBuffer *)(uintptr_t)x0, x1);
+    }
+#endif
     return 0;
 }
 
@@ -1062,6 +1075,11 @@ NVN(nvnCommandBufferSetDepthRange, void, NVNcommandBuffer *c, float n, float f) 
 NVN_NOPROTO(nvnCommandBufferDrawMeshTasks, void, NVNcommandBuffer *c, uint32_t first, uint32_t count) {
     *REC(c, OP_DRAW_MESH, p_draw_mesh) = (p_draw_mesh){first,count};
 }
+#ifdef DM_ANDROID
+static void trace_mesh_indirect(NVNcommandBuffer *c, uint64_t args) {
+    *REC(c, OP_TRACE_MESH_INDIRECT, p_trace_mesh_indirect) = (p_trace_mesh_indirect){args};
+}
+#endif
 NVN(nvnCommandBufferBindProgram, void, NVNcommandBuffer *c, const NVNprogram *p, int stages) {
     *REC(c, OP_BIND_PROGRAM, p_bind_program) = (p_bind_program){(const prog_t *)p, stages};
 }

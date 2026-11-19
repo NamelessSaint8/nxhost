@@ -48,7 +48,7 @@ class PayloadLayout(unittest.TestCase):
         self.assertEqual(job['local'], [32, 1, 1])
 
     def test_rejects_payload_overflow_before_compilation(self):
-        info = dict(kind=6, threads=32, attr_words=513)
+        info = dict(kind=6, threads=32, attr_words=nvn2_mesh.PAYLOAD_WORDS + 1)
         with self.assertRaisesRegex(ValueError, 'payload exceeds'):
             nvn2_mesh.compose('void main(){}', info)
 
@@ -99,7 +99,7 @@ class StageBufferCompilation(unittest.TestCase):
                     self.assertIn('OpEntryPoint '+model, disassembly)
             metadata = json.loads((Path(directory)/'conversion-results.json').read_text())['metadata']['task']
             fields = struct.unpack('<9I', nvn2_mesh.reflection(metadata, (Path(directory)/'task.vk.spv').read_bytes()))
-            self.assertEqual(fields[:4], (1, 32, 2048, 32))
+            self.assertEqual(fields[:4], (1, 32, 4 * nvn2_mesh.PAYLOAD_WORDS, 32))
             # A GLSL round trip gives buffers instance suffixes. Bindings must
             # still be classified using their translator ABI block names.
             source = Path(directory)/'bindings.comp'

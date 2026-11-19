@@ -14,14 +14,16 @@ int __wrap_prog_key(const prog_t *p, unsigned st, uint8_t key[8]) {
     return 1;
 }
 static void test_case(unsigned mode) {
-    static const char *names[] = {"direct", "task", "empty", "zero-count", "bad-task-ubo", "bad-mesh-ssbo", "per-primitive", "vertex-after-mesh", "oversize-groups", "padded-inputs"};
+    static const char *names[] = {"direct", "task", "empty", "zero-count", "bad-task-ubo", "bad-mesh-ssbo", "per-primitive", "vertex-after-mesh", "oversize-groups", "padded-inputs",
+        "indirect-live", "indirect-empty", "indirect-unknown-record", "indirect-readback-only"};
     uint8_t *memory = mmap(NULL, 65536, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (memory == MAP_FAILED) abort();
     mtl_pool_add(memory, 65536);
     prog_t program = {.serial = 200 + mode};
     int task = mode == 1 || mode == 2 || mode == 4 || mode == 5;
-    program.sd[program.nstage++].data = mode == 9 ? 21 : mode == 7 ? 9 : mode == 6 ? 7 : task ? 3 : 4;
-    program.sd[program.nstage++].data = mode == 9 ? 22 : mode == 7 ? 10 : mode == 6 ? 8 : task ? 6 : 5;
+    int primitive = mode == 6 || mode >= 10;
+    program.sd[program.nstage++].data = mode == 9 ? 21 : mode == 7 ? 9 : primitive ? 7 : task ? 3 : 4;
+    program.sd[program.nstage++].data = mode == 9 ? 22 : mode == 7 ? 10 : primitive ? 8 : task ? 6 : 5;
     if (task) program.sd[program.nstage++].data = mode == 2 ? 2 : 1;
     tex_t target = {.magic = MAGIC('T','E','X',0), .serial = 300 + mode};
     target.d.width = target.d.height = 32; target.d.depth = target.d.samples = target.d.levels = 1;
@@ -40,7 +42,22 @@ static void test_case(unsigned mode) {
         p_bind_buf uniform = {.stage = stage, .index = 0, .addr = (uint64_t)cb, .size = 64}; EMIT(OP_BIND_UBO, uniform);
         p_bind_buf storage = {.stage = stage, .index = 0, .addr = (uint64_t)sb, .size = 64}; EMIT(OP_BIND_SSBO, storage);
     }
-    if (mode == 7 || mode == 9) { p_draw d = {.prim = 4, .count = 3, .instances = 1}; EMIT(OP_DRAW, d); }
+    if (mode >= 10) {
+        uint64_t address = (uint64_t)(memory + 16384);
+        p_clear_buf args = {.addr = address, .size = 16};
+        EMIT(OP_CLEAR_BUF, args);
+        if (mode != 11) {
+            p_clear_buf count = {.addr = address, .size = 4, .value = 1};
+            EMIT(OP_CLEAR_BUF, count);
+        }
+        if (mode == 12) {
+            p_clear_buf middle = {.addr = address + 4, .size = 4, .value = 1};
+            EMIT(OP_CLEAR_BUF, middle);
+        }
+        p_trace_mesh_indirect draw = {.args = address};
+        EMIT(OP_TRACE_MESH_INDIRECT, draw);
+    }
+    else if (mode == 7 || mode == 9) { p_draw d = {.prim = 4, .count = 3, .instances = 1}; EMIT(OP_DRAW, d); }
     else { p_draw_mesh d = {.first = 0x3f800000, .count = mode == 3 ? 0 : mode == 8 ? UINT32_MAX : 1}; EMIT(OP_DRAW_MESH, d); }
     op_hdr end = {OP_END,8}; memcpy(memory + used, &end, 8);
 #undef EMIT
@@ -49,7 +66,7 @@ static void test_case(unsigned mode) {
     uint8_t pixels[4096]; NVNcopyRegion region = {.width = 32, .height = 32, .depth = 1};
     mtl_read_texels(&target, 0, 0, &region, pixels, 128, 4096);
     const uint8_t *center = pixels + (16 * 32 + 16) * 4;
-    unsigned empty = mode == 2 || mode == 3 || mode == 4 || mode == 8;
+    unsigned empty = mode == 2 || mode == 3 || mode == 4 || mode == 8 || mode >= 11;
     unsigned red = mode == 5;
     uint8_t expected[4]={red?255:0,empty||red?0:255,empty?255:0,255};
     for(unsigned i=0;i<4;i++)if(!(proof_write_mask>>i&1))expected[i]=(uint8_t)(clear.rgba[i]*255);
@@ -99,6 +116,15 @@ int __wrap_main(int argc, char **argv) {
     if(argc==3 && (!strncmp(argv[2],"--atlas",7) || !strcmp(argv[2],"--explicit-lod") || !strcmp(argv[2],"--uncompressed-atlas") || !strcmp(argv[2],"--sparse-depth") || !strcmp(argv[2],"--measure") || !strcmp(argv[2],"--implicit-atlas") || !strcmp(argv[2],"--offset-atlas")))setenv("DM_VK_ATLAS","1",1);
     if(argc==3 && (!strcmp(argv[2],"--copy-pages") || !strcmp(argv[2],"--ownership-checks")))setenv("DM_VK_ATLAS","1",1);
     mtl_init();
+    if (argc == 3 && !strcmp(argv[2], "--mesh-indirect-record")) {
+        setenv("DM_VK_TRACE_MESH_INDIRECT", "7", 1);
+        setenv("DM_VK_REPLAY_MESH_INDIRECT", "1", 1);
+        for (unsigned i = 10; i <= 12; i++) test_case(i);
+        unsetenv("DM_VK_REPLAY_MESH_INDIRECT");
+        test_case(13);
+        printf("Indirect mesh records: %u checks, %u failed\n", checks, failed);
+        return failed != 0;
+    }
     if(argc==3 && !strcmp(argv[2],"--prewarm-recorded")){
         setenv("DM_VK_PREWARM_SYNC","1",1);unsetenv("DM_VK_NOPREWARM");uint64_t start=measure_ns(CLOCK_MONOTONIC);vk_exec_reset();uint64_t processed,total;vk_prewarm_stats(&processed,&total);
         memory_check(total>0 && processed==total,"synchronous startup processes every unique recorded pipeline before replay");

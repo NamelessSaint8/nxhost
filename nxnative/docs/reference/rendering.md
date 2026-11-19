@@ -1481,6 +1481,14 @@ Digimon Story Cyber Sleuth: Complete Edition (Media.Vision's MVGL engine, SDK 6.
 - **Check:** the production replay passes ten indexed/nonindexed GPU checks. Both arguments and counts are written by preceding GPU copies; counts 0, 1, 2 and 100 with a two-record maximum and stride 32 produce the expected pixels.
 - **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#android-full-game-bring-up-2026-11-10).
 
+### Trace GPU-written mesh and compute arguments
+
+- **Symptom:** an NVN indirect mesh call reaches replay with an empty argument record.
+- **Diagnostic:** combine `DM_VK_TRACE_MESH_INDIRECT=<key>` with `DM_VK_TRACE_MESH_WRITERS=1`. Replay logs recent compute bindings and buffer commands that overlap the argument record. It samples GPU-visible words around matching dispatches and follows their indirect group-count addresses to earlier passes. With `DM_VK_TRACE_MESH_RAW=<key>`, it also samples watched records around a selected dispatch that uses raw addresses. The before/after values show whether the dispatch changed the record.
+- **Compute bindings:** `DM_VK_TRACE_MESH_BINDINGS=<key>[#<minimum present>]` samples the first four words of each resolved storage binding around a selected dispatch. It works independently of the mesh draw watch and reports GPU-supplied dispatch counts.
+- **Synthetic check:** the opt-in indirect replay passes a positive GPU-written count through the direct Vulkan draw path with first group zero. The fixture checks the rendered pixel for the live draw, a zero count, a nonzero middle word, and readback with replay disabled.
+- **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#foliage-indirect-buffer-producers), in the saved-game Android replay.
+
 
 ### Imageless framebuffers inherit attachment-view usage
 
