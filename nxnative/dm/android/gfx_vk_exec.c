@@ -15,6 +15,7 @@
 void vk_shader_c1(vkshader_t *s, VkBuffer *buf, VkDeviceSize *off, VkDeviceSize *len);
 VkBufferView vk_tbuf_view(const tex_t *t);
 void vk_sub_update(uint64_t dst, const void *data, uint64_t n);
+int vk_gpu_pending(uint64_t a, uint64_t n);   // gfx_vk_core.c: a GPU write to that range may not have completed (its result is not in guest memory yet)
 int prog_key(const prog_t *p, unsigned st, uint8_t key[8]);
 
 // ---------------- NVN state shadow ----------------
@@ -2027,6 +2028,10 @@ static VkDeviceSize copy_span(uint32_t w, uint32_t h, uint32_t depth, uint32_t r
     VkDeviceSize row = (VkDeviceSize)(((rowlen ? rowlen : w) + bw - 1) / bw) * bpb, rows = (h + bh - 1) / bh, slice = (VkDeviceSize)(((imgh ? imgh : h) + bh - 1) / bh) * row;
     return (VkDeviceSize)(depth - 1) * slice + (rows - 1) * row + (VkDeviceSize)((w + bw - 1) / bw) * bpb;
 }
+// DM_VK_B2T_SNAP (live): a buffer → texture copy's source bytes are taken at encode time instead of being left for the
+// GPU to read from the guest's buffer (see copy_b2t). It costs one memcpy of the copied span per upload
+static int b2t_snap_on(void) { const char *e = getenv("DM_VK_B2T_SNAP"); return e && atoi(e); }
+static uint64_t g_b2t_snap_n, g_b2t_snap_bytes;
 static void copy_b2t(const p_copy_b2t *c, int to_texture) {
     vk_end_pass_land();
     vkimg_t *im = vk_tex(c->tex); const vkfmt_t *f = vk_fmt(c->tex->d.format);
@@ -2056,8 +2061,27 @@ static void copy_b2t(const p_copy_b2t *c, int to_texture) {
     // Vulkan wants bufferOffset on a texel block (4 for depth/stencil), NVN does not: Persona 4 Golden had 315 of 658 BC7 copies 8 bytes off, and the image read back shifted by those 8.
     // Staged with GPU copies, so a GPU write to the buffer earlier in this submission still counts
     VkDeviceSize need = f->depth || f->stencil ? 4 : f->bpb, span = 0, go = 0; VkBuffer gb = b; int staged = need && o % need;
-    if (staged) {
-        uint32_t tb = f->depth || f->stencil ? (r.imageSubresource.aspectMask == VK_IMAGE_ASPECT_STENCIL_BIT ? 1 : f->vk == VK_FORMAT_D16_UNORM ? 2 : 4) : f->bpb;   // what Vulkan lays out for this aspect, not NVN's size
+    uint32_t tb = f->depth || f->stencil ? (r.imageSubresource.aspectMask == VK_IMAGE_ASPECT_STENCIL_BIT ? 1 : f->vk == VK_FORMAT_D16_UNORM ? 2 : 4) : f->bpb;   // what Vulkan lays out for this aspect, not NVN's size
+    int snap = 0;
+    if (to_texture && need && !rowlen && !imgh && b2t_snap_on()) {
+        // DM_VK_B2T_SNAP: the source bytes as the recording left them, taken into scratch now, so the GPU reads what the
+        // copy was recorded from rather than what the guest has put in that memory by the time the queue reaches the copy.
+        // A title streams a whole set of textures through one staging block and rewrites it as soon as the copy is recorded
+        // (Persona 5 Royal's GFD uploader uses three blocks for 438 textures; Catherine: Full Body's subtitle band was the
+        // same fault), and on the Switch the GPU has consumed the bytes by then: read at execution the copy gets the next
+        // texture's blocks. A source the GPU wrote in work that may still be running is not in guest memory, and is read
+        // from the buffer as before (vk_gpu_pending). Row and image strides are the guest's layout, not this snapshot's
+        VkDeviceSize n = copy_span(r.imageExtent.width, r.imageExtent.height, (uint32_t)depth, rowlen, imgh, bw, bh, tb);
+        if (n && n <= (64u << 20) && !vk_gpu_pending(c->src, n)) {
+            VkDeviceSize so0, so; uint8_t *sp = vk_scratch(n + need, 16, &b, &so0);
+            so = so0 + (need - so0 % need) % need; memcpy(sp + (so - so0), (const void *)(uintptr_t)c->src, n);
+            o = so; r.bufferOffset = so; snap = 1; g_b2t_snap_n++; g_b2t_snap_bytes += n;
+            if (g_b2t_snap_n < 5 || !(g_b2t_snap_n & 511)) VKLOG("b2t snapshot %llu: serial %llu %ux%u %#x, %.2f MB of the source copied at encode (%llu copies, %.1f MB)",
+                (unsigned long long)g_b2t_snap_n, (unsigned long long)c->tex->serial, r.imageExtent.width, r.imageExtent.height, c->tex->d.format, n / 1048576.0,
+                (unsigned long long)g_b2t_snap_n, g_b2t_snap_bytes / 1048576.0);
+        }
+    }
+    if (!snap && staged) {
         span = copy_span(r.imageExtent.width, r.imageExtent.height, (uint32_t)depth, rowlen, imgh, bw, bh, tb);
         if (!vk_buf_at(c->src, span, &gb, &go)) { VKRED_ONCE(77, "buffer ↔ texture copy at an unaligned offset runs past its memory pool, skipped (buffer %#llx, %llu bytes)", (unsigned long long)c->src, (unsigned long long)span); return; }
         VkDeviceSize so; vk_scratch(span + need, 16, &b, &so); so += (need - so % need) % need; r.bufferOffset = so;
@@ -2072,9 +2096,9 @@ static void copy_b2t(const p_copy_b2t *c, int to_texture) {
             VkClearColorValue mag = {{1.0f, 0.0f, 1.0f, 1.0f}};
             VkImageSubresourceRange rg = {VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
             vkCmdClearColorImage(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, &mag, 1, &rg); } }
-        char d[160]; snprintf(d, sizeof d, "level %u %ux%u at %d,%d buffer %#llx row %lld image %lld rowlen %u imgh %u spat %d staged %d",
+        char d[192]; snprintf(d, sizeof d, "level %u %ux%u at %d,%d buffer %#llx row %lld image %lld rowlen %u imgh %u spat %d staged %d snap %d",
                               r.imageSubresource.mipLevel, r.imageExtent.width, r.imageExtent.height, r.imageOffset.x, r.imageOffset.y,
-                              (unsigned long long)c->src, (long long)S.row_stride, (long long)S.image_stride, rowlen, imgh, f->bc != 0, staged);
+                              (unsigned long long)c->src, (long long)S.row_stride, (long long)S.image_stride, rowlen, imgh, f->bc != 0, staged, snap);
         vk_tex_wrote(im, c->tex, 3, d); }
     else { vkCmdCopyImageToBuffer(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, b, 1, &r);
         if (staged) { vk_img_barrier_all(cb); VkBufferCopy back = {r.bufferOffset, go, span}; vkCmdCopyBuffer(cb, b, gb, 1, &back); }

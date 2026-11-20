@@ -49,6 +49,7 @@ The source of each switch is in `nxnative/dm/android/` unless noted. Check the c
 | `DM_VK_FLIPY=0` | live | the old clip-space y convention (pictures flip) |
 | `DM_VK_X_NOBAR`, `X_DEPTH`, `X_COLOR` | live | cost measurements that **draw wrong**: no barrier before a pass; depth neither loaded nor stored; colour not loaded unless cleared |
 | `DM_VK_X_NOSETC`, `X_NODRVC`, `X_LANDCUT`, `X_NOKEEP`, `X_NOSHC` | live | flicker experiments: no descriptor-set reuse; no driver-segment reuse; deferred uniform updates land at each cut; no pass kept for repeated targets; no uniform-shadow reuse |
+| `DM_VK_B2T_SNAP=1` | live, per buffer → texture copy | copy the source bytes into scratch at encode time and let the GPU read them there, instead of leaving the GPU to read the game's staging buffer when the queue reaches the copy. A title that streams a set of textures through one reused staging block (Persona 5 Royal's GFD uploader: 438 textures through three blocks) then gets each copy's own bytes; read at execution, the copy gets whatever was written next. Costs one memcpy of the copied span per upload; a source the GPU wrote in work that may still be running is read from the buffer as before |
 | `DM_VK_DYN_UBO=0` | start-up | no dynamic uniform-buffer offsets (descriptor reuse drops) |
 | `DM_VK_NOPREWARM=1` | start-up | no pipeline prewarm |
 | `DM_VK_UBWC=1` | start-up | experiment: format lists instead of mutable formats on colour images |
