@@ -31,3 +31,13 @@ title.keys
 
 # Editor workspace files, per developer
 *.code-workspace
+
+# Agent tool state and probe captures (hundreds of MB, never part of a build)
+/.qwen/
+/.wolf/
+# Generated research cache
+/.planning/research/.cache/
+# A stray directory a shell redirect created, named like an option
+/--romfs-image/
+# A compiled probe; its source mtl_sparse_probe.m is the tracked one
+/nxnative/dm/tools/mtl_sparse_probe
