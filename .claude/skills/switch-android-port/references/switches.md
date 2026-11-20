@@ -75,6 +75,7 @@ The source of each switch is in `nxnative/dm/android/` unless noted. Check the c
 | `DM_NO_ADPF=1` | start-up | no Android performance hints |
 | `DM_OPMODE=0/1` | start-up (`host/hle_oe.c`) | handheld / docked at launch. The pause menu's Mode setting (`docked=` in `settings.txt`) overrides it and switches live |
 | `DM_AUDIO=0` | start-up (`host/hle_audio.c`) | silent sink (Android defaults to real output) |
+| `DM_AUDIO_PACE=0` | each stream open (`compat/audiotoolbox_aaudio.c`) | a stream that is not low latency (a normal mixer track when MMAP is refused) is rendered by a thread one 5 ms block at a time into a small ring the device callback reads, so the guest gets its blocks back on an even clock; `0` renders straight from the device callback (Persona 4 Golden then got 150 of 200 blocks a second on the Y700's 20 ms bursts). With `DM_AUDIO_LOG=1` a `audio paced output` line every 10 s gives the frames the device found missing |
 | `DM_TOUCH_DOCKED=screen` | first touch read (`host/hle_touch.c`) | profile env: docked touch points as a game that takes the panel's values as screen pixels expects them (Unity 2019.4: x = screen column, y = screen row − 360 on 1920x1080). On Android touches reach the game in both modes (`hle_hid.c` `touch_on`); a Switch has no docked touch |
 
 ## Control file lines (`ctl.txt`)

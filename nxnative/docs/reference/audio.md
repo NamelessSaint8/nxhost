@@ -52,10 +52,10 @@ For a replaced DSP renderer the size query keeps the service's work-buffer contr
 
 ### The renderer's update lock (`update_lock`)
 
-- **Symptom:** none of its own; command generation races the game's `Update` on SDKs whose lock is not at SDK 16's offset.
-- **Cause:** `AudioRenderSystem::Update` holds a mutex in `AudioRenderSystem`; `GenerateCommand` does not take it, so the host does (the auto-mode system thread does the same in `SendCommandToDsp`). Which mutex depends on the SDK: `nn::os::LockMutex(MutexType *)` at +0x1d0 in SDK 4.4 and at +0x1d8 in 6.4–8.2, `SdkMutexType::Lock` at +0x1d8 in 10.4–11.4, +0x1f0 in 13.3–16.2 and +0x1f8 in 17.5 (the `sdk` builds of 24 games on hand), inlined in 19 and 20 (+0x2d0, the Span layout: [SDK 20's `AudioRenderSystem` layout](#sdk-20s-audiorendersystem-layout)). The host took SDK 16's for every SDK before 20, which wrote a lock word into another field and excluded nothing.
-- **Fix:** `update_lock` in `hle_audren.c` reads it off the SDK's own `Update`: the register the prologue adds the offset to and moves into x0 before its first `bl`, whose PLT slot must hold `LockMutex` or `SdkMutexType::Lock`; anything else keeps SDK 16's.
-- **Found on:** [Mario Kart 8 Deluxe](../../dm/games/0100152000022000/README.md) (4.4), the first game it was plainly wrong for.
+- **Symptom:** command generation races the game's `Update` when the host chooses the wrong mutex. In Ocarina of Time the render thread can fault at address `0x20` in `AddressInfo::GetReference` while its voice data changes.
+- **Cause:** `GenerateCommand` relies on the caller to hold the mutex taken by the game's update path and the SDK's `SendCommandToDsp`. The offset depends on the SDK. Examples include `LockMutex` at +0x1d0 in SDK 4.4 and +0x1d8 in SDK 6.4–8.2, and `SdkMutexType::Lock` at +0x1d8 in SDK 10.4–11.4, +0x1f0 in SDK 13.3–16.2 and +0x1f8 in SDK 17.5. In the Span layout, the update wrapper calls `UpdateImpl`, which holds the lock at +0x2d0 in earlier builds and +0x2d8 in Ocarina of Time.
+- **Fix:** `update_lock` in `hle_audren.c` reads the prologue of `Update` or, for the Span layout, `UpdateImpl`. The offset must be passed in x0 before the first `bl`, and its PLT slot must resolve to `LockMutex` or `SdkMutexType::Lock`. If the prologue does not match, retain the fallback for the detected layout.
+- **Found on:** [Mario Kart 8 Deluxe](../../dm/games/0100152000022000/README.md) (SDK 4.4) and [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#intro-audio-update-lock) (Span layout).
 - **Check:** checked with sound on [Big Brain Academy: Brain vs. Brain](../../dm/games/0100620012D6E000/README.md) (11.4, +0x1d8), [DRAGON QUEST XI S](../../dm/games/01006C300E9F0000/README.md) (7.3, `MutexType` +0x1d8) and [Super Mario Odyssey](../../dm/games/0100000000010000/README.md) (7.3, which is silent for its first minute with either lock).
 
 ### No `SdkMutexType` in SDK 3
