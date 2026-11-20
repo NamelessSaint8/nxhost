@@ -235,6 +235,8 @@ namespace Ryujinx.Graphics.Shader
             return 16;
         }
 
+        bool QueryHostSupportsWideGmemMap() => false;
+
         /// <summary>
         /// Queries host shader subgroup size.
         /// </summary>

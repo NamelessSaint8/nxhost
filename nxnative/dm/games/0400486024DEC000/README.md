@@ -109,6 +109,7 @@ split and built in the background rather than inline in a probe.
 - [Vector HMMA gathers with bounded tile reuse](../../../docs/reference/shaders.md#vector-hmma-gathers-with-bounded-tile-reuse): integrated compute acceleration, preserving the scalar helper's results and reducing measured frame work by about 45%.
 - [Guarded deferred writes overwrite newer register values](../../../docs/reference/shaders.md#guarded-deferred-writes-overwrite-newer-register-values): corrected collapsed glyph geometry and restored menu text.
 - [Android reserved global-memory descriptors bind zero buffers](../../../docs/reference/shaders.md#android-reserved-global-memory-descriptors-bind-zero-buffers): binding and visibility corrected; the active neural path exposes another rendering defect.
+- [Android raw global memory exceeds 4,095 pool ranges](../../../docs/reference/shaders.md#android-raw-global-memory-exceeds-4095-pool-ranges): first-scene streaming exceeded the table and shader search capacity.
 - [Expression propagation delays mutable reads past overwrites](../../../docs/reference/shaders.md#expression-propagation-delays-mutable-reads-past-overwrites): the first incorrect nonzero weight fragment is traced to a shared-memory read moved past an overwrite; corrected full-network movie frames render cleanly on Adreno.
 - [Raw write logs track pages the zero-copy backend does not consume](../../../docs/reference/shaders.md#raw-write-logs-track-pages-the-zero-copy-backend-does-not-consume): controlled tensor replays isolate logging and lookup costs; coherent zero-copy outputs now omit redundant page tracking.
 - [Repeated raw pointer accesses search every pool again](../../../docs/reference/shaders.md#repeated-raw-pointer-accesses-search-every-pool-again): a validated invocation-private cache recovers the upsampling regression and improves the other mixed-memory pass; guarded timing can predict the wrong performance direction.
@@ -117,6 +118,7 @@ split and built in the background rather than inline in a probe.
 - [Offline play report sends need a completed async context](../../../docs/reference/services.md#offline-play-report-sends-need-a-completed-async-context): the first post-intro abort comes from a user-scoped telemetry report.
 - [Full linear virtual pools grant access to their physical backing](../../../docs/reference/rendering.md#full-linear-virtual-pools-grant-access-to-their-physical-backing): a storage buffer binding in the first 3D scene exposes the lost access.
 - [Trace GPU-written mesh and compute arguments](../../../docs/reference/rendering.md#trace-gpu-written-mesh-and-compute-arguments).
+- [The renderer's update lock](../../../docs/reference/audio.md#the-renderers-update-lock-update_lock): this SDK moves the mutex used to protect voice updates.
 - Every RomFS `.zs` is a **dictionary** frame: the census's first run reported no BNSH under the whole dump because the reader had no
   `Pack/ZsDic.pack.zs` table. `shader_split` already supported such frames (Tears of the Kingdom); the census did not load the table.
 - `shader_map.tsv` names one shader source this dump has and Mario Kart World's does not: `Shader/ApplicationPackage.Nin_Ounce_NVN2.release.sarc.zs`
@@ -2643,9 +2645,161 @@ The tablet reports storage support for `R32_UINT` and none for
 RGB9E5. The standalone device proof in `oot-rgb9e5-storage.log` writes
 64 packed words through a compatible `R32_UINT` storage view of an
 RGB9E5 image, both with and without a format list, and reads every word
-back unchanged. The next game trace needs the storage view format and
-the shader's image operand type. That determines whether the binding
-already expects packed integers or needs explicit conversion.
+back unchanged.
+
+The game trace in `gameplay-rgb9e5-trace-fast/` identifies shader
+`a335c1db6270c355`, binding 3 and image slot 2. The 1440×810 texture has
+format RGB9E5 and the guest explicitly registers an `R32UI` view. The
+translated shader's two image stores assemble the packed RGB9E5 word in
+integer operations before bitcasting it to the formatless operand. The
+backend grants storage usage through the alternate view, and its
+existing unsigned-image variant passes the same bits to Vulkan.
+The production replay fixture verifies packed readback and the native
+sampling view with each image creation mode. The fixture and logs are
+under `bringup-20261118/player-route/`.
+
+### Intro audio update lock
+
+The first patched run in `gameplay-rgb9e5-storage-fast/` stops early in the
+intro after 230 decoded pictures. Its audio thread faults at address
+`0x20` in `AddressInfo::GetReference` at `sdk+0x249874`. The SDK
+checks a valid voice address from `this+0x10`, reloads it from the same
+object, and then dereferences the now-null pointer. The two readings
+happen inside the host's `GenerateCommand` call.
+
+The host announced a lock at `AudioRenderSystem+0x2d0`. Both
+`UpdateImpl` at `sdk+0x238530` and `SendCommandToDsp` at
+`sdk+0x238e70` pass `this+0x2d8` to the same PLT entry, which resolves
+to `SdkMutexType::Lock`. Mario Kart World's local SDK uses `+0x2d0`
+at the same calls. See [the renderer's update lock](../../../docs/reference/audio.md#the-renderers-update-lock-update_lock)
+for the SDK-derived selection.
+
+The startup smoke test and the combined replay both report
+`SdkMutexType at +0x2d8`. The combined replay decodes all 9,254 pictures
+and reports no audio crash before or during the transition. The earlier
+replay in `gameplay-rgb9e5-fresh-fast/` stopped presenting after its
+frame-7800 report and was stopped after a thread dump. Its stall has not
+been attributed to a specific wait.
+
+### Post-intro dialogue and the raw memory table limit
+
+The `gameplay-rgb9e5-audio-fast/` replay uses the packed-view and audio
+fixes, with the original 2,625-entry gameplay coverage bundle. After the
+movie it successfully runs the unsigned variant of `a335c1db6270c355`
+and presents the 3D scene's dialogue. Frames 16200 and 17753 show
+successive lines of text on a black background. The sampled 1920×1080 and
+2560×1440 color targets at present 17016 are black.
+
+The 600 frames ending at 16200 execute 47,138 compute dispatches with
+zero new skips. They skip 93,084 draws for missing shader programs.
+The 300-frame report ending at 17700 is 34.33 ms p50 and 50.06 ms p95
+wall time, with 30.79 ms GPU p50. This measures the incomplete
+post-intro scene. Player movement and the first gameplay save remain
+unverified. The save directory still contains only `account.sav`.
+
+The replay then stops at `raw global-memory pool table capacity
+exceeded`. Vulkan now supports [a wider pool table and shader lookup](../../../docs/reference/shaders.md#android-raw-global-memory-exceeds-4095-pool-ranges).
+
+The later replay captured 148 shader records and exposed 112 keys beyond
+the earlier missing-key lists. The translator produced 97 modules from
+those keys, each validated for Vulkan 1.2. The separate
+`player-route-gameplay-dialogue.dmsv` bundle includes those 97 and the
+17 validated additions from the prior trace, preserving all 2,625
+entries used by this replay. The expanded bundle awaits an on-device run.
+
+The wider table passed 20 synthetic checks on the tablet with 4,152
+registered ranges. The Mac then panicked and rebooted at 14:55 EST during
+the ten-worker build of the widened gameplay bundle, before the full game
+replay launched. The panic report records 94 seconds without a
+`watchdogd` check-in, 100% of the memory compressor's segment limit,
+and 67 swapfiles. This establishes host memory pressure at the panic.
+The report gives no per-process memory totals for assigning the cause.
+The reboot cleared the temporary translation outputs. The resumed build
+reads only the source archives it needs and writes each batch to
+`bringup-20261118/player-route/wide-gmem-resume/`. Its memory guard
+stopped the size-optimized compile of mesh shader `6311cb728285f17d`
+when system-wide free memory reached 39%. The remaining 19 mesh stages
+compiled with glslang optimization disabled. Those batches finished at
+62–65% free memory. The resulting diagnostic bundle contains 122
+Vulkan-validated widened stages and leaves the other 2,617 entries
+byte-identical, including the saved movie variants.
+
+The handheld replay `gameplay-wide-gmem-fast/` uses that bundle and the
+same movie compute skips as the previous route. It reaches 4,108 live
+ranges after present 18000 and continues through the former abort at
+17753. At present 16200 the raw capture shows the Deku Tree and forest
+in the 1920×1080 region of the 2560×1440 texture, with the dialogue on
+top. The matching frame from the previous replay shows only dialogue.
+Over the 600 presents ending at 16200, draws skipped for missing
+programs fall from 93,084 to 25,251. The 300-frame report ending at
+16200 measures 57.59 ms wall p50 and 72.04 ms p95. The report ending
+at 18600 measures 36.13 ms wall p50 and 52.57 ms p95. These are
+cutscene timings from the expanded shader bundle.
+
+The replay reaches player control in Link's house. Present 23756 shows
+the movement and camera prompts, and frames 24087, 24129, and 24174
+show the view before input, after a right-stick turn, and after
+forward movement. The run generates `save/slot_00/progress.sav` and
+`caption.sav`. The save, warmed pipeline cache, 187 captured shader
+records, and screenshots are archived with the run. The host publishes
+exit status 0 after a graceful stop beyond frame 24900.
+
+The 300-frame gameplay window ending at 24900 measures 77.54 ms wall
+p50 (12.9 fps), 93.81 ms wall p95, and 75.87 ms GPU p50. Three
+dispatches of upscaling shader `7c511cc23ff85d14` account for 18.49 ms
+in the final 70.44 ms GPU pass report. Several mesh stages still fail
+device-limit checks, `nvnCommandBufferDrawMeshTasksIndirect` is
+unimplemented, and the room renders very dark. The gameplay save has
+been preserved for a shorter profiling route.
+
+### Reloaded Link's house gameplay benchmark
+
+The Kokiri Forest autosave reloads into Link's house with the movement
+and camera prompts. The archived `source/oot_gameplay_benchmark.py`
+starts from a copy of that save and the warmed pipeline cache. It
+selects and confirms the save at fixed presents, holds the initial
+view, then turns the camera at 5100 and moves forward at 5350. Both
+runs in `bringup-20261118/player-route/gameplay-benchmark-{a,b}/`
+exited cleanly. The benchmark captures the 1920×1080 region written
+inside the 2560×1440 present texture.
+
+| Window, 300 frames | Run A wall p50 / p95 | Run B wall p50 / p95 |
+| --- | ---: | ---: |
+| Fixed view, ending at 4800 | 36.20 / 51.31 ms | 37.83 / 49.75 ms |
+| Turn and move, ending at 5400 | 35.19 / 50.63 ms | 34.67 / 55.52 ms |
+
+Both runs skip 103,101 draws for missing programs in the 600 presents
+ending at 4800. The two runs skip 107,196 and 107,199 respectively in
+the following 600 presents. The faster reloaded route has a different
+draw and dispatch workload from the first arrival at the house.
+
+`7c511cc23ff85d14` comes from `agl_ndsr_vr_light.pck`. Its three
+captured dispatches, at presents 6000 and 7050 in run A and 4950 in
+run B, sample packed RGB9E5 at 854×480 and write packed R11G11B10 at
+1920×1080. Each captured present has one call to this shader. The
+standalone tablet replay matches the captured storage bytes for all
+three cases and takes 6.06 ms median per call. An SSA cleanup reduces
+the module from 1,341,204 to 1,090,176 bytes and takes 5.97 ms median,
+with both storage bindings still matching byte for byte on all three
+inputs. Each measurement uses four warmups and 24 timed dispatches.
+The original captures and the diagnostic SPIR-V are archived with the
+run. The gameplay bundle still uses the original shader.
+
+All ten rejected mesh stages are over the tablet's 32 KiB mesh-output
+allocation limit. Its 256-vertex and 256-primitive allocation
+granularities put their calculated requirements at 35–47 KiB. Seven
+are foliage shaders and three are model shaders. The six observed
+foliage pixel partners declare every corresponding mesh output
+location. Analysing their scalar loads by interpolation mode suggests
+three of the six pairs could fit in 27 KiB with packed outputs. The
+other three still project to 35 KiB. These estimates use the host's
+allocation formula and await a matching mesh and fragment variant.
+
+The unimplemented indirect mesh call reaches the HLE from
+`main+0x18690c` after the call instruction at `main+0x186908`. The
+caller loads a command-buffer handle into x0 and computes the GPU
+argument address in x1. It does not set x2 for the call. The argument
+record contents still need verification before implementing replay.
 
 ### Packed foliage mesh and indirect argument trace
 

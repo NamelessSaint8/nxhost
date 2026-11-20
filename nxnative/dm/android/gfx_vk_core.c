@@ -648,7 +648,7 @@ struct vksub {
     dfree_t *df; int ndf, capdf;
     post_op *post; int npost, cappost;
     struct { uint64_t lo, hi; } gw[64]; int ngw;   // GPU writes into pool memory in this submission (sub_gpu_wrote), for pools_copy_back: nearby ones merged, and once full each joins the nearest
-    VkDescriptorBufferInfo gmem_map; uint32_t gmem_gen; int gmem_valid,gmem_coherent;
+    VkDescriptorBufferInfo gmem_map; uint32_t gmem_gen; unsigned gmem_count; int gmem_valid,gmem_coherent;
     const uint32_t **gmem_logs; unsigned ngmem_logs, capgmem_logs;
 };
 enum { GW_SUB = 64 };

@@ -69,7 +69,9 @@ vkpool_t *vk_pool_of_buffer(VkBuffer buffer); // diagnostics: registered pool ba
 int vk_buf_at(uint64_t addr, uint64_t len, VkBuffer *buf, VkDeviceSize *off);   // GPU buffer + offset of a pool address range
 // Pools that could not be made zero-copy keep a GPU copy refreshed before each submission (vk_pools_sync, called from mtl_sub_commit)
 void vk_pools_sync(VkCommandBuffer cb);
-void vk_gmem_descriptor(int log, VkDescriptorBufferInfo *out);
+#define VK_GMEM_WIDE_ENTRIES (2 * DMSH_GMEM_MAP_ENTRIES)
+#define DMSV_WIDE_GMEM_MAP 16u
+void vk_gmem_descriptor(int log, unsigned entries, uint64_t key, VkDescriptorBufferInfo *out);
 void vk_gmem_finish(void); // complete indirect stores and publish their logged pages before another replay operation reads guest memory
 int vk_gmem_coherent(void); // current immutable map contains no copied destination
 
@@ -136,8 +138,8 @@ struct vkimg {
     uint64_t lin_gen;               // linear textures: the upload command buffer (g_up_gen) that last copied it from its pool (vk_tex: lin_copy)
     uint64_t depth_sub;   // the submission (gfx_vk_exec.c g_set_epoch) whose passes last used it as their depth attachment
     uint64_t depth_cut;   // and the command buffer within it (gfx_vk_exec.c g_cuts)
-    int fixed_fmt;   // created with a format list (DM_VK_UBWC): views only in its format or its sRGB twin
-    VkFormat fmt2;   // with fixed_fmt: the other format of its list (its sRGB twin), VK_FORMAT_UNDEFINED when the list is its format alone
+    int fixed_fmt;   // created with a format list (DM_VK_UBWC): views only in its format or its listed alternate
+    VkFormat fmt2;   // with fixed_fmt: the other format of its list, VK_FORMAT_UNDEFINED when the list is its format alone
     VkImageView full;               // a view of the whole image as created
     VkBufferView tbuf;              // buffer textures: a texel buffer view of the pool
     uint64_t last_use,touch_ns;     // last submission fence and monotonic use time
@@ -203,6 +205,7 @@ typedef struct vkshader {
     uint32_t in_locs, out_locs;         // the vec4 (or per-vertex vec4) inputs and outputs it declares, by location
     int setmemo;                        // gfx_vk_exec.c stage_set: 1 its set may be memoized per stage, 3 too and also keyed on vk_atlas_version (it has atlas bindings), 2 not (it reads handles or addresses from uniform buffer memory), 0 not known yet
     struct vkshader *coherent; int coherent_checked,raw_writer,cooperative;
+    unsigned gmem_entries;
 } vkshader_t;
 vkshader_t *vk_shader(uint64_t key, int stage);   // NULL when the bundle has no such shader
 VkShaderModule vk_shader_module(vkshader_t *s, uint64_t um, uint64_t im, uint32_t xo, int fd, uint32_t pm, uint32_t ou, uint32_t oi);   // pm: per-primitive inputs; ou/oi: unsigned/signed attachment locations

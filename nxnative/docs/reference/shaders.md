@@ -1066,6 +1066,14 @@ Finding, keying and translating shaders (`dm/gfx/tools/shader_split.py`, `dmsh_b
 - **Replay diagnostics:** `DM_VK_CAPTURE_POOLS=1` captures bounded complete pools and descriptor aliases, including storage slots absent from reflection. The v2 runner relocates the global table, guards physical reads/writes against captured allocations and compares complete pool outputs. Uncaptured raw accesses fail before dereference. `DM_VK_CAPTURE_FRAME=N` retains every dispatch of one frame. See [the proof instructions](../../../probes/README.md#bounded-android-vulkan-proofs). A changed log or replay equality alone does not establish correct arithmetic; the nonzero layer investigation found [delayed mutable reads](#expression-propagation-delays-mutable-reads-past-overwrites).
 - **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#follow-up-2026-11-15-global-writes-execute-and-expose-neural-corruption): the two slow kernels now consume substantial nonzero feature data. The older zero-output experiment remains documented separately.
 
+### Android raw global memory exceeds 4,095 pool ranges
+
+- **Symptom:** replay aborts with `raw global-memory pool table capacity exceeded` while a scene streams in more GPU-accessible pools.
+- **Cause:** the original descriptor has 4,096 rows, including the empty row at index zero. The shader's 12-step binary search can only reach those rows.
+- **Fix:** Android translation requests 13 search steps and flags the result in its DMSV entry. Vulkan binds an 8,192-row descriptor for those stages. Legacy shaders retain the original descriptor size and get an error with the shader key if the live ranges exceed their capacity. A submission can share a wider descriptor with a legacy shader when all live rows fit in the legacy prefix. The Metal translator retains 12 search steps.
+- **Verification:** the Android replay probe uses 4,152 ranges and reads and atomically updates a destination above row 4,095. It passed the destination, canary, backing replacement and copied-write checks on Adreno. The two existing legacy probes passed on the same host.
+- **Found on:** [Ocarina of Time](../../dm/games/0400486024DEC000/README.md#post-intro-dialogue-and-the-raw-memory-table-limit).
+
 ### Raw write logs track pages the zero-copy backend does not consume
 
 - **Symptom:** neural compute spends tens of milliseconds per dispatch on raw output stores. On Adreno, preserving every output byte while removing only write logging cuts two hot shaders from about 40–42 ms to 26–27 ms. Specializing address lookup reduces them further; matrix math is unchanged.

@@ -28,6 +28,7 @@ ap.add_argument('--capture', help='a folder of shaders captured at run time on t
 ap.add_argument('--xlate', help="the translator (dmsh_xlate.dll) to run (default: the iOS chain's dm/gfx/tools/dmsh_xlate_bin; the porter builds one from the in-repo source)")
 ap.add_argument('--virtual-atlas', action='store_true', help='opt-in checked 2D-array atlas sampling, including fragment implicit LOD and queries; unsupported accesses fail')
 STAGES = {'vs': 0, 'ps': 1, 'gs': 2, 'hs': 3, 'ds': 4, 'cs': 5, 'ts': 6, 'ms': 7}   # NVN stage numbers
+DMSV_WIDE_GMEM_MAP = 16
 # Storage buffers are bound from a 256-byte boundary below their address (gfx_vk_exec.c SB_ALIGN, the same number): Vulkan's largest minStorageBufferOffsetAlignment, so a multiple of
 # every device's; the translator offsets every storage access by the address's distance from that boundary (Program.cs QueryHostStorageBufferOffsetAlignment)
 SB_ALIGN = 256
@@ -362,6 +363,8 @@ def main():
             continue
         if 'nvn2_mesh' in jobs[k]: stages[k] = 'ts' if jobs[k]['nvn2_mesh']['kind'] == 6 else 'ms'
     keys = [k for k in keys if k in jobs]
+    for job in jobs.values():
+        job['wide_gmem_map'] = True
     chunks = [keys[i::a.jobs] for i in range(a.jobs) if keys[i::a.jobs]]
     def xl(ch):
         jp = os.path.join(w, f'job_{abs(hash(ch[0]))}.json'); json.dump([jobs[k] for k in ch], open(jp, 'w'))
@@ -445,11 +448,13 @@ def main():
         binds, local, io = spirv_bindings(spv)
         st = stages[k]
         cl = [classify(st, b, res) for b in binds]
+        wide_gmem = res.get('wide_gmem_map', False) and any(b['kind']=='gmem_map' for b in cl)
         if st=='cs':
             import gmem_cache_spv
             for binding in cl:
                 if binding['kind']=='gmem_map':
-                    cached,count=gmem_cache_spv.cache_lookup(spv,binding['binding'],require_mixed=True)
+                    cached,count=gmem_cache_spv.cache_lookup(spv,binding['binding'],require_mixed=True,
+                                                            map_log2=13 if wide_gmem else 12)
                     if count:
                         checked=Path(w)/(k+'.gmem-cache.spv');checked.write_bytes(cached)
                         subprocess.run(['spirv-val','--target-env','vulkan1.2',str(checked)],check=True,capture_output=True)
@@ -465,6 +470,7 @@ def main():
         info = jobs[k].get('nvn2_mesh')
         trailer = nvn2_mesh.reflection(info, spv) if info else b''
         flags = int(bool(info)) | (2 if jobs[k].get('arch') == 'sm86' else 0) | (4 if st == 'ps' and virtual_bindings.get(k) else 0)
+        if wide_gmem: flags |= DMSV_WIDE_GMEM_MAP
         try:
             refl = refl_bin(cl, c1s[k], hdr3) + trailer
         except struct.error as e:

@@ -1,8 +1,9 @@
 // Opt-in, bounded compute capture. Raw GPU copies preserve packed texel
 // bits; no colour conversion or substitution. Included by gfx_vk_exec.c.
 // DM_VK_CAPTURE_CS=<key>#<minimum-present>, once per request, under DM_ROOT.
-// DM_VK_CAPTURE_FRAME=N captures each dispatch of one frame. POOLS=1 adds v2
-// full pools/descriptor aliases; POOL_ADDRS supplies extra indirect destinations.
+// DM_VK_CAPTURE_FRAME=N captures each dispatch of one frame. FRAME_KEY limits
+// that frame to one shader. POOLS=1 adds v2 full pools and descriptor aliases;
+// POOL_ADDRS supplies extra indirect destinations.
 // Both versions deliberately refuse arrays, mip chains, compressed/depth images,
 // atlas bindings and indirect dispatches rather than writing an incomplete replay.
 static struct {
@@ -25,7 +26,15 @@ static int cscap_begin(const vkshader_t *cs, const p_dispatch *d) {
     const char *e=getenv("DM_VK_CAPTURE_CS"); static char done[128];
     const char *frame=getenv("DM_VK_CAPTURE_FRAME");int all=frame&&*frame;static unsigned sequence;
     uint64_t key=cs->key,present=0;
-    if(all){char *end;present=strtoull(frame,&end,10);if(end==frame || *end || present!=g_tex_frame)return 0;}
+    if(all){
+        char *end;present=strtoull(frame,&end,10);
+        if(end==frame || *end || present!=g_tex_frame)return 0;
+        const char *filter=getenv("DM_VK_CAPTURE_FRAME_KEY");
+        if(filter && *filter){
+            key=strtoull(filter,&end,16);
+            if(end==filter || *end || key!=cs->key)return 0;
+        }
+    }
     else{
         if(!e || !*e || !strcmp(e,done))return 0;
         char *end;key=strtoull(e,&end,16);

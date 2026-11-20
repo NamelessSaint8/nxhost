@@ -1,10 +1,15 @@
 // Real descriptor and pool lifecycle proof; destination is never bound directly.
 #define GMEM_EMIT(OP,X) driver_emit(OP,&(X),sizeof(X))
-static void gmem_tests(int cooperative) {
+static void gmem_tests(int cooperative, int wide) {
     enum { PAGES=2048, BYTES=PAGES*4096 };
+    size_t filler_bytes=wide?4150*4096:0;
     uint8_t *mem=mmap(NULL,1048576,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
-    uint8_t *target=mmap(NULL,BYTES,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
-    if(mem==MAP_FAILED || target==MAP_FAILED)abort();
+    uint8_t *filler=mmap(NULL,filler_bytes+BYTES,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+    if(mem==MAP_FAILED || filler==MAP_FAILED)abort();
+    uint8_t *target=filler+filler_bytes;
+    unsigned shader=wide?36:cooperative?35:34;
+    for(size_t off=0;off<filler_bytes;off+=4096)
+        vk_pool_add_flags(filler+off,4096,NVN_MEMORY_POOL_FLAGS_CPU_CACHED|NVN_MEMORY_POOL_FLAGS_GPU_CACHED);
     vk_pool_add_flags(mem,1048576,NVN_MEMORY_POOL_FLAGS_CPU_CACHED|NVN_MEMORY_POOL_FLAGS_GPU_CACHED);
     // CPU_UNCACHED forces the copied-pool path to rely on logged ranges rather
     // than the completion thread's default whole cached-pool copy-back.
@@ -16,7 +21,7 @@ static void gmem_tests(int cooperative) {
         unsigned groups=phase==2?64:1, count=groups*32;
         pointers[0]=phase==3?0:(uint64_t)target;
         memset(result,0,16384);
-        mtl_sub_begin();driver_begin(mem);driver_bind(cooperative?35:34);
+        mtl_sub_begin();driver_begin(mem);driver_bind(shader);
         p_bind_buf input={.stage=5,.index=0,.addr=(uint64_t)pointers,.size=8};GMEM_EMIT(OP_BIND_SSBO,input);
         p_bind_buf output={.stage=5,.index=1,.addr=(uint64_t)result,.size=(2048+count)*4};GMEM_EMIT(OP_BIND_SSBO,output);
         p_dispatch dispatch={.x=(int)groups,.y=1,.z=1};GMEM_EMIT(OP_DISPATCH,dispatch);driver_end();
@@ -45,7 +50,7 @@ static void gmem_tests(int cooperative) {
     if(target==MAP_FAILED)abort();memset(target,0x3c,BYTES);
     vk_pool_add_flags(target,BYTES,NVN_MEMORY_POOL_FLAGS_CPU_UNCACHED|NVN_MEMORY_POOL_FLAGS_GPU_CACHED);
     pointers[0]=(uint64_t)target;
-    mtl_sub_begin();driver_begin(mem);driver_bind(cooperative?35:34);
+    mtl_sub_begin();driver_begin(mem);driver_bind(shader);
     p_bind_buf input={.stage=5,.index=0,.addr=(uint64_t)pointers,.size=8};GMEM_EMIT(OP_BIND_SSBO,input);
     p_bind_buf output={.stage=5,.index=1,.addr=(uint64_t)result,.size=(2048+32)*4};GMEM_EMIT(OP_BIND_SSBO,output);
     p_dispatch dispatch={.x=1,.y=1,.z=1};GMEM_EMIT(OP_DISPATCH,dispatch);driver_end();
@@ -63,7 +68,7 @@ static void gmem_tests(int cooperative) {
         else if(saved)setenv("DM_VK_NO_ZEROCOPY",saved,1);else unsetenv("DM_VK_NO_ZEROCOPY");
         vk_pool_add_flags(target,BYTES,NVN_MEMORY_POOL_FLAGS_CPU_UNCACHED|NVN_MEMORY_POOL_FLAGS_GPU_CACHED);
         pointers[0]=(uint64_t)target;memset(result,0,16384);
-        mtl_sub_begin();driver_begin(mem);driver_bind(cooperative?35:34);
+        mtl_sub_begin();driver_begin(mem);driver_bind(shader);
         GMEM_EMIT(OP_BIND_SSBO,input);GMEM_EMIT(OP_BIND_SSBO,output);GMEM_EMIT(OP_DISPATCH,dispatch);driver_end();
         ok=1;for(unsigned i=0;i<32;i++){uint32_t word;memcpy(&word,target+i*4096,4);ok&=word==0x3c3c3c3c+17+i && result[i]==0x3c3c3c3c;}
         driver_check(ok,"copied/coherent transition publishes indirect writes before completion",5+mode);
@@ -73,5 +78,7 @@ static void gmem_tests(int cooperative) {
     }
     if(saved){setenv("DM_VK_NO_ZEROCOPY",saved,1);free(saved);}else unsetenv("DM_VK_NO_ZEROCOPY");
     mtl_pool_del(target);mtl_pool_del(mem);munmap(target,BYTES);munmap(mem,1048576);
+    for(size_t off=0;off<filler_bytes;off+=4096)mtl_pool_del(filler+off);
+    if(filler_bytes)munmap(filler,filler_bytes);
 }
 #undef GMEM_EMIT

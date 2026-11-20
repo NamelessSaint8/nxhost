@@ -8,6 +8,9 @@ texels, sampler parameters, and storage results. Copies immediately bracket the
 dispatch, preserve packed bits, and synchronize readback. Capture perturbs
 scheduling and is a diagnostic mode.
 
+Set `DM_VK_CAPTURE_FRAME=N` and `DM_VK_CAPTURE_FRAME_KEY=<shader key>`
+to capture every dispatch of one shader in a single present.
+
 `DM_VK_TRACE_MESH=<shader key>` logs the first direct Vulkan mesh
 draw issued for the key. `DM_VK_TRACE_MESH_INDIRECT=<shader key>` reads
 the first eight matching 16-byte NVN indirect argument records at

@@ -1,6 +1,6 @@
 // Texture views may be registered for storage after the underlying image was
 // created. NVN's IMAGE hint is not a complete declaration of later uses.
-// compatible_features covers an sRGB image's linear view under EXTENDED_USAGE.
+// compatible_features covers an alternate view under EXTENDED_USAGE.
 #ifndef DM_VK_IMAGE_USAGE_H
 #define DM_VK_IMAGE_USAGE_H
 static inline VkImageUsageFlags vk_texture_image_usage(VkFormatFeatureFlags features,

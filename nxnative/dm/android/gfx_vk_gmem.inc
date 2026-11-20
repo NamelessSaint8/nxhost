@@ -1,7 +1,7 @@
 // Raw guest pointers use the translator's sorted pool table (dmsh_abi.h).
 // Included by gfx_vk_core.c: allocations stay in submission scratch, and pool
 // buffers retire through the existing deferred-free queue.
-void vk_gmem_descriptor(int log, VkDescriptorBufferInfo *out) {
+void vk_gmem_descriptor(int log, unsigned entries, uint64_t key, VkDescriptorBufferInfo *out) {
     if(!V.has_bda || !vkGetBufferDeviceAddress)die("[RED] raw global memory requires Vulkan buffer device addresses");
     vksub_t *s=cur();
     if(log){
@@ -17,12 +17,11 @@ void vk_gmem_descriptor(int log, VkDescriptorBufferInfo *out) {
         s->gmem_logs[s->ngmem_logs++]=words;
         return;
     }
-    if(!s->gmem_valid || s->gmem_gen!=vk_pool_gen()){
-        uint64_t (*table)[4]=vk_scratch(DMSH_GMEM_MAP_ENTRIES*DMSH_GMEM_MAP_ENTRY,
+    size_t map_bytes=entries*DMSH_GMEM_MAP_ENTRY;
+    if(!s->gmem_valid || s->gmem_gen!=vk_pool_gen() || s->gmem_map.range<map_bytes){
+        uint64_t (*table)[4]=vk_scratch(map_bytes,
             V.props.limits.minStorageBufferOffsetAlignment,&s->gmem_map.buffer,&s->gmem_map.offset);
-        s->gmem_map.range=DMSH_GMEM_MAP_ENTRIES*DMSH_GMEM_MAP_ENTRY;
-        memset(table,0,(size_t)s->gmem_map.range);
-        for(unsigned i=1;i<DMSH_GMEM_MAP_ENTRIES;i++)table[i][0]=UINT64_MAX;
+        s->gmem_map.range=map_bytes;
         pthread_rwlock_wrlock(&g_pool_mu);
         // An indirect address can reach any GPU-accessible pool, including one
         // not bound directly yet. Physical backing is GPU-accessible here only
@@ -31,11 +30,11 @@ void vk_gmem_descriptor(int log, VkDescriptorBufferInfo *out) {
         for(int i=0;i<g_npool;i++){
             vkpool_t *p=g_pool[i];
             if (!pool_has_gpu_access(p)) continue;
-            pool_use_locked(p);
-            if(p->lo<end)die("[RED] overlapping GPU pools need alias resolution before raw global-memory access");
             uint64_t lo=p->lo;
             if(lo>=p->hi)continue;
-            if(count==DMSH_GMEM_MAP_ENTRIES)die("[RED] raw global-memory pool table capacity exceeded");
+            if(count==entries)die("[RED] raw global-memory pool table capacity exceeded (shader %016llx, %u usable ranges)",(unsigned long long)key,entries-1);
+            if(lo<end)die("[RED] overlapping GPU pools need alias resolution before raw global-memory access");
+            pool_use_locked(p);
             VkBufferDeviceAddressInfo info={VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,NULL,p->buf};
             uint64_t address=vkGetBufferDeviceAddress(V.dev,&info);
             if(!address)die("[RED] global-memory pool has no Vulkan device address");
@@ -48,11 +47,20 @@ void vk_gmem_descriptor(int log, VkDescriptorBufferInfo *out) {
             if(!p->zero_copy)s->gmem_coherent=0;
             end=p->hi;
         }
-        s->gmem_gen=vk_pool_gen();s->gmem_valid=1;
+        for(unsigned i=count;i<entries;i++){
+            table[i][0]=UINT64_MAX;table[i][1]=table[i][2]=table[i][3]=0;
+        }
+        memset(table[0],0,sizeof table[0]);
+        s->gmem_gen=vk_pool_gen();s->gmem_count=count;s->gmem_valid=1;
         pthread_rwlock_unlock(&g_pool_mu);
         static int said;if(!said++)VKLOG("raw global memory: %u address ranges; indirect writes publish their logged pages before the next replay operation",count-1);
+        static int said_wide;if(count>DMSH_GMEM_MAP_ENTRIES && !said_wide++)VKLOG("raw global memory: %u address ranges in the wide table",count-1);
     }
+    // A legacy shader can share the wide map's prefix only when the entire
+    // registry fits in the prefix it searches.
+    if(s->gmem_count>entries)die("[RED] raw global-memory pool table capacity exceeded (shader %016llx, %u usable ranges)",(unsigned long long)key,entries-1);
     *out=s->gmem_map;
+    out->range=map_bytes;
 }
 
 int vk_gmem_coherent(void) {

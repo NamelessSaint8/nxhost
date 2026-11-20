@@ -180,9 +180,10 @@ vkshader_t *vk_shader(uint64_t key, int stage) {
               static int n; if (n++ < 16) VKLOG("[RED] shader %016llx (stage %d) is not in the bundle", (unsigned long long)key, stage); return NULL; }
     if ((uint32_t)stage != e->stage || stage < 0 || stage > 7) { pthread_mutex_unlock(&g_sh_mu); return NULL; }
     // Entry flags: bit0 native trailer, bit1 NVN2 ABI, bit2 fragment atlas
-    // metadata with the device's LOD-bias limit. Old loaders reject new bundles.
+    // metadata, bit3 workgroup spill, bit4 wide raw pool lookup.
+    // Old loaders reject new bundle entries that use the new bits.
     // Older native entries used bit0 only; ordinary older entries remain classic.
-    if((e->pad & ~15u) || (stage<6 && (e->pad&1)) || (stage!=1 && (e->pad&4)) || (stage!=5 && (e->pad&8))){VKLOG("[RED] shader %016llx: unsupported entry flags %#x",(unsigned long long)key,e->pad);pthread_mutex_unlock(&g_sh_mu);return NULL;}
+    if((e->pad & ~(15u|DMSV_WIDE_GMEM_MAP)) || (stage<6 && (e->pad&1)) || (stage!=1 && (e->pad&4)) || (stage!=5 && (e->pad&8))){VKLOG("[RED] shader %016llx: unsupported entry flags %#x",(unsigned long long)key,e->pad);pthread_mutex_unlock(&g_sh_mu);return NULL;}
     s = calloc(1, sizeof *s); s->key = key; s->stage = stage; s->set = set_of(stage);
     s->nvn2=stage>=6 || (e->pad&2);
     // reflection
@@ -192,6 +193,7 @@ vkshader_t *vk_shader(uint64_t key, int stage) {
     for(int i=0;i<s->nbind;i++){
         const dmsv_bind *b=&s->b[i];
         if(b->kind==RK_GMEM_LOG)s->raw_writer=1;
+        if(b->kind==RK_GMEM_MAP)s->gmem_entries=(e->pad&DMSV_WIDE_GMEM_MAP)?VK_GMEM_WIDE_ENTRIES:DMSH_GMEM_MAP_ENTRIES;
         if(b->kind==RK_SBUF_UBO && b->reg==252)die("[RED] obsolete raw global-memory reflection: rebuild the Android shader bundle");
         if((b->kind==RK_GMEM_MAP || b->kind==RK_GMEM_LOG) && (b->desc!=RD_SSBO || b->count!=1 || !V.has_bda))die("[RED] invalid or unsupported raw global-memory binding");
     }
@@ -206,17 +208,32 @@ vkshader_t *vk_shader(uint64_t key, int stage) {
         const dmsv_mesh *m = &s->mesh; const VkPhysicalDeviceMeshShaderPropertiesEXT *p = &V.mesh;
         uint64_t payload = m->payload_bytes, shared = m->shared_bytes;
         ok &= m->version == 1 && m->threads && m->threads == s->local[0] && s->local[1] == 1 && s->local[2] == 1;
-        if (stage == 6) ok &= V.has_task && m->threads <= p->maxTaskWorkGroupInvocations && m->threads <= p->maxTaskWorkGroupSize[0] &&
-            payload <= p->maxTaskPayloadSize && shared <= p->maxTaskSharedMemorySize && payload + shared <= p->maxTaskPayloadAndSharedMemorySize;
+        if (!ok) VKLOG("shader %016llx stage %d: trailer version %u, threads %u, local %ux%ux%u",
+            (unsigned long long)key, stage, m->version, m->threads, s->local[0], s->local[1], s->local[2]);
+        else if (stage == 6) {
+            ok = V.has_task && m->threads <= p->maxTaskWorkGroupInvocations && m->threads <= p->maxTaskWorkGroupSize[0] &&
+                payload <= p->maxTaskPayloadSize && shared <= p->maxTaskSharedMemorySize && payload + shared <= p->maxTaskPayloadAndSharedMemorySize;
+            if (!ok) VKLOG("shader %016llx task limits (required/device): enabled %d, threads %u/%u (x limit %u), shared %u/%u, payload %u/%u, combined %llu/%u",
+                (unsigned long long)key, V.has_task, m->threads, p->maxTaskWorkGroupInvocations, p->maxTaskWorkGroupSize[0],
+                m->shared_bytes, p->maxTaskSharedMemorySize, m->payload_bytes, p->maxTaskPayloadSize,
+                (unsigned long long)(shared + payload), p->maxTaskPayloadAndSharedMemorySize);
+        }
         else {
             uint32_t vg = p->meshOutputPerVertexGranularity, pg = p->meshOutputPerPrimitiveGranularity;
             uint64_t nv = vg ? ((m->vertices + vg - 1) / vg) * vg : 0, np = pg ? ((m->primitives + pg - 1) / pg) * pg : 0;
             uint64_t output = nv * (4 + 4 * __builtin_popcount(m->vertex_mask)) * 4 + np * (3 + 4 * __builtin_popcount(m->primitive_mask)) * 4;
-            ok &= V.has_mesh && vg && pg && m->threads <= p->maxMeshWorkGroupInvocations && m->threads <= p->maxMeshWorkGroupSize[0] &&
+            unsigned components = 4u + 4u * __builtin_popcount(m->vertex_mask | m->primitive_mask);
+            ok = V.has_mesh && vg && pg && m->threads <= p->maxMeshWorkGroupInvocations && m->threads <= p->maxMeshWorkGroupSize[0] &&
                 shared <= p->maxMeshSharedMemorySize && payload + shared <= p->maxMeshPayloadAndSharedMemorySize &&
                 m->vertices && m->vertices <= p->maxMeshOutputVertices && m->primitives && m->primitives <= p->maxMeshOutputPrimitives &&
                 output <= p->maxMeshOutputMemorySize && payload + output <= p->maxMeshPayloadAndOutputMemorySize &&
-                4u + 4u * __builtin_popcount(m->vertex_mask | m->primitive_mask) <= p->maxMeshOutputComponents;
+                components <= p->maxMeshOutputComponents;
+            if (!ok) VKLOG("shader %016llx mesh limits (required/device): enabled %d, granularity %u/%u, threads %u/%u (x limit %u), shared %u/%u, payload+shared %llu/%u, vertices %u/%u, primitives %u/%u, output %llu/%u, payload+output %llu/%u, components %u/%u",
+                (unsigned long long)key, V.has_mesh, vg, pg, m->threads, p->maxMeshWorkGroupInvocations, p->maxMeshWorkGroupSize[0],
+                m->shared_bytes, p->maxMeshSharedMemorySize, (unsigned long long)(shared + payload), p->maxMeshPayloadAndSharedMemorySize,
+                m->vertices, p->maxMeshOutputVertices, m->primitives, p->maxMeshOutputPrimitives,
+                (unsigned long long)output, p->maxMeshOutputMemorySize, (unsigned long long)(payload + output),
+                p->maxMeshPayloadAndOutputMemorySize, components, p->maxMeshOutputComponents);
         }
         if (!ok) { VKLOG("[RED] shader %016llx stage %d: missing metadata or task/mesh device limits exceeded", (unsigned long long)key, stage);
             free(s); nvn_hm_put(&g_shaders, &hk, (void *)1); pthread_mutex_unlock(&g_sh_mu); return NULL; }

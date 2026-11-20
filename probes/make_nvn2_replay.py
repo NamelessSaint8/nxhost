@@ -209,6 +209,11 @@ def main():
     binds,local,_=shader_vk.spirv_bindings(binary)
     classified=[shader_vk.classify('cs',b,resources) for b in binds]
     entries.append((35,5,binary,shader_vk.refl_bin(classified,b'',local),0))
+    source=(repo/'probes/shaders/global-memory.comp').read_text().replace('#version 460','#version 460\n#define MAP_ENTRIES 8192',1)
+    binary=compile_glsl('global-memory-wide','comp',source)
+    binds,local,_=shader_vk.spirv_bindings(binary)
+    classified=[shader_vk.classify('cs',b,resources) for b in binds]
+    entries.append((36,5,binary,shader_vk.refl_bin(classified,b'',local),shader_vk.DMSV_WIDE_GMEM_MAP))
     entries.sort()
     offset = 12+32*len(entries); table, blobs = [], []
     for key, stage, binary, refl, flag in entries:

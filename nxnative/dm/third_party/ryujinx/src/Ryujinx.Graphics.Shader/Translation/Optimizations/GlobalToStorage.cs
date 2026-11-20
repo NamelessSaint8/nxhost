@@ -786,6 +786,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
         // {start lo, start hi, end lo, end hi, delta lo, delta hi, flags, 0}, sorted by start; entry 0 is empty (start 0, end 0) and unused entries start at ~0
         public const int GmemMapCbSlot = 0xff;
         private const int GmemMapLog2 = 12;
+        private const int WideGmemMapLog2 = 13;
         private const int GmemMapEntryWords = 8;
         private const int GmemMapNoWriteLog = 1; // dmsh_abi.h: host explicitly does not consume this pool's page log
 
@@ -856,7 +857,8 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
             // The last entry whose start is at or below the address (entry 0 starts at 0, so there always is one)
             Operand index = Const(0);
 
-            for (int step = 1 << (GmemMapLog2 - 1); step != 0; step >>= 1)
+            int mapLog2 = gpuAccessor.QueryHostSupportsWideGmemMap() ? WideGmemMapLog2 : GmemMapLog2;
+            for (int step = 1 << (mapLog2 - 1); step != 0; step >>= 1)
             {
                 Operand candidate = context.IAdd(index, Const(step));
                 Operand entry = context.IMultiply(candidate, Const(GmemMapEntryWords));

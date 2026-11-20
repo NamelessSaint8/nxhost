@@ -12,13 +12,16 @@ shared float16_t cooperativeA[1024],cooperativeB[256],cooperativeC[1024],coopera
 layout(local_size_x=32) in;
 #endif
 layout(binding=0,std430) readonly buffer cp_s0 { uint64_t address[]; } pointers;
-layout(binding=1,std430) readonly buffer cp_s1 { u64vec4 range[4096]; } pools;
+#ifndef MAP_ENTRIES
+#define MAP_ENTRIES 4096
+#endif
+layout(binding=1,std430) readonly buffer cp_s1 { u64vec4 range[MAP_ENTRIES]; } pools;
 layout(binding=2,std430) buffer cp_s2 { uint overflow; uint page[1024]; } writes;
 layout(binding=3,std430) buffer cp_s3 { uint value[]; } result;
 layout(buffer_reference,std430,buffer_reference_align=4) buffer Word { uint value; };
 
 uint64_t translated(uint64_t address, out uint flags) {
-    uint low=0,high=4096;
+    uint low=0,high=MAP_ENTRIES;
     while(low+1<high){
         uint middle=(low+high)/2;
         if(pools.range[middle].x<=address)low=middle;else high=middle;

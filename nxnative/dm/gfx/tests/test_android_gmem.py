@@ -10,6 +10,19 @@ import shader_vk
 
 
 class GlobalMemory(unittest.TestCase):
+    def test_legacy_and_wide_lookup_sizes_match_their_host_tables(self):
+        dm=Path(__file__).resolve().parents[2]
+        shader=dm/'third_party/ryujinx/src/Ryujinx.Graphics.Shader/Translation/Optimizations/GlobalToStorage.cs'
+        depths=dict(re.findall(r'const int (\w*GmemMapLog2) = (\d+)',shader.read_text()))
+        abi=(dm/'gfx/nvn/dmsh_abi.h').read_text()
+        host=(dm/'android/gfx_vk.h').read_text()
+        entries=int(re.search(r'DMSH_GMEM_MAP_ENTRIES (\d+)',abi)[1])
+        scale=int(re.search(r'VK_GMEM_WIDE_ENTRIES \((\d+) \* DMSH_GMEM_MAP_ENTRIES\)',host)[1])
+        flag=int(re.search(r'DMSV_WIDE_GMEM_MAP (\d+)u',host)[1])
+        self.assertEqual(1<<int(depths['GmemMapLog2']),entries)
+        self.assertEqual(1<<int(depths['WideGmemMapLog2']),entries*scale)
+        self.assertEqual(shader_vk.DMSV_WIDE_GMEM_MAP,flag)
+
     def test_pool_log_control_matches_the_shared_abi(self):
         import dmsh_abi
         shader=Path(__file__).resolve().parents[2]/'third_party/ryujinx/src/Ryujinx.Graphics.Shader/Translation/Optimizations/GlobalToStorage.cs'

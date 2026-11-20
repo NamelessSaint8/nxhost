@@ -1,0 +1,11 @@
+# Persona 5 Royal on Android (keys in docs/ARCHITECTURE.md "Game profiles on Android")
+# Atlus GFD / Needle on NVN with CRIWARE, SDK 13.3.2, 30,646 NEEDLE shader keys (README.md beside this profile).
+# Upstream brought the game up on the Mac on 2026-10-25 (boot, startup movies, title and language menus, opening dialogue,
+# casino gameplay at about 30 fps, 35 minutes).
+# On the Y700 (2026-11-18): the port builds on chain 8d58a1fdc9dd with all 30,646 shaders translated, and the game boots
+# and plays at its own 30 fps cap (frame time p50 33.33 ms, GPU p50 17.85 ms, 1,135 draws a frame with nothing skipped,
+# PSS 2.53 GiB). Texture pop is seen in play and not yet attributed; battles, saves and the pause menu are untested.
+status	wip
+tested	v65536 Lenovo Legion Y700 TB323FU (Snapdragon 8 Elite Gen 5, Adreno 840, Android 16)
+package	org.nx2a.p5r
+orientation	landscape

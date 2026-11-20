@@ -171,6 +171,8 @@ void vk_watch(const vkimg_t *im, const char *what) {
 static int g_mesh_trace_writers;
 static uint64_t g_mesh_trace_raw_key;
 static uint64_t g_mesh_trace_binding_key, g_mesh_trace_binding_start;
+enum { MESH_ISOLATE_OFF, MESH_ISOLATE_CAPTURE, MESH_ISOLATE_DRAW, MESH_ISOLATE_DISCARD };
+static int g_mesh_isolate;
 static void x_read(void) { const char *c = getenv("DM_VK_CB_DRAWS"); g_x_cbdraws = c ? atoi(c) : 128; g_sub_pass = 0;
     { const char *m = getenv("DM_VK_TRACE_MESH_WRITERS"); g_mesh_trace_writers = m && atoi(m);
       const char *r = getenv("DM_VK_TRACE_MESH_RAW"); g_mesh_trace_raw_key = r ? strtoull(r, NULL, 16) : 0; }
@@ -1014,6 +1016,7 @@ static int view_num(const tex_t *t, const view_t *v) {
 }
 static uint64_t g_num_um, g_num_im, g_num_atlas;   // integer view ordinals and active atlas binding numbers
 #include "gfx_vk_capture.inc"
+#include "gfx_vk_mesh_capture.inc"
 extern uint64_t g_tex_gen;
 static int tex_desc_for(int st, const dmsv_bind *b, uint64_t h, VkDescriptorImageInfo *ii, int storage, VkDescriptorBufferInfo *atlas_meta) {   // the view's view_num
     int tid = (int)(h & 0xfffff); const view_t *v = NULL; const tex_t *t = NULL;
@@ -1050,6 +1053,8 @@ static int tex_desc_for(int st, const dmsv_bind *b, uint64_t h, VkDescriptorImag
             if(vk_tex_view_description(im,ii->imageView,&description))VKLOG("  sampled mapping RGBA %u %u %u %u; texture mapping set %u bits %#x; view mapping set %u",
                 description.components.r,description.components.g,description.components.b,description.components.a,t->set_swz,t->swz,v?v->set_swizzle:0); }
         if(st==5)cscap_image(b,im,ii->imageView,ii->sampler,storage);
+        if (g_mesh_isolate == MESH_ISOLATE_CAPTURE)
+            mesh_capture_image(st, b, im, ii, storage);
         vk_tex_note_use(im);
         if (ii->imageView) num = view_num(t, v);
         if (ii->imageView) { g_tvc[ck].epoch = g_set_epoch; g_tvc[ck].gen = g_tex_gen; g_tvc[ck].tid = tid; g_tvc[ck].dim = b->dim; g_tvc[ck].arr = b->flags & 1; g_tvc[ck].storage = storage; g_tvc[ck].v = ii->imageView; g_tvc[ck].im = im; g_tvc[ck].num = num; }
@@ -1240,7 +1245,7 @@ static VkDescriptorSet stage_set(int st, vkshader_t *s, uint32_t *dofs) {
         wr->sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr->dstSet = set; wr->dstBinding = b->binding; wr->descriptorCount = 1;
         VkBuffer buf; VkDeviceSize off, len;
         switch (b->kind) {
-        case RK_GMEM_MAP: case RK_GMEM_LOG: vk_gmem_descriptor(b->kind==RK_GMEM_LOG,&bi[nw]); break;
+        case RK_GMEM_MAP: case RK_GMEM_LOG: vk_gmem_descriptor(b->kind==RK_GMEM_LOG,s->gmem_entries,s->key,&bi[nw]); break;
         case RK_SUPPORT: bi[nw] = (VkDescriptorBufferInfo){vk_support_buffer(), 0, 65536}; break;
         case RK_C1: vk_shader_c1(s, &buf, &off, &len); bi[nw] = (VkDescriptorBufferInfo){buf, off, len}; break;
         case RK_CBUF: cbuf_desc(st, s, b, &bi[nw]); if (ncb < MEMO_CB) { mci[ncb] = (uint8_t)i; mcd[ncb++] = bi[nw]; } break;
@@ -1323,6 +1328,8 @@ static VkDescriptorSet stage_set(int st, vkshader_t *s, uint32_t *dofs) {
         }
         wr->pBufferInfo = &bi[nw]; wr->descriptorType = b->desc == RD_SSBO ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         if(st==5)cscap_buffer(b->binding,wr->descriptorType,&bi[nw]);
+        if (g_mesh_isolate == MESH_ISOLATE_CAPTURE)
+            mesh_capture_buffer(st, b->binding, wr->descriptorType, &bi[nw]);
         if (s->dyn[i]) {   // the offset goes to the bind, so the set's content (and its reuse) does not depend on it
             if (bi[nw].offset > UINT32_MAX) VKRED_ONCE(42, "dynamic uniform buffer offset past 4 GB");
             int j = nd++; while (j > 0 && dp[j - 1].b > b->binding) { dp[j] = dp[j - 1]; j--; }
@@ -1455,6 +1462,7 @@ static int prepare_draw(int prim, int indexed, int mesh) {
     g_tracing = g_draw_i == g_bis_trace && g_bis_trace >= 0;
     // the change being tried applies to the found draw and every later one (the later draws are refused too: changing one draw alone proves nothing)
     int var = g_bis_trace >= 0 && g_draw_i >= g_bis_trace ? g_bis_var : 0; if (g_bis_var) g_tracing = 0;   // full logs only the first time
+    if (g_mesh_isolate) g_tracing = 1;
     g_var_now = 0;
     if (var == 6) vk_end_pass();   // a new pass for this draw
     // A draw needs a vertex shader. A pixel shader is not required: without one the draw is a depth-only draw -- the vertex stage runs, the rasterizer writes
@@ -1513,7 +1521,7 @@ static int prepare_draw(int prim, int indexed, int mesh) {
     k.front = ((S.poly.front == NVN_FRONT_FACE_CCW) == (g_lower_left != 0)) != (g_flipy != 0); k.mode = S.poly.mode; k.depth_clamp = S.depth_clamp;
     k.bias_en = (S.poly.offset_en & (S.poly.mode == 0 ? 1 : S.poly.mode == 1 ? 2 : 4)) != 0;
     if (var == 2) k.bias_en = 0;
-    if (var == 8) k.raster_discard = 1;   // no fragment shader in the pipeline
+    if (var == 8 || g_mesh_isolate == MESH_ISOLATE_DISCARD) k.raster_discard = 1;   // no fragment shader in the pipeline
     int has_depth = (S.daspect & VK_IMAGE_ASPECT_DEPTH_BIT) != 0, has_stencil = (S.daspect & VK_IMAGE_ASPECT_STENCIL_BIT) != 0;
     k.dt = has_depth && S.ds.dt; k.dw = S.ds.dw; k.df = S.ds.df; k.st = has_stencil && S.ds.st;
     // A depth buffer that a fragment shader wrote through gl_FragDepth: Adreno's early culling (LRZ) then rejects whole triangles of later draws that test it, in some frames
@@ -1579,6 +1587,7 @@ static int prepare_draw(int prim, int indexed, int mesh) {
         for (uint32_t i = 0; i < k.nattr; i++) VKLOG("  attribute location %u binding %u format %u offset %u", k.attr[i].loc, k.attr[i].binding, k.attr[i].fmt, k.attr[i].off);
         for (uint32_t i = 0; i < k.nbind; i++) VKLOG("  binding %u stride %u rate %u divisor %u", k.bind[i].binding, k.bind[i].stride, k.bind[i].rate, k.bind[i].divisor);
     }
+    if (g_mesh_isolate == MESH_ISOLATE_CAPTURE) mesh_capture_pipeline(&k, draw_sh);
     crumb_draw(k.key[0], k.key[1], k.key[2]);
     VkPipeline p = graphics_pipeline(&k, layout);
     uint64_t t1 = tick(); g_vkst.ns_pipe += t1 - t0 - tdesc;
@@ -1701,20 +1710,20 @@ static void tf_state(const p_tf_state *t) {
         int i = tf_ctl_slot(t->ctl, 1); g_tf_ctl[i].ctl = t->ctl; g_tf_ctl[i].verts = g_tf_verts;
     }
 }
-static void draw_mesh(const p_draw_mesh *d) {
-    if (!d->count) return;
+static int draw_mesh(const p_draw_mesh *d) {
+    if (!d->count) return 0;
     vkshader_t *mesh = S.sh[7], *task = S.sh[6];
     if (!V.has_mesh || !vkCmdDrawMeshTasksEXT || !mesh || (mesh->mesh.task_input != (task != NULL)) ||
         (task && (!V.has_task || task->mesh.payload_bytes != mesh->mesh.payload_bytes))) {
-        VKRED_ONCE(101, "mesh draw has no supported mesh stage or its task/payload interface differs"); return;
+        VKRED_ONCE(101, "mesh draw has no supported mesh stage or its task/payload interface differs"); return 0;
     }
     uint32_t maxx = task ? V.mesh.maxTaskWorkGroupCount[0] : V.mesh.maxMeshWorkGroupCount[0];
     uint32_t total = task ? V.mesh.maxTaskWorkGroupTotalCount : V.mesh.maxMeshWorkGroupTotalCount;
     if (d->count > maxx || d->count > total || d->first > UINT32_MAX - (d->count - 1)) {
-        VKRED_ONCE(102, "mesh draw exceeds the device group count or first-group range"); return;
+        VKRED_ONCE(102, "mesh draw exceeds the device group count or first-group range"); return 0;
     }
     g_draw_binst = 0;
-    if (!prepare_draw(4, 0, 1)) return;
+    if (!prepare_draw(4, 0, 1) || g_mesh_isolate == MESH_ISOLATE_CAPTURE) return 0;
     int allowed = draw_allowed();
     if (!(dbg_draw() & 1) && allowed) {
         VkShaderStageFlags flags = VK_SHADER_STAGE_MESH_BIT_EXT | (V.has_task ? VK_SHADER_STAGE_TASK_BIT_EXT : 0);
@@ -1733,11 +1742,14 @@ static void draw_mesh(const p_draw_mesh *d) {
                 (unsigned long long)g_tex_frame, (unsigned long long)mesh->key,
                 (unsigned long long)(S.sh[1] ? S.sh[1]->key : 0), d->first, d->count);
         }
+        return 1;
     }
+    return 0;
 }
 static void trace_mesh_indirect(const p_trace_mesh_indirect *d) {
-    static unsigned samples;
-    if (samples >= 8) return;
+    static unsigned samples, probe_samples;
+    static uint64_t probe_key;
+    static int probe_mode, probe_done;
     const char *filter = getenv("DM_VK_TRACE_MESH_INDIRECT");
     if (!filter || !*filter || !strcmp(filter, "0")) return;
     const char *start = strchr(filter, '#');
@@ -1745,11 +1757,25 @@ static void trace_mesh_indirect(const p_trace_mesh_indirect *d) {
     const vkshader_t *mesh = S.sh[7], *pixel = S.sh[1];
     int all = !strcmp(filter, "all");
     if (!all && (!mesh || mesh->key != strtoull(filter, NULL, 16))) return;
+    const char *isolate = getenv("DM_VK_MESH_ISOLATE");
+    int mode = !isolate || all ? MESH_ISOLATE_OFF :
+               !strcmp(isolate, "capture") ? MESH_ISOLATE_CAPTURE :
+               !strcmp(isolate, "draw") ? MESH_ISOLATE_DRAW :
+               !strcmp(isolate, "discard") ? MESH_ISOLATE_DISCARD : MESH_ISOLATE_OFF;
+    unsigned *sample_count = &samples;
+    if (mode) {
+        if (probe_key != mesh->key || probe_mode != mode) {
+            probe_key = mesh->key; probe_mode = mode; probe_done = 0; probe_samples = 0;
+        }
+        if (probe_done) return;
+        sample_count = &probe_samples;
+    }
+    if (*sample_count >= 8) return;
+    (*sample_count)++;
     VkBuffer source, staging;
     VkDeviceSize from, to;
     if ((d->args & 3) || !vk_buf_at(d->args, 16, &source, &from)) {
         VKLOG("indirect mesh trace: address %#llx has no aligned Vulkan backing", (unsigned long long)d->args);
-        samples++;
         return;
     }
     mesh_trace_find_writers(d->args, 16);
@@ -1765,15 +1791,32 @@ static void trace_mesh_indirect(const p_trace_mesh_indirect *d) {
         (unsigned long long)g_tex_frame, (unsigned long long)(mesh ? mesh->key : 0),
         (unsigned long long)(pixel ? pixel->key : 0), (unsigned long long)d->args,
         words[0], words[1], words[2], words[3]);
-    samples++;
     // The observed one-dimensional records have a group count in word 0
     // and zeroes in both middle words. This opt-in replay uses the same
     // first-group-zero path as direct draws. Other records remain diagnostic.
-    const char *replay = getenv("DM_VK_REPLAY_MESH_INDIRECT");
-    if (!all && replay && atoi(replay) && words[0] && !words[1] && !words[2]) {
-        p_draw_mesh draw = {.first = 0, .count = words[0]};
-        draw_mesh(&draw);
+    if (all || !words[0] || words[1] || words[2]) return;
+    const uint32_t groups = words[0];
+    if (mode) {
+        probe_done = 1;
+        if (mode == MESH_ISOLATE_CAPTURE && !mesh_capture_begin(mesh->key, words)) return;
+        VKLOG("mesh isolate: preceding work complete; mode %s, shader %016llx, %u groups", isolate,
+              (unsigned long long)mesh->key, groups);
+        int was_tracing = g_tracing;
+        g_mesh_isolate = mode;
+        int issued = draw_mesh(&(p_draw_mesh){.count = groups});
+        g_mesh_isolate = MESH_ISOLATE_OFF;
+        g_tracing = was_tracing;
+        vk_end_pass_land();
+        if (mode == MESH_ISOLATE_CAPTURE) mesh_capture_finish();
+        else if (issued) {
+            VKLOG("mesh isolate: waiting for %s draw", isolate);
+            vk_cmd_sync_host();
+            VKLOG("mesh isolate: %s draw complete", isolate);
+        } else VKLOG("mesh isolate: %s draw was skipped", isolate);
+        return;
     }
+    const char *replay = getenv("DM_VK_REPLAY_MESH_INDIRECT");
+    if (replay && atoi(replay)) draw_mesh(&(p_draw_mesh){.count = groups});
 }
 static void draw(const p_draw *d,unsigned max_draws,unsigned stride);
 static void draw_tf(const p_draw_tf *t) {

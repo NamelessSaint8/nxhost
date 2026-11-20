@@ -148,6 +148,7 @@ static class SwshXlate
         // below it. Xenoblade Chronicles 3's vertex shader 5f6491f9bda5ae4d writes halves at its buffer + 10 x vertex, the buffer 0xd0 past a 256-byte boundary: they landed 0xd0 bytes
         // early, over the game's malloc chunks in the same pool, and the heap broke (a crash in dlmalloc after the opening movie). With an alignment given, every access takes the form
         public int QueryHostStorageBufferOffsetAlignment() => _job["sb_align"] is JsonNode n ? (int)n : 16;
+        public bool QueryHostSupportsWideGmemMap() => _job["wide_gmem_map"] is JsonNode n && (bool)n;
         public bool QueryHasUnalignedStorageBuffer() => _job["sb_align"] != null;
         // Job "gs_passthrough" = false (the Android chain): passthrough geometry shaders (Maxwell's fast GS) are written out as ordinary ones. VK_NV_geometry_shader_passthrough is NVIDIA's
         // alone; with its capability declared, Adreno refused every pipeline of Xenoblade Chronicles 3's effect geometry shaders (VK_ERROR_UNKNOWN)
@@ -229,6 +230,7 @@ static class SwshXlate
                     ["cbufs"] = new JsonArray(), ["sbufs"] = new JsonArray(), ["textures"] = new JsonArray(), ["images"] = new JsonArray(),
                     ["geometry_stride"] = geometry ? ctx.GetResourceReservations().OutputSizePerInvocation : 0,
                     ["uses_frag_coord"] = p.Info.UsesFragCoord, ["frag_out_map"] = p.Info.FragmentOutputMap,
+                    ["wide_gmem_map"] = acc.QueryHostSupportsWideGmemMap(),
                 };
                 foreach (var b in p.Info.CBuffers) res["cbufs"].AsArray().Add(new JsonObject { ["binding"] = b.Binding, ["slot"] = b.Slot });
                 foreach (var b in p.Info.SBuffers) res["sbufs"].AsArray().Add(new JsonObject { ["binding"] = b.Binding, ["slot"] = b.Slot, ["cb_slot"] = b.SbCbSlot, ["cb_offset"] = b.SbCbOffset, ["flags"] = (int)b.Flags });

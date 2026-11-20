@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Cache raw pool lookups per invocation, retaining the complete miss path.
 
-Only GlobalToStorage's recognized twelve-step table search changes. Reusing an
+Only GlobalToStorage's recognized table search changes. Reusing an
 index requires both guest-address bounds to pass on the immutable current map.
 The cached index is private to an invocation and begins at empty entry zero.
 """
@@ -12,7 +12,7 @@ def ins(op,*args):
     return [((len(args)+1)<<16)|op,*args]
 
 
-def cache_lookup(binary, map_binding=None, require_mixed=False):
+def cache_lookup(binary, map_binding=None, require_mixed=False, map_log2=12):
     m = spv.Module(binary)
     functions = [x[2] for x in m.ins if x[0]&65535==54]
     targets = [];access_kinds=set()
@@ -24,8 +24,8 @@ def cache_lookup(binary, map_binding=None, require_mixed=False):
                   any(m.consts.get(v,(None,None))[1]==[8] for v in x[3:])]
         if not scales:
             continue
-        # Only the map helper has thirteen entry-word scales and physical access.
-        if len(scales)!=13:
+        # The map helper scales each probe and the final index.
+        if len(scales)!=map_log2+1:
             continue
         physical = [x for x in body if x[0]&65535==120 and
                     m.types.get(x[1],[0,0,0])[2]==5349]

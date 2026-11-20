@@ -165,7 +165,10 @@ int __wrap_main(int argc, char **argv) {
     if(argc==3 && !strcmp(argv[2],"--implicit-atlas")){implicit_tests();printf("Implicit atlas replay: %u checks, %u failed\n",checks,failed);return failed!=0;}
     if(argc==3 && !strncmp(argv[2],"--pipelines=",12)){observed_pipelines(argv[2]+12);printf("Observed pipelines: %u checks, %u failed (compile only)\n",checks,failed);return failed!=0 || !checks;}
     if(argc==3 && !strncmp(argv[2],"--driver-reject-",16)){const char *mode=argv[2]+16;driver_reject(!strcmp(mode,"push")?0:!strcmp(mode,"truncated")?1:!strcmp(mode,"groups")?2:!strcmp(mode,"address")?3:4);return 3;}
-    if(argc==3 && (!strcmp(argv[2],"--global-memory") || !strcmp(argv[2],"--global-memory-cooperative"))){gmem_tests(!strcmp(argv[2],"--global-memory-cooperative"));printf("Raw global memory: %u checks, %u failed\n",checks,failed);return failed!=0;}
+    if(argc==3 && (!strcmp(argv[2],"--global-memory") || !strcmp(argv[2],"--global-memory-cooperative") || !strcmp(argv[2],"--global-memory-wide"))){
+        gmem_tests(!strcmp(argv[2],"--global-memory-cooperative"),!strcmp(argv[2],"--global-memory-wide"));
+        printf("Raw global memory: %u checks, %u failed\n",checks,failed);return failed!=0;
+    }
     if(argc==3 && !strcmp(argv[2],"--driver-state")){driver_tests();printf("Driver state replay: %u checks, %u failed\n",checks,failed);return failed!=0;}
     if(argc==3 && !strcmp(argv[2],"--restore-check")){measure_restore_check();return 0;}
     if(argc==3 && !strcmp(argv[2],"--measure")){measure_atlas();return 0;}

@@ -203,7 +203,7 @@ static VkFormat srgb_twin(VkFormat f) {
     default: return VK_FORMAT_UNDEFINED;
     }
 }
-// DM_VK_UBWC (start-up, bits): 1, uncompressed colour images get a format list (their format and its sRGB twin) instead of a free MUTABLE_FORMAT, which Adreno
+// DM_VK_UBWC (start-up, bits): 1, uncompressed colour images get a format list (their format and its supported alternate) instead of a free MUTABLE_FORMAT, which Adreno
 // needs to keep UBWC framebuffer compression; views in another format then use the image's own (vk_tex_view). 2, depth / stencil images are made without
 // MUTABLE_FORMAT and EXTENDED_USAGE (their views always take the image's own format). Unicorn Overlord on an Adreno 730: 1 cut GPU time by 35-40%
 static int ubwc_mode(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_VK_UBWC"); v = e ? atoi(e) : 0; } return v; }
@@ -216,8 +216,10 @@ static vkimg_t *img_new(const tex_t *t, const vkfmt_t *f) {
     im->fmt = f->vk; im->vtype = vtype_of(d->target); im->aspect = aspect_of(f);
     VkFormatProperties fp; vkGetPhysicalDeviceFormatProperties(V.pd, f->vk, &fp);
     VkFormatProperties compatible = {0};
-    VkFormat twin = srgb_twin(f->vk);
-    if (twin) vkGetPhysicalDeviceFormatProperties(V.pd, twin, &compatible);
+    // A packed RGB9E5 image can expose its words through an explicit R32UI
+    // view, even when the GPU cannot bind the sampled format for storage.
+    VkFormat alternate = f->vk == VK_FORMAT_E5B9G9R9_UFLOAT_PACK32 ? VK_FORMAT_R32_UINT : srgb_twin(f->vk);
+    if (alternate) vkGetPhysicalDeviceFormatProperties(V.pd, alternate, &compatible);
     VkImageUsageFlags u = vk_texture_image_usage(fp.optimalTilingFeatures, compatible.optimalTilingFeatures,
                                                 !f->compressed && im->aspect == VK_IMAGE_ASPECT_COLOR_BIT && im->samples == 1);
     int extended_storage = (u & VK_IMAGE_USAGE_STORAGE_BIT) && !(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT);
@@ -227,7 +229,7 @@ static vkimg_t *img_new(const tex_t *t, const vkfmt_t *f) {
         d->target == 2 ? VK_IMAGE_TYPE_3D : d->target == 0 || d->target == 3 ? VK_IMAGE_TYPE_1D : VK_IMAGE_TYPE_2D, f->vk,
         {im->w, im->h, im->d}, im->levels, im->layers, (VkSampleCountFlagBits)im->samples, VK_IMAGE_TILING_OPTIMAL, u, VK_SHARING_MODE_EXCLUSIVE, 0, NULL, VK_IMAGE_LAYOUT_UNDEFINED};
     if (im->samples > 1) ci.flags &= ~(VkImageCreateFlags)VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT;
-    VkFormat fl[2] = {f->vk, srgb_twin(f->vk)}; VkImageFormatListCreateInfo fli = {VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO, NULL, fl[1] ? 2u : 1u, fl};
+    VkFormat fl[2] = {f->vk, alternate}; VkImageFormatListCreateInfo fli = {VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO, NULL, fl[1] ? 2u : 1u, fl};
     if (!f->compressed && (ubwc_mode() & (im->aspect == VK_IMAGE_ASPECT_COLOR_BIT ? 1 : 2))) {   // (a depth format has no twin: a list of itself, no MUTABLE_FORMAT)
         im->fixed_fmt = 1; im->fmt2 = fl[1]; ci.pNext = &fli;
         if (!extended_storage) ci.flags &= ~(VkImageCreateFlags)VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
@@ -775,7 +777,7 @@ VkImageView vk_tex_view(const tex_t *t, const view_t *vw, int dim, int arrayed, 
                                           (unsigned long long)t->serial, (int)im->fmt, im->nvn_format, (int)f->vk, vw && vw->set_format ? vw->format : t->d.format,
                                           im->w, im->h, vw && vw->set_levels ? vw->base_level : 0);
     }
-    if (im->fixed_fmt && fmt != im->fmt && fmt != srgb_twin(im->fmt)) { fmt = im->fmt; static int n; if (n++ < 8) VKLOG("view format %d of a format-listed image (%d): the image's own used", f->vk, im->fmt); }
+    if (im->fixed_fmt && fmt != im->fmt && fmt != im->fmt2) { fmt = im->fmt; static int n; if (n++ < 8) VKLOG("view format %d of a format-listed image (%d): the image's own used", f->vk, im->fmt); }
     pthread_mutex_lock(&g_view_mu);
     vview *head = nvn_hm_get(&g_views, &im);
     for (vview *v = head; v; v = v->next)
@@ -783,7 +785,13 @@ VkImageView vk_tex_view(const tex_t *t, const view_t *vw, int dim, int arrayed, 
     VkImageViewUsageCreateInfo uci = {VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO, NULL, 0};
     VkFormatProperties fp; vkGetPhysicalDeviceFormatProperties(V.pd, fmt, &fp);
     uci.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    if(storage)uci.usage=VK_IMAGE_USAGE_STORAGE_BIT;
+    if (storage) {
+        if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) {
+            pthread_mutex_unlock(&g_view_mu);
+            die("[RED] [vk] storage view format %d has no storage-image support (image format %d)", fmt, im->fmt);
+        }
+        uci.usage = VK_IMAGE_USAGE_STORAGE_BIT;
+    }
     else if (as_attachment) uci.usage = (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0) | (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : 0);
     else if ((t->d.flags & NVN_TEXTURE_FLAGS_IMAGE) && (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) uci.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
     VkImageViewCreateInfo ci = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, &uci, 0, im->img, type, fmt, swz, {aspect, lv0, nlv, ly0, nly}};
